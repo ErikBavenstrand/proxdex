@@ -74,6 +74,12 @@ target_side_ratio = 0.0
 target_top_ratio  = 0.0
 thresh            = 62      # RGB distance still counted as "the frame colour"
 tolerance_mm      = 0.3     # skip the fix when the deficit is smaller than this
+# also pad the short axis so the card matches the card aspect (fills the cutout,
+# nothing cropped at print). bias = fraction of the padding added on left / top:
+# 0.5 = even, 1 = all left/top, 0 = all right/bottom.
+fix_aspect     = true
+aspect_bias_x  = 0.5
+aspect_bias_y  = 0.5
 
 [grade]
 # 1) normalize: pull each card to a common baseline first (so scans and
@@ -601,18 +607,20 @@ def measure(ctx: click.Context, ids: tuple[str, ...]) -> None:
         ("left", "right"),
         ("right", "right"),
         ("side%", "right"),
+        ("format", "left"),
         ("", "left"),
     ):
         table.add_column(col, justify=just)  # type: ignore[arg-type]
     for card in lib.select(ids):
         src = card.best(Stage.EDITED, Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL)
         if src is None:
-            table.add_row(card.id, "[dim]no image[/]", "", "", "", "", "")
+            table.add_row(card.id, "[dim]no image[/]", "", "", "", "", "", "")
             continue
         b = borders.measure(borders.load_rgb(src), cfg)
         tgt = borders.target(b, cfg)
         need = b.top < tgt.top - 2 or b.left < tgt.side - 2 or b.right < tgt.side - 2
-        verdict = "[yellow]extend[/]" if need else "[green]ok[/]"
+        delta = bleed.aspect_delta(b, cfg)
+        fmt = "[green]ok[/]" if abs(delta) < 0.01 else f"[yellow]{delta:+.2f}[/]"
         table.add_row(
             card.id,
             f"{b.w}×{b.h}",
@@ -620,7 +628,8 @@ def measure(ctx: click.Context, ids: tuple[str, ...]) -> None:
             f"{b.left:.0f}",
             f"{b.right:.0f}",
             f"{b.side_ratio * 100:.1f}%",
-            verdict,
+            fmt,
+            "[yellow]extend[/]" if need else "[green]ok[/]",
         )
     console.print(table)
 
@@ -752,41 +761,51 @@ def _library_frame_target(lib: Library) -> tuple[float, float, float] | None:
 @cli.command()
 @click.argument("ids", nargs=-1, metavar="[ID...]")
 @click.option("--force", is_flag=True, help="Re-run even if a bordered image exists.")
+@click.option("--dry-run", is_flag=True, help="Report the per-edge plan; don't write.")
 @click.pass_context
-def border(ctx: click.Context, ids: tuple[str, ...], force: bool) -> None:
-    """Expand a too-thin card frame to correct proportions → stage 2 (bordered).
+def border(
+    ctx: click.Context, ids: tuple[str, ...], force: bool, dry_run: bool
+) -> None:
+    """Fix a card's frame + format → stage 2 (bordered), before upscaling.
 
-    Optional pre-upscale step for scans cropped into the frame. Measures the top
-    and sides (the bottom is legitimately thicker) and, if short of target by
-    more than a small tolerance, uses [cyan]cardbleed[/] to continue the frame
-    outward. Cards already at size are left untouched. No cut bleed here — that
-    is added later at [cyan]sheet[/] time, outside the trim.
+    Continues a too-thin frame outward with [cyan]cardbleed[/] and, when
+    [cyan][border] fix_aspect[/] is on, pads the short axis so the card matches
+    the card aspect ratio (so it fills the cutout and nothing gets cropped at
+    print) — split per [cyan]aspect_bias_x/y[/]. Cards already correct are left
+    alone. [cyan]--dry-run[/] just reports the plan.
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
 
     def one(card: Card) -> None:
         dst = card.stage_path(Stage.BORDERED)
-        if dst.exists() and not force:
+        if dst.exists() and not force and not dry_run:
             console.print(f"[dim]· {card.id}: already bordered[/]")
             return
         src = card.stage_path(Stage.ORIGINAL)
         if not src.exists():
             raise FileError(f"{card.id}: no original yet (fetch it first)")
         b = borders.measure(borders.load_rgb(src), cfg)
-        ext = bleed.frame_plan(b, borders.target(b, cfg))
+        ext = bleed.border_plan(b, borders.target(b, cfg), cfg)
         tol = round(cfg.border_tolerance_mm * cfg.px_per_mm(b.w))
-        if max(ext.top, ext.left, ext.right) <= tol:
-            console.print(f"[dim]· {card.id}: frame already correct[/]")
+        fmt = (
+            "" if abs(bleed.aspect_delta(b, cfg)) < 0.01 else " [yellow](format off)[/]"
+        )
+        plan = f"+top{ext.top} +bottom{ext.bottom} +left{ext.left} +right{ext.right}px"
+        if max(ext.top, ext.bottom, ext.left, ext.right) <= tol:
+            console.print(f"[dim]· {card.id}: frame & format already correct[/]")
+            return
+        if dry_run:
+            console.print(f"[cyan]{card.id}[/]: {plan}{fmt}")
             return
         bleed.run(src, dst, ext, cfg)
         console.print(
-            f"[green]✓[/] {card.id}: frame +top{ext.top} +left{ext.left} "
-            f"+right{ext.right}px → {dst.relative_to(lib.root)}"
+            f"[green]✓[/] {card.id}: {plan}{fmt} → {dst.relative_to(lib.root)}"
         )
 
     _each(lib.select(ids), one, "bordering")
-    _reindex(lib)
+    if not dry_run:
+        _reindex(lib)
 
 
 @cli.command()

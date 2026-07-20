@@ -64,6 +64,11 @@ class Config:
     target_top_ratio: float = 0.0
     #: `border` skips a card when the needed frame fix is below this (mm)
     border_tolerance_mm: float = 0.3
+    #: also pad the short axis so the card matches the card aspect ratio
+    border_fix_aspect: bool = True
+    #: how to split aspect padding — fraction added on the left / top (0..1)
+    border_aspect_bias_x: float = 0.5
+    border_aspect_bias_y: float = 0.5
     # --- grade: normalize (per-card, dynamic) then look (uniform) ------------
     #: pull every card to a common baseline before the creative recipe
     grade_normalize: bool = True

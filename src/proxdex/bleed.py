@@ -51,17 +51,37 @@ class Extension:
         ]
 
 
-def frame_plan(b: Borders, tgt: Target) -> Extension:
-    """Per-edge expansion to bring a too-thin frame up to trim proportions.
+def aspect_delta(b: Borders, cfg: Config) -> float:
+    """Image aspect minus card aspect; ~0 means correctly formatted.
 
-    Top and sides only (the bottom frame is legitimately thicker); no cut bleed
-    — that is added later, at the sheet step, outside the trim.
+    Positive = image is too wide (needs height); negative = too tall (needs
+    width). Above a small tolerance the card's format is off.
     """
+    return b.w / b.h - cfg.card_w_mm / cfg.card_h_mm
+
+
+def border_plan(b: Borders, tgt: Target, cfg: Config) -> Extension:
+    """Per-edge expansion: bring a thin frame to trim proportions, and (if
+    ``border_fix_aspect``) pad the short axis to the card aspect — distributing
+    that padding per ``aspect_bias_x/y``. No cut bleed (that's added at sheet).
+    """
+    top = max(0.0, tgt.top - b.top)
+    left = max(0.0, tgt.side - b.left)
+    right = max(0.0, tgt.side - b.right)
+    bottom = 0.0
+    if cfg.border_fix_aspect:
+        w, h = b.w + left + right, b.h + top + bottom
+        card = cfg.card_w_mm / cfg.card_h_mm
+        if w / h > card:  # too wide → add height
+            pad = w / card - h
+            top += pad * cfg.border_aspect_bias_y
+            bottom += pad * (1.0 - cfg.border_aspect_bias_y)
+        elif w / h < card:  # too tall → add width
+            pad = h * card - w
+            left += pad * cfg.border_aspect_bias_x
+            right += pad * (1.0 - cfg.border_aspect_bias_x)
     return Extension(
-        top=round(max(0.0, tgt.top - b.top)),
-        left=round(max(0.0, tgt.side - b.left)),
-        right=round(max(0.0, tgt.side - b.right)),
-        bottom=0,
+        top=round(top), bottom=round(bottom), left=round(left), right=round(right)
     )
 
 

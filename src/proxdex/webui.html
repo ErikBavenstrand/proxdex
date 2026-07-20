@@ -55,6 +55,9 @@
     border:1px solid var(--line);border-radius:10px;display:grid;place-items:center;overflow:hidden}
   .viewer img{width:100%;height:100%;object-fit:contain;cursor:zoom-in}
   .viewer .ph{color:var(--dim);font-size:13px;text-align:center;padding:20px}
+  .warn{background:rgba(240,178,75,.13);border:1px solid var(--warn);color:var(--warn);
+    border-radius:10px;padding:8px 12px;margin-bottom:12px;font-size:13px}
+  .warn button{margin:0 6px}
   .side{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;height:fit-content}
   .side h3{margin:0 0 2px} .side .sub{color:var(--dim);font-size:12px;margin-bottom:14px}
   .act{border-top:1px solid var(--line);padding:12px 0;display:flex;flex-direction:column;gap:8px}
@@ -206,6 +209,7 @@ function renderCard(){
       <b>${c.name}</b><span class="tag">${c.id} · ${state.idx+1}/${state.cards.length}
         · ←/→ cards · ↑/↓ stages</span>
     </div>
+    <div id="fmtwarn"></div>
     <div class="detail">
       <div class="stagelist"><div class="cap">stages</div>${list}</div>
       <div>${viewer}</div>
@@ -229,6 +233,18 @@ function renderCard(){
       </div>
     </div>`;
   const m=$('#u_model'); if(m) m.value = state.meta.models.includes('digital-art-4x')?'digital-art-4x':m.value;
+  checkFormat(c.id);
+}
+async function checkFormat(id){
+  const el=$('#fmtwarn'); if(!el) return;
+  try{ const r=await get('/api/measure/'+id);
+    if(r.error||r.format_ok){ el.innerHTML=''; return; }
+    const pl=r.plan;
+    el.innerHTML=`<div class="warn">⚠ format off (aspect ${r.aspect>0?'too wide':'too tall'}, Δ${r.aspect}).
+      <code>border</code> would pad +top${pl.top} +bottom${pl.bottom} +left${pl.left} +right${pl.right}px.
+      <button onclick="runStep('build',{},true)">Rebuild to fix</button>
+      <span class="tag">tune fill in Settings → [border] aspect_bias_x/y</span></div>`;
+  }catch(e){ el.innerHTML=''; }
 }
 async function runStep(cmd, opts, force){
   const c=state.cards[state.idx];
@@ -366,7 +382,7 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{state.view=b.d
 document.addEventListener('keydown',e=>{ if(state.view!=='card')return;
   if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
   if(e.key==='ArrowRight')step(1); else if(e.key==='ArrowLeft')step(-1);
-  else if(e.key==='ArrowUp'){e.preventDefault();cycleStage(1);} else if(e.key==='ArrowDown'){e.preventDefault();cycleStage(-1);}
+  else if(e.key==='ArrowUp'){e.preventDefault();cycleStage(-1);} else if(e.key==='ArrowDown'){e.preventDefault();cycleStage(1);}
   else if(e.key==='Escape'){state.view='library';render();}});
 const _origRender=render; render=function(){ _origRender(); if(state.view==='library') loadBatches(); };
 get('/api/config').then(c=>$('#lib').textContent=c.root);

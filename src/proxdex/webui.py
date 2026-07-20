@@ -24,7 +24,7 @@ from fastapi import Body, FastAPI, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from PIL import Image
 
-from . import borders, media, report, sources
+from . import bleed, borders, media, report, sources
 from . import upscale as upscale_mod
 from .config import Config
 from .errors import ProxdexError
@@ -143,6 +143,8 @@ def create_app(lib: Library) -> FastAPI:
         b = borders.measure(borders.load_rgb(src), cfg)
         tgt = borders.target(b, cfg)
         need = b.top < tgt.top - 2 or b.left < tgt.side - 2 or b.right < tgt.side - 2
+        plan = bleed.border_plan(b, tgt, cfg)
+        delta = bleed.aspect_delta(b, cfg)
         return {
             "w": b.w,
             "h": b.h,
@@ -151,6 +153,14 @@ def create_app(lib: Library) -> FastAPI:
             "right": round(b.right),
             "side_pct": round(b.side_ratio * 100, 1),
             "verdict": "extend" if need else "ok",
+            "aspect": round(delta, 3),
+            "format_ok": abs(delta) < 0.01,
+            "plan": {
+                "top": plan.top,
+                "bottom": plan.bottom,
+                "left": plan.left,
+                "right": plan.right,
+            },
         }
 
     @app.delete("/api/card/{cid}")

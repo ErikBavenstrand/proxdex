@@ -168,7 +168,7 @@ def create_app(lib: Library) -> FastAPI:
             "side_pct": round(b.side_ratio * 100, 1),
             "verdict": "extend" if need else "ok",
             "aspect": round(delta, 3),
-            "format_ok": abs(delta) < 0.01,
+            "format_ok": bleed.format_ok(b, cfg),
             "plan": {
                 "top": plan.top,
                 "bottom": plan.bottom,

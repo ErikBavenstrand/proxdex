@@ -620,7 +620,7 @@ def measure(ctx: click.Context, ids: tuple[str, ...]) -> None:
         tgt = borders.target(b, cfg)
         need = b.top < tgt.top - 2 or b.left < tgt.side - 2 or b.right < tgt.side - 2
         delta = bleed.aspect_delta(b, cfg)
-        fmt = "[green]ok[/]" if abs(delta) < 0.01 else f"[yellow]{delta:+.2f}[/]"
+        fmt = "[green]ok[/]" if bleed.format_ok(b, cfg) else f"[yellow]{delta:+.3f}[/]"
         table.add_row(
             card.id,
             f"{b.w}×{b.h}",
@@ -788,11 +788,10 @@ def border(
         b = borders.measure(borders.load_rgb(src), cfg)
         ext = bleed.border_plan(b, borders.target(b, cfg), cfg)
         tol = round(cfg.border_tolerance_mm * cfg.px_per_mm(b.w))
-        fmt = (
-            "" if abs(bleed.aspect_delta(b, cfg)) < 0.01 else " [yellow](format off)[/]"
-        )
+        ok_fmt = bleed.format_ok(b, cfg)
+        fmt = "" if ok_fmt else " [yellow](format off)[/]"
         plan = f"+top{ext.top} +bottom{ext.bottom} +left{ext.left} +right{ext.right}px"
-        if max(ext.top, ext.bottom, ext.left, ext.right) <= tol:
+        if max(ext.top, ext.bottom, ext.left, ext.right) <= tol and ok_fmt:
             console.print(f"[dim]· {card.id}: frame & format already correct[/]")
             return
         if dry_run:

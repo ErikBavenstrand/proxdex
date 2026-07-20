@@ -51,13 +51,21 @@ class Extension:
         ]
 
 
+# aspect deviation above which a card visibly doesn't fill the cutout
+ASPECT_TOL = 0.004
+
+
 def aspect_delta(b: Borders, cfg: Config) -> float:
     """Image aspect minus card aspect; ~0 means correctly formatted.
 
     Positive = image is too wide (needs height); negative = too tall (needs
-    width). Above a small tolerance the card's format is off.
+    width). Above ``ASPECT_TOL`` the card's format is off.
     """
     return b.w / b.h - cfg.card_w_mm / cfg.card_h_mm
+
+
+def format_ok(b: Borders, cfg: Config) -> bool:
+    return abs(aspect_delta(b, cfg)) <= ASPECT_TOL
 
 
 def border_plan(b: Borders, tgt: Target, cfg: Config) -> Extension:

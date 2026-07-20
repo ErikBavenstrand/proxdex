@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import glob
+import re
 import shutil
+import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TypeVar
@@ -32,7 +34,7 @@ click.rich_click.STYLE_OPTIONS_TABLE_LEADING = 0
 click.rich_click.COMMAND_GROUPS = {
     "proxdex": [
         {"name": "Library", "commands": ["init", "ls", "index"]},
-        {"name": "Acquire", "commands": ["fetch", "import"]},
+        {"name": "Acquire", "commands": ["search", "fetch", "import"]},
         {"name": "Prepare", "commands": ["measure", "grade", "border"]},
     ]
 }
@@ -156,36 +158,170 @@ def init(ctx: click.Context, path: Path | None) -> None:
     console.print(f"[green]initialized[/] proxdex library at [bold]{root}[/]")
 
 
+def _acquire(lib: Library, cfg: Config, meta: sources.CardMeta, force: bool) -> None:
+    """Create the card folder if needed and download its stage-1 original."""
+    card = lib.find(meta.id)
+    if card is None:
+        set_dir = lib.set_dir(meta.set_id, meta.set_name)
+        card_dir = set_dir / f"{meta.id}_{slugify(meta.name)}"
+        card_dir.mkdir(parents=True, exist_ok=True)
+        card = Card(id=meta.id, dir=card_dir, set_id=meta.set_id)
+    dst = card.stage_path(Stage.ORIGINAL)
+    if dst.exists() and not force:
+        console.print(f"[dim]· {meta.id} {meta.name}: original exists[/]")
+        return
+    sources.download_large(meta.id, cfg).save(dst)
+    console.print(
+        f"[green]✓[/] {meta.id:<9} {meta.name:<18} → {dst.relative_to(lib.root)}"
+    )
+
+
 @cli.command()
 @click.argument("ids", nargs=-1, required=True, metavar="ID...")
 @click.option("--force", is_flag=True, help="Re-download even if the original exists.")
 @click.pass_context
 def fetch(ctx: click.Context, ids: tuple[str, ...], force: bool) -> None:
-    """Download originals from scrydex + names/sets from the TCG API.
+    """Download originals by id from scrydex + names/sets from the TCG API.
 
-    IDs are canonical TCG ids, e.g. [cyan]ex3-90[/] or [cyan]ex15-94[/].
+    IDs are canonical TCG ids, e.g. [cyan]ex3-90[/] or [cyan]ex15-94[/]. Don't
+    know the id? Use [cyan]proxdex search[/] instead.
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
+    _each(
+        ids, lambda cid: _acquire(lib, cfg, sources.lookup(cid, cfg), force), "fetching"
+    )
 
-    def one(cid: str) -> None:
-        meta = sources.lookup(cid, cfg)
-        card = lib.find(cid)
-        if card is None:
-            set_dir = lib.set_dir(meta.set_id, meta.set_name)
-            card_dir = set_dir / f"{cid}_{slugify(meta.name)}"
-            card_dir.mkdir(parents=True, exist_ok=True)
-            card = Card(id=cid, dir=card_dir, set_id=meta.set_id)
-        dst = card.stage_path(Stage.ORIGINAL)
-        if dst.exists() and not force:
-            console.print(f"[dim]· {cid} {meta.name}: original exists[/]")
-            return
-        sources.download_large(cid, cfg).save(dst)
-        console.print(
-            f"[green]✓[/] {cid:<9} {meta.name:<18} → {dst.relative_to(lib.root)}"
+
+@cli.command()
+@click.argument("query", nargs=-1, required=True, metavar="QUERY...")
+@click.option(
+    "--set", "set_filter", metavar="SET", help="Set id (ex4) or name substring."
+)
+@click.option("--rarity", metavar="TEXT", help="Keep only rarities containing TEXT.")
+@click.option("--year", metavar="YYYY", help="Keep only cards released that year.")
+@click.option("--limit", default=100, show_default=True, help="Max results to request.")
+@click.option(
+    "--select",
+    "selection",
+    metavar="SPEC",
+    help="Skip the prompt and fetch this selection (e.g. [cyan]1,3-5[/] or an id).",
+)
+@click.option("-f", "--fetch", "fetch_all", is_flag=True, help="Fetch every result.")
+@click.option(
+    "--open", "open_images", is_flag=True, help="Open result images in the browser."
+)
+@click.option("--force", is_flag=True, help="Re-download even if the original exists.")
+@click.pass_context
+def search(
+    ctx: click.Context,
+    query: tuple[str, ...],
+    set_filter: str | None,
+    rarity: str | None,
+    year: str | None,
+    limit: int,
+    selection: str | None,
+    fetch_all: bool,
+    open_images: bool,
+    force: bool,
+) -> None:
+    """Search cards by name, then pick which to fetch.
+
+    Shows matches with set, year, collector number, rarity and artist so you
+    can tell prints apart, then downloads the ones you choose.
+
+    [dim]Examples:[/]
+
+    [dim]  proxdex search entei ex[/]
+
+    [dim]  proxdex search charizard --set base1 --rarity holo[/]
+    """
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    text = " ".join(query)
+    results = sources.search(
+        text, cfg, set_filter=set_filter, rarity=rarity, year=year, limit=limit
+    )
+    if not results:
+        console.print(f"[yellow]no matches for[/] {text!r}")
+        return
+    _print_results(results)
+    if open_images:
+        import webbrowser
+
+        for result in results[:12]:
+            webbrowser.open(cfg.scrydex_url.format(id=result.id))
+
+    if fetch_all:
+        chosen = results
+    elif selection is not None:
+        chosen = _parse_selection(selection, results)
+    elif sys.stdin.isatty():
+        raw = click.prompt(
+            "Fetch which? [numbers/ranges/ids · 'all' · blank to cancel]",
+            default="",
+            show_default=False,
         )
+        chosen = _parse_selection(raw, results)
+    else:
+        console.print("[dim]non-interactive — re-run with --select or --fetch.[/]")
+        return
+    if not chosen:
+        console.print("[dim]nothing selected.[/]")
+        return
+    _each(chosen, lambda r: _acquire(lib, cfg, r.to_meta(), force), "fetching")
 
-    _each(ids, one, "fetching")
+
+def _print_results(results: Sequence[sources.SearchResult]) -> None:
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    table.add_column("#", justify="right", style="cyan")
+    table.add_column("ID", style="dim")
+    table.add_column("Name")
+    table.add_column("Set")
+    table.add_column("Year", justify="right")
+    table.add_column("No.", justify="right")
+    table.add_column("Rarity")
+    table.add_column("Artist")
+    for i, r in enumerate(results, 1):
+        num = f"{r.number}/{r.printed_total}" if r.printed_total else r.number
+        table.add_row(str(i), r.id, r.name, r.set_name, r.year, num, r.rarity, r.artist)
+    console.print(table)
+
+
+def _parse_selection(
+    text: str, results: Sequence[sources.SearchResult]
+) -> list[sources.SearchResult]:
+    """Turn a selection spec into result objects.
+
+    Understands 1-based indices, ``a-b`` ranges, literal ids, and ``all``.
+    """
+    text = text.strip().lower()
+    if not text or text in {"q", "quit", "cancel"}:
+        return []
+    if text == "all":
+        return list(results)
+    by_id = {r.id.lower(): r for r in results}
+    picked: dict[str, sources.SearchResult] = {}
+    for token in re.split(r"[,\s]+", text):
+        if not token:
+            continue
+        range_match = re.fullmatch(r"(\d+)-(\d+)", token)
+        if range_match:
+            lo, hi = int(range_match[1]), int(range_match[2])
+            for i in range(lo, hi + 1):
+                if 1 <= i <= len(results):
+                    picked[results[i - 1].id] = results[i - 1]
+        elif token.isdigit():
+            i = int(token)
+            if 1 <= i <= len(results):
+                picked[results[i - 1].id] = results[i - 1]
+            else:
+                err.print(f"[yellow]skip[/] {i}: out of range")
+        elif token in by_id:
+            picked[by_id[token].id] = by_id[token]
+        else:
+            err.print(f"[yellow]skip[/] {token!r}: not a listed number or id")
+    return list(picked.values())
 
 
 @cli.command(name="import")
@@ -357,8 +493,6 @@ def index(ctx: click.Context) -> None:
 
 
 def _card_id_from(stem: str) -> str | None:
-    import re
-
     m = re.match(r"[a-z]+\d*-\d+", stem, re.IGNORECASE)
     return m.group(0) if m else None
 

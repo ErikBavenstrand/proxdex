@@ -63,7 +63,8 @@ uv tool install proxdex        # or: pip install proxdex
 cd ~/Documents/Pokémon\ Proxies
 proxdex init                   # one-time: create the library here
 
-proxdex fetch ex3-90 ex6-105   # download originals + look up names/sets
+proxdex search entei ex        # find a card by name, pick which print to fetch
+proxdex fetch ex3-90 ex6-105   # or download directly by id
 # ...upscale with Upscayl into some folder, then:
 proxdex import ~/upscaled/*.png   # files ex*_upscayl_*.png as stage 2
 
@@ -78,6 +79,25 @@ proxdex index                  # regenerate INDEX.md
 Commands accept card ids to scope them (`proxdex grade ex6-105`); with none,
 they act on the whole library. `proxdex` searches up from the current
 directory for `proxdex.toml`, or pass `--root DIR`.
+
+### Finding cards
+
+Don't know the id? `proxdex search` queries the TCG API by name — every word
+must appear in the card name — and shows each match's set, release year,
+collector number, rarity and artist so you can tell prints apart:
+
+```
+$ proxdex search entei ex
+#  ID       Name            Set                       Year     No.  Rarity        Artist
+1  ex4-91   Entei ex        Team Magma vs Team Aqua   2004   91/95  Rare Holo EX  Ryo Ueda
+2  ex7-97   Rocket's Entei  Team Rocket Returns       2004  97/109  Rare Holo EX  Ryo Ueda
+3  bw5-13   Entei-EX        Dark Explorers            2012  13/108  Rare Holo EX  Shizurow
+Fetch which? [numbers/ranges/ids · 'all' · blank to cancel]: 1
+```
+
+Type `1`, `1,3`, `1-3`, an id, or `all`. Narrow with `--set base1`,
+`--rarity holo`, `--year 2004`; skip the prompt with `--select 1,3` or
+`--fetch`; add `--open` to preview result images in your browser.
 
 ## Border correction
 

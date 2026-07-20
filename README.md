@@ -62,6 +62,7 @@ in `sheet`. See [uniform prints](#uniform-prints).
 
 ```bash
 uv tool install proxdex        # global CLI in ~/.local/bin  (or: pip install proxdex)
+uv tool install "proxdex[ui]"  # + the local web UI (`proxdex ui`)
 uv tool install .              # from a local checkout
 uv tool upgrade proxdex        # later
 ```
@@ -118,6 +119,18 @@ proxdex import scan.png --id ex6-105    # arbitrary file → looks up + files it
 Commands accept card ids to scope them (`proxdex build ex6-105`); with none,
 they act on the whole library. `proxdex` searches up from the current
 directory for `proxdex.toml`, or pass `--root DIR`.
+
+### Web UI
+
+Prefer clicking to typing? `proxdex ui` (needs the `[ui]` extra) starts a local
+server and opens a browser: a card gallery with thumbnails and stage badges
+(`O B U E`), one-click **Build** / **Make sheet**, per-card before/after
+previews, PDF links, and print-status. It reads the library directly and runs
+the same CLI under the hood — nothing leaves your machine (localhost only).
+
+```bash
+proxdex ui                 # → http://127.0.0.1:8756
+```
 
 ### Print sheet
 

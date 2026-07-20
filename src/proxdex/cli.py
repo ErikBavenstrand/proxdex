@@ -46,7 +46,7 @@ click.rich_click.SHOW_ARGUMENTS = True
 click.rich_click.STYLE_OPTIONS_TABLE_LEADING = 0
 click.rich_click.COMMAND_GROUPS = {
     "proxdex": [
-        {"name": "Library", "commands": ["init", "where", "ls", "index"]},
+        {"name": "Library", "commands": ["init", "where", "ls", "index", "ui"]},
         {"name": "Acquire", "commands": ["search", "fetch", "import"]},
         {"name": "Prepare", "commands": ["border", "upscale", "grade", "measure"]},
         {"name": "Produce", "commands": ["build", "back", "sheet", "printed"]},
@@ -514,6 +514,33 @@ def where(ctx: click.Context) -> None:
     console.print(f"config    {cfg_file} {mark}")
     if env := os.environ.get("PROXDEX_ROOT"):
         console.print(f"[dim]PROXDEX_ROOT={env}[/]")
+
+
+@cli.command()
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--port", default=8756, show_default=True)
+@click.option("--no-open", is_flag=True, help="Don't open a browser tab.")
+@click.pass_context
+def ui(ctx: click.Context, host: str, port: int, no_open: bool) -> None:
+    """Launch the local web UI (card gallery, build/sheet, previews)."""
+    lib = _lib(ctx)
+    try:
+        import uvicorn
+
+        from .webui import create_app
+    except ModuleNotFoundError as exc:
+        raise ProxdexError(
+            "the web UI needs extra deps — install with "
+            '`uv tool install "proxdex[ui]"` (or `pip install "proxdex[ui]"`)'
+        ) from exc
+    url = f"http://{host}:{port}"
+    if not no_open:
+        import threading
+        import webbrowser
+
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    console.print(f"[green]proxdex UI[/] → [bold]{url}[/]  [dim](Ctrl-C to stop)[/]")
+    uvicorn.run(create_app(lib), host=host, port=port, log_level="warning")
 
 
 @cli.command()

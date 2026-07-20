@@ -28,6 +28,12 @@ classifiers = [
     "Topic :: Printing",
 ]
 
+[project.optional-dependencies]
+ui = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
 [project.urls]
 Repository = "https://github.com/ErikBavenstrand/proxdex"
 Issues = "https://github.com/ErikBavenstrand/proxdex/issues"
@@ -39,6 +45,8 @@ proxdex = "proxdex.cli:main"
 dev = [
     "ruff>=0.8",
     "pyright>=1.1.390",
+    "fastapi>=0.110",  # so lint/typecheck see the optional web-UI module
+    "uvicorn>=0.29",
 ]
 
 [tool.ruff]
@@ -79,6 +87,8 @@ reportUnknownMemberType = false
 reportUnknownVariableType = false
 reportUnknownArgumentType = false
 reportMissingTypeStubs = false
+# FastAPI/click register handlers via decorators — they aren't "called"
+reportUnusedFunction = false
 
 [build-system]
 requires = ["hatchling"]
@@ -89,3 +99,5 @@ path = "src/proxdex/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/proxdex"]
+# ship the web-UI frontend (non-.py, so make inclusion explicit)
+force-include = { "src/proxdex/webui.html" = "proxdex/webui.html" }

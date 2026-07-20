@@ -10,6 +10,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TypeVar
 
+import numpy as np
 import rich_click as click
 from rich.console import Console
 from rich.progress import (
@@ -46,6 +47,7 @@ err = Console(stderr=True, highlight=False)
 T = TypeVar("T")
 
 _STAGES = (Stage.ORIGINAL, Stage.UPSCALED, Stage.EDITED, Stage.PRINT)
+_STAGE_BY_LABEL = {s.label: s for s in Stage}
 
 DEFAULT_TOML = """\
 # proxdex library config — tune here, no code edits needed.
@@ -61,14 +63,20 @@ target_top_ratio  = 0.0
 thresh            = 62      # RGB distance still counted as "the frame colour"
 
 [grade]
-# Applied identically to every card → uniform prints. Printers and matte
-# paper dull the image, so the defaults lift it slightly.
+# 1) normalize: pull each card to a common baseline first (so scans and
+#    digital art match) — white-balance the frame + even out black/white points.
+normalize = true
+black_pct = 0.5             # luminance percentile mapped to black
+white_pct = 99.5            # luminance percentile mapped to white
+# Frame white-balance target. [] = use the library's own median frame colour;
+# or pin it, e.g. [252, 214, 46], so all cards converge on that yellow.
+match_border_target = []
+# 2) look: one identical recipe on top → uniform prints. Printers and matte
+#    paper dull the image, so the defaults lift it slightly.
 brightness = 1.03
 contrast   = 1.06
 saturation = 1.10
 gamma      = 1.0
-# Normalize every card's frame to one colour so all yellows match. [] = off.
-match_border_target = []
 
 [card]
 w_mm = 63.0
@@ -168,14 +176,28 @@ def init(ctx: click.Context, path: Path | None) -> None:
     console.print(f"[green]initialized[/] proxdex library at [bold]{root}[/]")
 
 
+def _card_from_meta(lib: Library, meta: sources.CardMeta) -> Card:
+    """Find the card, or create its correctly-named folder from metadata."""
+    card = lib.find(meta.id)
+    if card is not None:
+        return card
+    set_dir = lib.set_dir(meta.set_id, meta.set_name)
+    card_dir = set_dir / f"{meta.id}_{slugify(meta.name)}"
+    card_dir.mkdir(parents=True, exist_ok=True)
+    return Card(id=meta.id, dir=card_dir, set_id=meta.set_id)
+
+
+def _ensure_card(lib: Library, cfg: Config, cid: str) -> Card:
+    """Find the card, or look up its metadata and create the folder."""
+    card = lib.find(cid)
+    if card is not None:
+        return card
+    return _card_from_meta(lib, sources.lookup(cid, cfg))
+
+
 def _acquire(lib: Library, cfg: Config, meta: sources.CardMeta, force: bool) -> None:
     """Create the card folder if needed and download its stage-1 original."""
-    card = lib.find(meta.id)
-    if card is None:
-        set_dir = lib.set_dir(meta.set_id, meta.set_name)
-        card_dir = set_dir / f"{meta.id}_{slugify(meta.name)}"
-        card_dir.mkdir(parents=True, exist_ok=True)
-        card = Card(id=meta.id, dir=card_dir, set_id=meta.set_id)
+    card = _card_from_meta(lib, meta)
     dst = card.stage_path(Stage.ORIGINAL)
     if dst.exists() and not force:
         console.print(f"[dim]· {meta.id} {meta.name}: original exists[/]")
@@ -336,33 +358,63 @@ def _parse_selection(
 
 @cli.command(name="import")
 @click.argument("paths", nargs=-1, required=True, metavar="PATH...")
+@click.option(
+    "--id",
+    "cid",
+    metavar="CARD_ID",
+    help="Assign this TCG id to the file(s); looks up name/set and creates the "
+    "card folder if missing. Use when the filename has no id.",
+)
+@click.option(
+    "--stage",
+    type=click.Choice([s.label for s in Stage]),
+    default=None,
+    help="Target stage (default: guessed — 'upscayl' in the name → upscaled, "
+    "else original).",
+)
 @click.option("--move", is_flag=True, help="Move files instead of copying them.")
 @click.pass_context
-def import_(ctx: click.Context, paths: tuple[str, ...], move: bool) -> None:
+def import_(
+    ctx: click.Context,
+    paths: tuple[str, ...],
+    cid: str | None,
+    stage: str | None,
+    move: bool,
+) -> None:
     """File loose images (e.g. an Upscayl output folder) into card stages.
 
-    The card id is read from each filename; a name containing
-    [cyan]upscayl[/] is filed as stage 2, otherwise stage 1.
+    With no [cyan]--id[/], the card id is read from each filename and the card
+    folder must already exist. With [cyan]--id[/] the metadata is looked up and
+    the folder created on the fly, so you can import an arbitrarily-named scan:
+
+    [dim]  proxdex import my-scan.png --id ex6-105 --stage original[/]
     """
     lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    forced_stage = _STAGE_BY_LABEL[stage] if stage else None
     files: list[Path] = []
     for pattern in paths:
         expanded = glob.glob(str(Path(pattern).expanduser()))
         files.extend(Path(p) for p in expanded)
 
     def one(f: Path) -> None:
-        cid = _card_id_from(f.stem)
-        if cid is None:
-            raise FileError(f"{f.name}: no card id in filename")
-        card = lib.find(cid)
+        file_cid = cid or _card_id_from(f.stem)
+        if file_cid is None:
+            raise FileError(f"{f.name}: no card id in filename (pass --id)")
+        card = _ensure_card(lib, cfg, file_cid) if cid else lib.find(file_cid)
         if card is None:
-            raise FileError(f"{cid}: no card folder (run `proxdex fetch {cid}` first)")
-        stage = Stage.UPSCALED if "upscayl" in f.name.lower() else Stage.ORIGINAL
-        dst = card.stage_path(stage)
+            raise FileError(
+                f"{file_cid}: no card folder — pass --id to create it, or "
+                f"`proxdex fetch {file_cid}` first"
+            )
+        target = forced_stage or (
+            Stage.UPSCALED if "upscayl" in f.name.lower() else Stage.ORIGINAL
+        )
+        dst = card.stage_path(target)
         (shutil.move if move else shutil.copy2)(str(f), str(dst))
         console.print(
             f"[green]✓[/] {f.name} → {dst.relative_to(lib.root)} "
-            f"[dim](stage {stage.value} {stage.label})[/]"
+            f"[dim](stage {target.value} {target.label})[/]"
         )
 
     if not files:
@@ -501,24 +553,58 @@ def upscale(
 
 @cli.command()
 @click.argument("ids", nargs=-1, metavar="[ID...]")
+@click.option(
+    "--normalize/--no-normalize",
+    "normalize",
+    default=None,
+    help="Pull each card to a common baseline before the recipe (default on).",
+)
 @click.pass_context
-def grade(ctx: click.Context, ids: tuple[str, ...]) -> None:
-    """Apply the uniform saturation/contrast recipe → stage 3 (edited)."""
+def grade(ctx: click.Context, ids: tuple[str, ...], normalize: bool | None) -> None:
+    """Normalize each card to a common baseline, then apply the uniform look.
+
+    Normalization white-balances the card frame and evens out black/white
+    points so scanned and digitally-drawn cards start from the same place;
+    then one identical recipe (saturation/contrast) makes the batch print
+    uniformly. Writes stage 3 (edited). Tune both under [cyan][grade][/].
+    """
     from PIL import Image
 
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
+    do_norm = cfg.grade_normalize if normalize is None else normalize
+    # dynamic target: the collection's own median frame colour (unless pinned)
+    frame_target = None
+    if do_norm and not cfg.match_border_target:
+        frame_target = _library_frame_target(lib, cfg)
 
     def one(card: Card) -> None:
         src = card.best(Stage.UPSCALED, Stage.ORIGINAL)
         if src is None:
             raise FileError(f"{card.id}: nothing to grade yet")
-        out = grade_mod.grade(Image.open(src), cfg)
+        out = grade_mod.grade(
+            Image.open(src), cfg, frame_target=frame_target, normalize=do_norm
+        )
         dst = card.stage_path(Stage.EDITED)
         out.save(dst)
         console.print(f"[green]✓[/] {card.id}: graded → {dst.relative_to(lib.root)}")
 
     _each(lib.select(ids), one, "grading")
+
+
+def _library_frame_target(
+    lib: Library, cfg: Config
+) -> tuple[float, float, float] | None:
+    """Median frame colour across the whole library — the consensus to aim at."""
+    colors = []
+    for card in lib.cards():
+        src = card.best(Stage.UPSCALED, Stage.ORIGINAL)
+        if src is not None:
+            colors.append(borders.frame_color(borders.load_rgb(src)))
+    if not colors:
+        return None
+    median = np.median(np.stack(colors), axis=0)
+    return (float(median[0]), float(median[1]), float(median[2]))
 
 
 @cli.command()

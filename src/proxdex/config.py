@@ -28,13 +28,19 @@ class Config:
     target_side_ratio: float = 0.0
     #: top border / card height; 0 = auto (match the sides)
     target_top_ratio: float = 0.0
-    # --- grade recipe (applied identically to every card) --------------------
+    # --- grade: normalize (per-card, dynamic) then look (uniform) ------------
+    #: pull every card to a common baseline before the creative recipe
+    grade_normalize: bool = True
+    #: black/white points for auto-levels, as luminance percentiles
+    grade_black_pct: float = 0.5
+    grade_white_pct: float = 99.5
+    #: frame white-balance target [r, g, b]; [] = use the library's median frame
+    match_border_target: list[int] = field(default_factory=list)
+    # --- grade: the creative look (applied identically to every card) --------
     grade_brightness: float = 1.03
     grade_contrast: float = 1.06
     grade_saturation: float = 1.10
     grade_gamma: float = 1.0
-    #: normalize each card's frame to this [r, g, b]; [] = off
-    match_border_target: list[int] = field(default_factory=list)
     # --- external tools ------------------------------------------------------
     cardbleed_cmd: str = "cardbleed"
     #: upscayl-bin path; "" = auto-detect (bundled macOS app, then PATH)

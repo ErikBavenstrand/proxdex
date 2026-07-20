@@ -67,7 +67,8 @@ proxdex search entei ex        # find a card by name, pick which print to fetch
 proxdex fetch ex3-90 ex6-105   # or download directly by id
 proxdex upscale                # stage 2 via Upscayl's bundled CLI
 # ...or upscale in the Upscayl GUI and import the results:
-proxdex import ~/upscaled/*.png   # files ex*_upscayl_*.png as stage 2
+proxdex import ~/upscaled/*.png             # files ex*_upscayl_*.png as stage 2
+proxdex import scan.png --id ex6-105        # arbitrary file → looks up + files it
 
 proxdex grade                  # stage 3 for every card (uniform recipe)
 proxdex measure                # how thin is each frame? what needs extending?
@@ -143,24 +144,30 @@ target_side_ratio = 0.045   # side frame ≈ 4.5% of card width
 
 ## Uniform prints
 
-Uniformity comes from applying the **same** numeric grade to every card, not
-from eyeballing each one. Tune the recipe once in `proxdex.toml`:
+A mixed collection — crisp digital art next to warm, flat scans — won't print
+uniformly if you just apply the same multipliers to everything, because each
+card starts from a different place. So `grade` works in two steps:
+
+1. **normalize (per card, dynamic)** — white-balances the shared card frame to
+   one target colour and evens out black/white points, so every card lands on
+   the same baseline regardless of how it was made. The target defaults to the
+   library's *own median frame colour*, so the collection converges on its own
+   consensus; pin it if you prefer.
+2. **look (uniform)** — one identical recipe on top. Because the baseline is now
+   shared, your intended saturation lands the same way on every card.
 
 ```toml
 [grade]
-brightness = 1.03    # printers + matte paper dull the image
+normalize = true          # step 1
+match_border_target = []  # [] = library median; or pin e.g. [252, 214, 46]
+saturation = 1.10         # step 2 — the intended look
 contrast   = 1.06
-saturation = 1.10
+brightness = 1.03         # printers + matte paper dull the image
 ```
 
-Calibrate it with a test strip: print one sheet, compare to screen, nudge the
-numbers, reprint. For cross-card consistency you can also normalize every
-card's frame to a single colour (all yellows print identically):
-
-```toml
-[grade]
-match_border_target = [252, 214, 46]
-```
+Calibrate the look with a test strip: print one sheet, compare to screen, nudge
+the numbers, reprint. Run `proxdex grade --no-normalize` to apply only the
+recipe (skip step 1).
 
 ## License
 

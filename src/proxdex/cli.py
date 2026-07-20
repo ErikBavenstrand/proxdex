@@ -94,16 +94,46 @@ h_mm = 88.0
 bleed_mm = 2.5              # cut bleed added to every edge by cardbleed
 
 [sheet]
-# proxdex imposes finished fronts into the print PDF (it owns the whole path
-# to paper, so calibration transfers). Print with colour management OFF.
-page    = "a4"             # a4 | letter
-dpi     = 600
-cols    = 3
-rows    = 3
-margin_mm  = 5.0
-spacing_mm = 0.0
-guides     = true          # crop marks at the trim corners
-guide_mm   = 2.5
+# proxdex imposes finished cards into the print PDF (it owns the whole path to
+# paper, so calibration transfers). Print with colour management OFF.
+page        = "a4"         # a4 | letter
+orientation = "portrait"   # portrait | landscape
+dpi         = 600
+cols        = 3
+rows        = 3
+margin_mm   = 5.0
+spacing_mm  = 0.0          # gap between cards, x
+spacing_y_mm = 0.0
+# Any-size input is scaled to the exact card size (see [card]) at this dpi:
+# cover = fill card, aspect-preserving (matching-aspect cards lose nothing);
+# contain = whole image + white pad; stretch = force exact size.
+fit = "cover"
+
+# what to output
+faces       = "fronts"     # fronts | backs | duplex
+duplex_flip = "long"       # long | short print-flip edge (mirrors the backs)
+back_image  = ""           # shared card back; or per-card <id>_back.png
+open        = false         # open the PDF after writing
+
+# offsets (mm) — nudge the whole image; back offset aligns duplex front/back
+front_offset_x_mm = 0.0
+front_offset_y_mm = 0.0
+back_offset_x_mm  = 0.0
+back_offset_y_mm  = 0.0
+
+# cut guides
+guides          = true
+guide_style     = "corners"  # full (grid lines) | corners (crop marks) | none
+guide_placement = "outside"  # outside | inside the trim
+guide_mm        = 4.0        # crop-mark length
+guide_color     = "#00ff00"
+guide_width_mm  = 0.3
+guides_front    = true
+guides_back     = false      # cut from the front, so back guides usually off
+
+# registration marks (printer front/back alignment)
+reg_marks    = "none"        # none | corners
+reg_inset_mm = 10.0
 
 [print]
 # Colour reproduction baked into stage 4 (the master stays neutral), per medium.
@@ -781,6 +811,7 @@ def _write_batch(path: Path, data: dict) -> None:
     lines = [
         f"name = {s(data.get('name', ''))}",
         f"date = {s(data.get('date', ''))}",
+        f"faces = {s(data.get('faces', 'fronts'))}",
         f"printed = {'true' if data.get('printed') else 'false'}",
         f"printed_date = {s(data.get('printed_date', ''))}",
         f"paper = {s(data.get('paper', ''))}",
@@ -794,20 +825,49 @@ def _write_batch(path: Path, data: dict) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
+def _resolve_back(card: Card, cfg: Config, lib: Library):
+    """Per-card <id>_back.png if present, else the shared [sheet] back_image."""
+    from PIL import Image
+
+    per_card = card.dir / f"{card.id}_back.png"
+    if per_card.exists():
+        return Image.open(per_card).convert("RGB")
+    if cfg.sheet_back_image:
+        shared = Path(cfg.sheet_back_image)
+        if not shared.is_absolute():
+            shared = lib.root / shared
+        if shared.exists():
+            return Image.open(shared).convert("RGB")
+    return None
+
+
 @cli.command()
 @click.argument("name")
 @click.argument("ids", nargs=-1, metavar="[ID...]")
+@click.option(
+    "--faces",
+    type=click.Choice(["fronts", "backs", "duplex"]),
+    default=None,
+    help="What to impose (default from [sheet]).",
+)
 @click.option("--page", default=None, help="Page size override (a4 | letter).")
+@click.option("--open", "open_pdf", is_flag=True, help="Open the PDF when done.")
 @click.pass_context
 def sheet(
-    ctx: click.Context, name: str, ids: tuple[str, ...], page: str | None
+    ctx: click.Context,
+    name: str,
+    ids: tuple[str, ...],
+    faces: str | None,
+    page: str | None,
+    open_pdf: bool,
 ) -> None:
-    """Impose finished fronts into a print PDF and record the batch.
+    """Impose finished cards into a print PDF and record the batch.
 
     NAME labels the batch; with no IDs, every card with a finished front is
-    included. Writes print-batches/<date>_<name>/{fronts.pdf, batch.toml}.
-    proxdex owns the PDF, so print it with your printer's colour management
-    OFF for calibration to hold.
+    included. Each card is scaled to the exact configured card size at sheet
+    DPI, so any input resolution prints at the right physical size. Fronts,
+    backs, or duplex (back pages mirrored + offset). proxdex owns the PDF —
+    print with colour management OFF for calibration to hold.
     """
     from PIL import Image
 
@@ -815,6 +875,8 @@ def sheet(
     cfg = Config.load(lib.root)
     if page:
         cfg.sheet_page = page
+    if faces:
+        cfg.sheet_faces = faces
     cards = lib.select(ids) if ids else lib.cards()
     ready = [c for c in cards if c.has(Stage.PRINT)]
     missing = [c.id for c in cards if not c.has(Stage.PRINT)]
@@ -825,24 +887,45 @@ def sheet(
         )
     if not ready:
         raise click.UsageError("no finished fronts to impose — run `proxdex build`")
-    images = [Image.open(c.stage_path(Stage.PRINT)).convert("RGB") for c in ready]
-    pages = sheet_mod.impose(images, cfg)
+
+    fronts = [Image.open(c.stage_path(Stage.PRINT)).convert("RGB") for c in ready]
+    backs = [_resolve_back(c, cfg, lib) for c in ready]
+    if cfg.sheet_faces in ("backs", "duplex"):
+        no_back = [c.id for c, b in zip(ready, backs, strict=True) if b is None]
+        if no_back:
+            raise click.UsageError(
+                f"{cfg.sheet_faces} needs backs, but none for: {', '.join(no_back)}"
+                " — set [sheet] back_image or add <id>_back.png"
+            )
+
+    pages = sheet_mod.build_pages(fronts, backs, cfg)
     slug = slugify(name)
     today = date.today().isoformat()
     bdir = lib.batches_dir / f"{today}_{slug}"
     bdir.mkdir(parents=True, exist_ok=True)
-    sheet_mod.write_pdf(pages, bdir / "fronts.pdf", cfg)
+    pdf = bdir / f"{cfg.sheet_faces}.pdf"
+    sheet_mod.write_pdf(pages, pdf, cfg)
     _write_batch(
         bdir / "batch.toml",
-        {"name": slug, "date": today, "cards": [c.id for c in ready]},
+        {
+            "name": slug,
+            "date": today,
+            "faces": cfg.sheet_faces,
+            "cards": [c.id for c in ready],
+            "pdf": pdf.name,
+        },
     )
     console.print(
-        f"[green]✓[/] {len(ready)} cards → {len(pages)} page(s) → "
-        f"{(bdir / 'fronts.pdf').relative_to(lib.root)}"
+        f"[green]✓[/] {len(ready)} cards ({cfg.sheet_faces}) → {len(pages)} "
+        f"page(s) → {pdf.relative_to(lib.root)}"
     )
     console.print(
         f"[dim]print with colour management OFF, then `proxdex printed {slug}`[/]"
     )
+    if open_pdf or cfg.sheet_open:
+        import subprocess
+
+        subprocess.run(["open", str(pdf)], check=False)
 
 
 @cli.command()

@@ -24,13 +24,37 @@ class Config:
     bleed_mm: float = 2.5
     # --- sheet imposition (proxdex owns the print PDF) -----------------------
     sheet_page: str = "a4"  # a4 | letter
+    sheet_orientation: str = "portrait"  # portrait | landscape
     sheet_dpi: int = 600
+    #: how any-size input is scaled to the exact card size: cover | contain | stretch
+    sheet_fit: str = "cover"
     sheet_cols: int = 3
     sheet_rows: int = 3
     sheet_margin_mm: float = 5.0
-    sheet_spacing_mm: float = 0.0
+    sheet_spacing_mm: float = 0.0  # x spacing
+    sheet_spacing_y_mm: float = 0.0
+    # faces & duplex
+    sheet_faces: str = "fronts"  # fronts | backs | duplex
+    sheet_duplex_flip: str = "long"  # long | short print-flip edge (mirrors backs)
+    sheet_back_image: str = ""  # shared card back; <card>/<id>_back.png overrides
+    # offsets (mm) to align print vs cut, and front vs back on duplex
+    sheet_front_offset_x_mm: float = 0.0
+    sheet_front_offset_y_mm: float = 0.0
+    sheet_back_offset_x_mm: float = 0.0
+    sheet_back_offset_y_mm: float = 0.0
+    # cut guides
     sheet_guides: bool = True
-    sheet_guide_mm: float = 2.5
+    sheet_guide_style: str = "corners"  # full | corners | none
+    sheet_guide_placement: str = "outside"  # outside | inside
+    sheet_guide_mm: float = 4.0  # tick / crop-mark length
+    sheet_guide_color: str = "#00ff00"
+    sheet_guide_width_mm: float = 0.3
+    sheet_guides_front: bool = True
+    sheet_guides_back: bool = False
+    # registration marks (printer front/back alignment)
+    sheet_reg_marks: str = "none"  # none | corners
+    sheet_reg_inset_mm: float = 10.0
+    sheet_open: bool = False  # open the PDF after writing
     # --- border detection / correction --------------------------------------
     border_thresh: float = 62.0
     #: side border / card width; 0 = auto (match the thickest measured side)

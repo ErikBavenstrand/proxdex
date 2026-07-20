@@ -91,12 +91,25 @@ directory for `proxdex.toml`, or pass `--root DIR`.
 
 ### Print sheet
 
-`proxdex sheet <name> [ids...]` imposes each finished front at its exact
-physical size (cards carry cardbleed's bleed; crop marks mark the trim) onto
-pages and writes `print-batches/<date>-<name>/fronts.pdf` plus a manifest.
-Because proxdex renders the PDF itself, the print path is fully determined —
-**print with your printer's colour management OFF** so a calibration holds.
-Tune page/grid/margins under `[sheet]`.
+`proxdex sheet <name> [ids...]` imposes finished cards onto pages and writes
+`print-batches/<date>_<name>/<faces>.pdf` plus a manifest. proxdex renders the
+PDF itself, so the print path is fully determined — **print with your printer's
+colour management OFF** so a calibration holds.
+
+- **Any input size → exact card size.** Whatever resolution a card is, it's
+  scaled to the configured card dimensions (`[card]`, default 63×88mm) at sheet
+  DPI. `fit = cover` fills the card preserving aspect (matching-aspect cards
+  lose nothing); `contain` pads; `stretch` forces it.
+- **Fronts, backs, or duplex** (`--faces` or `[sheet] faces`). Duplex emits a
+  front page then a **mirrored** back page (`duplex_flip = long|short`), so
+  double-siding lines up. Backs come from a shared `[sheet] back_image` or a
+  per-card `<id>_back.png`.
+- **Offsets** nudge the whole image (mm): `front_offset_*` and, crucially for
+  duplex registration, `back_offset_*` (e.g. `0.4, 0.35`).
+- **Cut guides**: `guide_style` = `full` (grid lines) / `corners` (crop marks)
+  / `none`, with `placement`, length, `color`, width, and independent
+  `guides_front` / `guides_back` (cut from the front, so backs default off).
+  Optional printer `reg_marks`. All under `[sheet]`.
 
 ### Finding cards
 

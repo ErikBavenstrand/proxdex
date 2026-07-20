@@ -15,6 +15,8 @@ from typing import TypeVar
 
 import numpy as np
 import rich_click as click
+from numpy.typing import NDArray
+from PIL import Image
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -453,10 +455,12 @@ def import_(
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     forced_stage = _STAGE_BY_LABEL[stage] if stage else None
-    files: list[Path] = []
-    for pattern in paths:
-        expanded = glob.glob(str(Path(pattern).expanduser()))
-        files.extend(Path(p) for p in expanded)
+    files: list[Path] = [
+        Path(match)
+        for pattern in paths
+        # glob.glob handles user-supplied shell patterns (e.g. ~/dump/*.png)
+        for match in glob.glob(str(Path(pattern).expanduser()))  # noqa: PTH207
+    ]
 
     def one(f: Path) -> None:
         file_cid = cid or _card_id_from(f.stem)
@@ -632,7 +636,6 @@ def grade(
     then one identical recipe (saturation/contrast) makes the batch print
     uniformly. Writes stage 3 (edited). Tune both under [cyan][grade][/].
     """
-    from PIL import Image
 
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
@@ -640,7 +643,7 @@ def grade(
     # dynamic target: the collection's own median frame colour (unless pinned)
     frame_target = None
     if do_norm and not cfg.match_border_target:
-        frame_target = _library_frame_target(lib, cfg)
+        frame_target = _library_frame_target(lib)
 
     def one(card: Card) -> None:
         dst = card.stage_path(Stage.EDITED)
@@ -659,11 +662,9 @@ def grade(
     _each(lib.select(ids), one, "grading")
 
 
-def _library_frame_target(
-    lib: Library, cfg: Config
-) -> tuple[float, float, float] | None:
+def _library_frame_target(lib: Library) -> tuple[float, float, float] | None:
     """Median frame colour across the whole library — the consensus to aim at."""
-    colors = []
+    colors: list[NDArray[np.float32]] = []
     for card in lib.cards():
         src = card.best(Stage.UPSCALED, Stage.ORIGINAL)
         if src is not None:
@@ -703,7 +704,6 @@ def finish(
     one, else the manual preset (e.g. [cyan]foil[/]). Without
     [cyan]--write-print[/] it only prints the plan.
     """
-    from PIL import Image
 
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
@@ -804,10 +804,12 @@ def build(ctx: click.Context, ids: tuple[str, ...], force: bool) -> None:
     console.print("[green]build complete[/]")
 
 
-def _write_batch(path: Path, data: dict) -> None:
+def _write_batch(path: Path, data: dict[str, object]) -> None:
     def s(v: object) -> str:
         return '"' + str(v).replace('"', '\\"') + '"'
 
+    cards = data.get("cards", [])
+    card_ids = cards if isinstance(cards, list) else []
     lines = [
         f"name = {s(data.get('name', ''))}",
         f"date = {s(data.get('date', ''))}",
@@ -820,15 +822,13 @@ def _write_batch(path: Path, data: dict) -> None:
         f"pdf = {s(data.get('pdf', 'fronts.pdf'))}",
         "cards = [",
     ]
-    lines += [f"  {s(cid)}," for cid in data.get("cards", [])]
+    lines += [f"  {s(cid)}," for cid in card_ids]
     lines.append("]")
     path.write_text("\n".join(lines) + "\n")
 
 
-def _resolve_back(card: Card, cfg: Config, lib: Library):
+def _resolve_back(card: Card, cfg: Config, lib: Library) -> Image.Image | None:
     """Per-card <id>_back.png, then [sheet] back_image, then <lib>/back.png."""
-    from PIL import Image
-
     candidates = [card.dir / f"{card.id}_back.png"]
     if cfg.sheet_back_image:
         shared = Path(cfg.sheet_back_image)
@@ -888,7 +888,6 @@ def back(
     correction as the fronts and bleeded with cardbleed, then saved to
     [cyan]back.png[/] and used by `sheet --faces backs|duplex`.
     """
-    from PIL import Image
 
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
@@ -967,7 +966,6 @@ def sheet(
     backs, or duplex (back pages mirrored + offset). proxdex owns the PDF —
     print with colour management OFF for calibration to hold.
     """
-    from PIL import Image
 
     lib = _lib(ctx)
     cfg = Config.load(lib.root)

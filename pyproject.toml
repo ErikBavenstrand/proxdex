@@ -46,23 +46,39 @@ line-length = 88
 src = ["src"]
 
 [tool.ruff.lint]
-# × is used deliberately in size displays (1468×2048)
+# × / · / → are used deliberately in size displays and progress output
 allowed-confusables = ["×", "·", "→"]
-select = [
-    "E",    # pycodestyle errors
-    "W",    # pycodestyle warnings
-    "F",    # pyflakes
-    "I",    # isort
-    "UP",   # pyupgrade
-    "B",    # bugbear
-    "SIM",  # simplify
-    "RUF",  # ruff-specific
+select = ["ALL"]
+ignore = [
+    "D",       # docstrings: documented where it matters, not every helper
+    "COM812",  # trailing comma — handled by the formatter
+    "ISC001",  # implicit string concat — conflicts with the formatter
+    "ANN401",  # a few deliberate Any (ctx.obj, parsed JSON/TOML)
+    "EM101", "EM102",  # inline f-strings in raises read fine here
+    "TRY003",  # exception messages are specific and local
+    "PLR0913", # click command callbacks legitimately take many options
+    "PLR2004", # image/geometry literals (255, 0.5, ...) are self-explanatory
+    "FBT001", "FBT002",  # click injects boolean flags as parameters
+    "S603", "S607",  # subprocess: fixed argv, trusted tool names (cardbleed etc.)
+    "C901", "PLR0912", "PLR0915",  # a few inherently branchy render/CLI functions
+    "TD002", "TD003", "FIX002",  # TODO bookkeeping
+    "PLC0415",  # intentional lazy imports of heavy/optional deps inside commands
+    "TC",      # `from __future__ import annotations` makes TYPE_CHECKING moves moot
+    "DTZ011", "DTZ005",  # naive local dates are intentional for batch labels
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"src/proxdex/cli.py" = ["PLC0206"]  # dict iteration in the settings-panel loop
 
 [tool.pyright]
 include = ["src"]
-typeCheckingMode = "standard"
+typeCheckingMode = "strict"
 pythonVersion = "3.11"
+# numpy/pillow/img2pdf expressions surface as Unknown; keep strict elsewhere
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportMissingTypeStubs = false
 
 [build-system]
 requires = ["hatchling"]

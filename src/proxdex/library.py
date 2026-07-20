@@ -96,11 +96,7 @@ class Library:
         return self.root / "print-batches"
 
     def cards(self) -> list[Card]:
-        out: list[Card] = []
-        for d in sorted(self.cards_dir.glob("*/*")):
-            if d.is_dir():
-                out.append(self._card(d))
-        return out
+        return [self._card(d) for d in sorted(self.cards_dir.glob("*/*")) if d.is_dir()]
 
     def find(self, cid: str) -> Card | None:
         for d in sorted(self.cards_dir.glob(f"*/{cid}_*")):

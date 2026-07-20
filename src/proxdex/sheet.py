@@ -14,6 +14,7 @@ import contextlib
 import os
 import tempfile
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -52,7 +53,23 @@ def _blank_page(cfg: Config) -> Image.Image:
     return Image.new("RGB", _page_size_px(cfg), (255, 255, 255))
 
 
-def _geometry(cfg: Config) -> dict[str, float]:
+@dataclass(frozen=True, slots=True)
+class Geo:
+    """Resolved page/grid geometry in pixels (bleed/ppm in px and px/mm)."""
+
+    ppm: float
+    cell_w: int
+    cell_h: int
+    gap_x: int
+    gap_y: int
+    bleed: float
+    page_w: int
+    page_h: int
+    x_off: int
+    y_off: int
+
+
+def _geometry(cfg: Config) -> Geo:
     ppm = _ppm(cfg)
     cell_w = round((cfg.card_w_mm + 2 * cfg.bleed_mm) * ppm)
     cell_h = round((cfg.card_h_mm + 2 * cfg.bleed_mm) * ppm)
@@ -62,18 +79,18 @@ def _geometry(cfg: Config) -> dict[str, float]:
     page_w, page_h = _page_size_px(cfg)
     grid_w = cfg.sheet_cols * cell_w + (cfg.sheet_cols - 1) * gap_x
     grid_h = cfg.sheet_rows * cell_h + (cfg.sheet_rows - 1) * gap_y
-    return {
-        "ppm": ppm,
-        "cell_w": cell_w,
-        "cell_h": cell_h,
-        "gap_x": gap_x,
-        "gap_y": gap_y,
-        "bleed": cfg.bleed_mm * ppm,
-        "page_w": page_w,
-        "page_h": page_h,
-        "x_off": max(margin, (page_w - grid_w) // 2),
-        "y_off": max(margin, (page_h - grid_h) // 2),
-    }
+    return Geo(
+        ppm=ppm,
+        cell_w=cell_w,
+        cell_h=cell_h,
+        gap_x=gap_x,
+        gap_y=gap_y,
+        bleed=cfg.bleed_mm * ppm,
+        page_w=page_w,
+        page_h=page_h,
+        x_off=max(margin, (page_w - grid_w) // 2),
+        y_off=max(margin, (page_h - grid_h) // 2),
+    )
 
 
 def _fit(im: Image.Image, cw: int, ch: int, mode: str) -> Image.Image:
@@ -99,10 +116,10 @@ def _fit(im: Image.Image, cw: int, ch: int, mode: str) -> Image.Image:
     return canvas
 
 
-def _cell_xy(g: dict, col: int, row: int) -> tuple[int, int]:
+def _cell_xy(g: Geo, col: int, row: int) -> tuple[int, int]:
     return (
-        int(g["x_off"] + col * (g["cell_w"] + g["gap_x"])),
-        int(g["y_off"] + row * (g["cell_h"] + g["gap_y"])),
+        g.x_off + col * (g.cell_w + g.gap_x),
+        g.y_off + row * (g.cell_h + g.gap_y),
     )
 
 
@@ -125,7 +142,7 @@ def _grid_reorder(
 
 def _corner_guides(
     draw: ImageDraw.ImageDraw, trim: tuple[int, int, int, int], cfg: Config
-):
+) -> None:
     x0, y0, x1, y1 = trim
     n = round(cfg.sheet_guide_mm * _ppm(cfg))
     w = max(1, round(cfg.sheet_guide_width_mm * _ppm(cfg)))
@@ -141,29 +158,30 @@ def _corner_guides(
         draw.line([(cx, cy), (cx, cy + sy * n)], fill=color, width=w)
 
 
-def _full_guides(draw: ImageDraw.ImageDraw, cfg: Config, g: dict):
-    w = max(1, round(cfg.sheet_guide_width_mm * g["ppm"]))
+def _full_guides(draw: ImageDraw.ImageDraw, cfg: Config, g: Geo) -> None:
+    w = max(1, round(cfg.sheet_guide_width_mm * g.ppm))
     color = _hex(cfg.sheet_guide_color)
-    xs, ys = set(), set()
+    xs: set[int] = set()
+    ys: set[int] = set()
     for col in range(cfg.sheet_cols):
         cx, _ = _cell_xy(g, col, 0)
-        xs.update((round(cx + g["bleed"]), round(cx + g["cell_w"] - g["bleed"])))
+        xs.update((round(cx + g.bleed), round(cx + g.cell_w - g.bleed)))
     for row in range(cfg.sheet_rows):
         _, cy = _cell_xy(g, 0, row)
-        ys.update((round(cy + g["bleed"]), round(cy + g["cell_h"] - g["bleed"])))
+        ys.update((round(cy + g.bleed), round(cy + g.cell_h - g.bleed)))
     for x in xs:
-        draw.line([(x, 0), (x, g["page_h"])], fill=color, width=w)
+        draw.line([(x, 0), (x, g.page_h)], fill=color, width=w)
     for y in ys:
-        draw.line([(0, y), (g["page_w"], y)], fill=color, width=w)
+        draw.line([(0, y), (g.page_w, y)], fill=color, width=w)
 
 
-def _reg_marks(draw: ImageDraw.ImageDraw, cfg: Config, g: dict):
+def _reg_marks(draw: ImageDraw.ImageDraw, cfg: Config, g: Geo) -> None:
     if cfg.sheet_reg_marks.lower() != "corners":
         return
-    inset = round(cfg.sheet_reg_inset_mm * g["ppm"])
-    n = round(3 * g["ppm"])
-    w = max(1, round(0.3 * g["ppm"]))
-    pw, ph = int(g["page_w"]), int(g["page_h"])
+    inset = round(cfg.sheet_reg_inset_mm * g.ppm)
+    n = round(3 * g.ppm)
+    w = max(1, round(0.3 * g.ppm))
+    pw, ph = g.page_w, g.page_h
     for x, y in (
         (inset, inset),
         (pw - inset, inset),
@@ -180,7 +198,7 @@ def _render(
     g = _geometry(cfg)
     page = _blank_page(cfg)
     draw = ImageDraw.Draw(page)
-    ppm = g["ppm"]
+    ppm = g.ppm
     ox = round(
         (cfg.sheet_back_offset_x_mm if is_back else cfg.sheet_front_offset_x_mm) * ppm
     )
@@ -190,7 +208,7 @@ def _render(
     guides_on = cfg.sheet_guides and (
         cfg.sheet_guides_back if is_back else cfg.sheet_guides_front
     )
-    cw, ch = int(g["cell_w"]), int(g["cell_h"])
+    cw, ch = g.cell_w, g.cell_h
     for i, im in enumerate(images):
         if im is None:
             continue
@@ -199,21 +217,16 @@ def _render(
         page.paste(_fit(im, cw, ch, cfg.sheet_fit.lower()), (x + ox, y + oy))
         if guides_on and cfg.sheet_guide_style.lower() == "corners":
             trim = (
-                round(x + g["bleed"]),
-                round(y + g["bleed"]),
-                round(x + cw - g["bleed"]),
-                round(y + ch - g["bleed"]),
+                round(x + g.bleed),
+                round(y + g.bleed),
+                round(x + cw - g.bleed),
+                round(y + ch - g.bleed),
             )
             _corner_guides(draw, trim, cfg)
     if guides_on and cfg.sheet_guide_style.lower() == "full":
         _full_guides(draw, cfg, g)
-    if not is_back or not _reg_disabled_back(cfg):
-        _reg_marks(draw, cfg, g)
+    _reg_marks(draw, cfg, g)
     return page
-
-
-def _reg_disabled_back(cfg: Config) -> bool:
-    return False  # reserved for a future per-face registration toggle
 
 
 def _iter_pages(
@@ -254,7 +267,7 @@ def _pages_to_pdf(pages: Iterator[Image.Image], dst: Path, cfg: Config) -> int:
     finally:
         for path in tmp:
             with contextlib.suppress(OSError):
-                os.unlink(path)
+                Path(path).unlink()
 
 
 def impose_to_pdf(

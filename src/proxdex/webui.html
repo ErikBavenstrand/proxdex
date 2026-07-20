@@ -51,10 +51,13 @@
   .stagelist .n{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-size:11px;
     font-weight:700;background:var(--line);color:var(--dim);flex:0 0 auto}
   .stagelist button.active .n{background:rgba(0,0,0,.25);color:#0a0c10}
-  .viewer{height:calc(100vh - 150px);aspect-ratio:63/88;margin:0 auto;background:var(--panel2);
-    border:1px solid var(--line);border-radius:10px;display:grid;place-items:center;overflow:hidden}
-  .viewer img{width:100%;height:100%;object-fit:contain;cursor:zoom-in}
-  .viewer .ph{color:var(--dim);font-size:13px;text-align:center;padding:20px}
+  .viewer{position:relative;height:calc(100vh - 150px);aspect-ratio:63/88;margin:0 auto;
+    background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .stageimg{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
+    opacity:0;transition:opacity .1s;cursor:zoom-in}
+  .stageimg.show{opacity:1}
+  .viewer .ph{position:absolute;inset:0;display:grid;place-items:center;color:var(--dim);
+    font-size:13px;text-align:center;padding:20px}
   .warn{background:rgba(240,178,75,.13);border:1px solid var(--warn);color:var(--warn);
     border-radius:10px;padding:8px 12px;margin-bottom:12px;font-size:13px}
   .warn button{margin:0 6px}
@@ -190,17 +193,20 @@ function present(c){ return state.meta.stages.filter(k=>c.stages[k]); }
 function openCard(i){ state.idx=i; state.stage=null; state.view='card';
   document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active')); render(); }
 function step(d){ state.idx=(state.idx+d+state.cards.length)%state.cards.length; state.stage=null; renderCard(); }
-function setStage(k){ const c=state.cards[state.idx]; if(c.stages[k]){ state.stage=k; renderCard(); } }
+function showStage(k){ state.stage=k;  // toggle visibility only — no re-render, no reload
+  document.querySelectorAll('.stageimg').forEach(el=>el.classList.toggle('show',el.dataset.k===k));
+  document.querySelectorAll('.stagelist button[data-k]').forEach(b=>b.classList.toggle('active',b.dataset.k===k)); }
+function setStage(k){ const c=state.cards[state.idx]; if(c.stages[k]) showStage(k); }
 function cycleStage(d){ const p=present(state.cards[state.idx]); if(!p.length)return;
-  let i=p.indexOf(state.stage); i=(i+d+p.length)%p.length; state.stage=p[i]; renderCard(); }
+  let i=p.indexOf(state.stage); i=(i+d+p.length)%p.length; showStage(p[i]); }
+const viewsrc=(id,k)=>`/api/view/${id}/${k}?v=${state.ver[id]||0}`;
 function renderCard(){
   const c=state.cards[state.idx]; if(!c){ state.view='library'; return render(); }
   const stg = state.meta.stages, p = present(c);
   if(!state.stage || !c.stages[state.stage]) state.stage = p.length ? p[p.length-1] : null;
-  const list = stg.map((k,i)=>`<button class="${k===state.stage?'active':''}" ${c.stages[k]?'':'disabled'} onclick="setStage('${k}')"><span class="n">${i+1}</span>${k}</button>`).join('');
-  const viewer = state.stage
-    ? `<div class="viewer"><img src="${imgsrc(c.id,state.stage)}" onclick="lightbox('${imgsrc(c.id,state.stage)}')"></div>`
-    : `<div class="viewer"><div class="ph">no images yet — run a step →</div></div>`;
+  const list = stg.map((k,i)=>`<button data-k="${k}" class="${k===state.stage?'active':''}" ${c.stages[k]?'':'disabled'} onclick="setStage('${k}')"><span class="n">${i+1}</span>${k}</button>`).join('');
+  const imgs = p.map(k=>`<img class="stageimg ${k===state.stage?'show':''}" data-k="${k}" src="${viewsrc(c.id,k)}" onclick="lightbox('${imgsrc(c.id,k)}')">`).join('');
+  const viewer = `<div class="viewer">${imgs || '<div class="ph">no images yet — run a step →</div>'}</div>`;
   const models = state.meta.models.map(m=>`<option>${m}</option>`).join('');
   $('#main').innerHTML = `
     <div class="nav-cards">

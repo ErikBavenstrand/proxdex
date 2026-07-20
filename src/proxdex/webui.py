@@ -125,6 +125,20 @@ def create_app(lib: Library) -> FastAPI:
         im.save(buf, "JPEG", quality=82)
         return Response(buf.getvalue(), media_type="image/jpeg")
 
+    @app.get("/api/view/{cid}/{stage}")
+    def api_view(cid: str, stage: str) -> Response:
+        """A downscaled JPEG for the viewer — small so all stages preload and
+        flipping is instant/flicker-free (the lightbox uses full-res)."""
+        card = lib.find(cid)
+        st = _BY_LABEL.get(stage)
+        if card is None or st is None or not card.has(st):
+            return Response(status_code=404)
+        im = Image.open(card.stage_path(st)).convert("RGB")
+        im.thumbnail((1000, 1400))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=88)
+        return Response(buf.getvalue(), media_type="image/jpeg")
+
     @app.get("/api/image/{cid}/{stage}")
     def api_image(cid: str, stage: str) -> Response:
         card = lib.find(cid)

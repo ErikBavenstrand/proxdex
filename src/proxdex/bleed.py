@@ -1,0 +1,75 @@
+"""Drive ``cardbleed`` with per-edge extensions computed from the measured
+frame, so the printed-and-cut card ends up with correct proportions.
+
+The extension for the top and sides is ``(frame correction) + (cut bleed)``;
+the bottom (never measured, already thick) just gets the cut bleed.
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+from .borders import Borders, Target
+from .config import Config
+from .errors import FileError
+
+
+@dataclass(slots=True)
+class Extension:
+    top: int
+    bottom: int
+    left: int
+    right: int
+
+    def as_flags(self) -> list[str]:
+        return [
+            "--top",
+            str(self.top),
+            "--bottom",
+            str(self.bottom),
+            "--left",
+            str(self.left),
+            "--right",
+            str(self.right),
+        ]
+
+
+def plan(b: Borders, tgt: Target, cfg: Config) -> Extension:
+    bleed_px = cfg.bleed_mm * cfg.px_per_mm(b.w)
+    return Extension(
+        top=round(max(0.0, tgt.top - b.top) + bleed_px),
+        left=round(max(0.0, tgt.side - b.left) + bleed_px),
+        right=round(max(0.0, tgt.side - b.right) + bleed_px),
+        bottom=round(bleed_px),
+    )
+
+
+def run(src: Path, dst: Path, ext: Extension, cfg: Config) -> None:
+    exe = shutil.which(cfg.cardbleed_cmd)
+    if exe is None:
+        raise FileError(
+            f"{cfg.cardbleed_cmd!r} is not on PATH — install it with "
+            "`pip install cardbleed` (or `uv sync`)"
+        )
+    suffix = "__cb"
+    cmd = [
+        exe,
+        str(src),
+        "-o",
+        str(dst.parent),
+        "--suffix",
+        suffix,
+        "--force",
+        *ext.as_flags(),
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        raise FileError(f"cardbleed failed on {src.name}: {e.stderr.strip()}") from e
+    produced = dst.parent / f"{src.stem}{suffix}{src.suffix}"
+    if not produced.exists():
+        raise FileError(f"cardbleed produced no output for {src.name}")
+    produced.replace(dst)

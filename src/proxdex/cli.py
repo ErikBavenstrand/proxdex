@@ -43,7 +43,7 @@ click.rich_click.COMMAND_GROUPS = {
         {"name": "Library", "commands": ["init", "ls", "index"]},
         {"name": "Acquire", "commands": ["search", "fetch", "import"]},
         {"name": "Prepare", "commands": ["upscale", "grade", "finish", "measure"]},
-        {"name": "Produce", "commands": ["build", "sheet", "printed"]},
+        {"name": "Produce", "commands": ["build", "back", "sheet", "printed"]},
         {"name": "Calibrate", "commands": ["calibrate"]},
     ]
 }
@@ -826,19 +826,115 @@ def _write_batch(path: Path, data: dict) -> None:
 
 
 def _resolve_back(card: Card, cfg: Config, lib: Library):
-    """Per-card <id>_back.png if present, else the shared [sheet] back_image."""
+    """Per-card <id>_back.png, then [sheet] back_image, then <lib>/back.png."""
     from PIL import Image
 
-    per_card = card.dir / f"{card.id}_back.png"
-    if per_card.exists():
-        return Image.open(per_card).convert("RGB")
+    candidates = [card.dir / f"{card.id}_back.png"]
     if cfg.sheet_back_image:
         shared = Path(cfg.sheet_back_image)
-        if not shared.is_absolute():
-            shared = lib.root / shared
-        if shared.exists():
-            return Image.open(shared).convert("RGB")
+        candidates.append(shared if shared.is_absolute() else lib.root / shared)
+    candidates.append(lib.root / "back.png")
+    for path in candidates:
+        if path.exists():
+            return Image.open(path).convert("RGB")
     return None
+
+
+_SCRYFALL_BACK = "https://cards.scryfall.io/back.png"
+
+
+@cli.command()
+@click.option("--url", default=None, help="Download the back image from this URL.")
+@click.option(
+    "--file",
+    "file_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Use a local image as the back.",
+)
+@click.option(
+    "--tcg",
+    type=click.Choice(["mtg", "pokemon"]),
+    default=None,
+    help="Preset source: [cyan]mtg[/] = Scryfall's standard back.",
+)
+@click.option(
+    "--profile", default=None, help="Bake this medium's colour correction in."
+)
+@click.option("--no-bleed", is_flag=True, help="Source is already bleeded.")
+@click.option(
+    "-o",
+    "--out",
+    "out",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Where to save (default: <lib>/back.png).",
+)
+@click.pass_context
+def back(
+    ctx: click.Context,
+    url: str | None,
+    file_path: Path | None,
+    tcg: str | None,
+    profile: str | None,
+    no_bleed: bool,
+    out: Path | None,
+) -> None:
+    """Set the shared card back: fetch/import, colour-correct, add bleed.
+
+    Source: [cyan]--file[/], [cyan]--url[/], or [cyan]--tcg mtg[/] (Scryfall's
+    standard back). There's no reliable Pokémon-back API — supply your own
+    high-res scan via --file/--url. The image is run through the same medium
+    correction as the fronts and bleeded with cardbleed, then saved to
+    [cyan]back.png[/] and used by `sheet --faces backs|duplex`.
+    """
+    from PIL import Image
+
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    if not url and not file_path and tcg == "mtg":
+        url = _SCRYFALL_BACK
+    if not url and not file_path:
+        raise click.UsageError(
+            "give --file, --url, or --tcg mtg — there's no Pokémon back API, "
+            "so supply your own scan"
+        )
+    if file_path:
+        im = Image.open(file_path).convert("RGB")
+    else:
+        import io
+
+        import requests
+
+        headers = {"User-Agent": f"proxdex/{__version__}", "Accept": "image/*"}
+        resp = requests.get(url, headers=headers, timeout=60)  # type: ignore[arg-type]
+        if not resp.ok:
+            raise ProxdexError(f"download failed ({resp.status_code}) for {url}")
+        im = Image.open(io.BytesIO(resp.content)).convert("RGB")
+
+    # match the fronts on the medium (calibration if present, else preset)
+    prof_name, recipe = media.resolve(cfg, profile)
+    cal = calibrate_mod.load(_cal_dir(lib), prof_name) if prof_name != "none" else None
+    if cal is not None:
+        im = calibrate_mod.apply_to_image(im, cal)
+    elif prof_name != "none":
+        im = media.compensate(im, recipe)
+
+    dst = out or lib.root / "back.png"
+    if no_bleed:
+        im.save(dst)
+    else:
+        tmp = lib.root / ".back_src.png"
+        im.save(tmp)
+        bp = round(cfg.bleed_mm * cfg.px_per_mm(im.width))
+        try:
+            bleed.run(
+                tmp, dst, bleed.Extension(top=bp, bottom=bp, left=bp, right=bp), cfg
+            )
+        finally:
+            tmp.unlink(missing_ok=True)
+    tag = f" [dim]({prof_name})[/]" if prof_name != "none" else ""
+    console.print(f"[green]✓[/] card back → {dst.relative_to(lib.root)}{tag}")
 
 
 @cli.command()

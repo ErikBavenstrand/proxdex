@@ -111,6 +111,26 @@ colour management OFF** so a calibration holds.
   `guides_front` / `guides_back` (cut from the front, so backs default off).
   Optional printer `reg_marks`. All under `[sheet]`.
 
+The PDF is **lossless** (Flate-embedded, never JPEG) and rendered at
+`[sheet] dpi` (default 1400, `--dpi` to override) so the printer never
+upsamples; only one page raster is held in memory at a time.
+
+### Card backs
+
+`proxdex back` sets the shared back used by `sheet --faces backs|duplex`:
+
+```bash
+proxdex back --tcg mtg              # Scryfall's standard MTG back
+proxdex back --file my-back.png     # your own scan (any TCG)
+proxdex back --url https://…/back.png
+```
+
+It runs the back through the **same medium colour-correction as the fronts**
+and adds bleed with cardbleed, then saves `back.png` (auto-used by `sheet`).
+Per-card backs: drop `<id>_back.png` in a card's folder. Note: there's **no
+reliable Pokémon-back API** (the back is one image, owned by TPC) — supply your
+own high-res scan via `--file`/`--url`; MTG has a clean source via Scryfall.
+
 ### Finding cards
 
 Don't know the id? `proxdex search` queries the TCG API by name — every word

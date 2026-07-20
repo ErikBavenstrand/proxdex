@@ -117,7 +117,7 @@ Set defaults once in `proxdex.toml`:
 upscayl_model  = "digital-art-4x"  # + upscayl-standard-4x, upscayl-lite-4x, high-fidelity-4x,
                                    #   remacri-4x, ultramix-balanced-4x, ultrasharp-4x
 upscayl_scale  = 2                 # 1, 2, 3, or 4
-upscayl_double = false             # run the model twice
+upscayl_double = true              # run the model twice (default on → 2× becomes 4×)
 ```
 
 Override per run: `proxdex upscale --model ultrasharp-4x --scale 4 --double`.

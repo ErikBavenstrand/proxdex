@@ -82,7 +82,7 @@ bleed_mm = 2.5              # cut bleed added to every edge by cardbleed
 # auto-detected; set explicit paths on other platforms.
 upscayl_model = "digital-art-4x"  # or ultrasharp-4x, remacri-4x, high-fidelity-4x, ...
 upscayl_scale = 2                 # 1, 2, 3, or 4
-upscayl_double = false            # run the model twice (2x doubled = 4x, up to 16x)
+upscayl_double = true             # run the model twice (2x doubled = 4x, up to 16x)
 # upscayl_bin    = "/Applications/Upscayl.app/Contents/Resources/bin/upscayl-bin"
 # upscayl_models = "/Applications/Upscayl.app/Contents/Resources/models"
 """

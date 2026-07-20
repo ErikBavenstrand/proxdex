@@ -25,7 +25,8 @@ class Config:
     # --- sheet imposition (proxdex owns the print PDF) -----------------------
     sheet_page: str = "a4"  # a4 | letter
     sheet_orientation: str = "portrait"  # portrait | landscape
-    sheet_dpi: int = 600
+    #: page render resolution; high so the printer/driver never upsamples
+    sheet_dpi: int = 1400
     #: how any-size input is scaled to the exact card size: cover | contain | stretch
     sheet_fit: str = "cover"
     sheet_cols: int = 3

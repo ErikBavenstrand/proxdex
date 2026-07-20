@@ -10,11 +10,20 @@ fully determined, which is what lets colour calibration transfer.
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
+import img2pdf
 from PIL import Image, ImageDraw
 
 from .config import Config
+
+# our high-DPI pages are large by design; we generate them, so lift PIL's guard
+Image.MAX_IMAGE_PIXELS = None
 
 PAGES: dict[str, tuple[float, float]] = {  # portrait, mm
     "a4": (210.0, 297.0),
@@ -207,39 +216,59 @@ def _reg_disabled_back(cfg: Config) -> bool:
     return False  # reserved for a future per-face registration toggle
 
 
-def build_pages(
+def _iter_pages(
     fronts: list[Image.Image], backs: list[Image.Image | None], cfg: Config
-) -> list[Image.Image]:
-    """Impose according to ``sheet_faces``; duplex interleaves front/back pages."""
+) -> Iterator[Image.Image]:
+    """Impose per ``sheet_faces``; duplex interleaves front + mirrored back."""
     faces = cfg.sheet_faces.lower()
     per = cfg.sheet_cols * cfg.sheet_rows
-    pages: list[Image.Image] = []
     for start in range(0, len(fronts), per):
         fchunk = fronts[start : start + per]
         bchunk = backs[start : start + per]
         if faces in ("fronts", "duplex"):
-            pages.append(_render(list(fchunk), cfg, is_back=False))
+            yield _render(list(fchunk), cfg, is_back=False)
         if faces == "duplex":
-            pages.append(_render(_grid_reorder(list(bchunk), cfg), cfg, is_back=True))
+            yield _render(_grid_reorder(list(bchunk), cfg), cfg, is_back=True)
         elif faces == "backs":
-            pages.append(_render(list(bchunk), cfg, is_back=True))
-    return pages
+            yield _render(list(bchunk), cfg, is_back=True)
 
 
-def write_pdf(pages: list[Image.Image], dst: Path, cfg: Config) -> None:
-    if not pages:
-        raise ValueError("no pages to write")
-    pages[0].save(
-        dst,
-        "PDF",
-        resolution=float(cfg.sheet_dpi),
-        save_all=True,
-        append_images=pages[1:],
-    )
+def _pages_to_pdf(pages: Iterator[Image.Image], dst: Path, cfg: Config) -> int:
+    """Write pages losslessly via img2pdf, one page raster in memory at a time.
+
+    Each page is dumped to a temp PNG (Flate/lossless, DPI-tagged) then embedded
+    by img2pdf without re-encoding — so print output is never JPEG-degraded, and
+    huge high-DPI pages don't all sit in RAM at once.
+    """
+    tmp: list[str] = []
+    try:
+        for page in pages:
+            fd, path = tempfile.mkstemp(suffix=".png")
+            os.close(fd)
+            page.save(path, "PNG", dpi=(cfg.sheet_dpi, cfg.sheet_dpi))
+            tmp.append(path)
+        if not tmp:
+            raise ValueError("no pages to write")
+        dst.write_bytes(cast(bytes, img2pdf.convert(tmp)))
+        return len(tmp)
+    finally:
+        for path in tmp:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+
+
+def impose_to_pdf(
+    fronts: list[Image.Image],
+    backs: list[Image.Image | None],
+    cfg: Config,
+    dst: Path,
+) -> int:
+    """Impose the cards and write a lossless print PDF; returns the page count."""
+    return _pages_to_pdf(_iter_pages(fronts, backs, cfg), dst, cfg)
 
 
 def single_page_pdf(image: Image.Image, dst: Path, cfg: Config) -> None:
-    """Center one image on a blank page and write a PDF (calibration charts).
+    """Center one image on a blank page and write a lossless PDF (charts).
 
     Uses the same page renderer as card sheets, so a printed chart travels the
     identical path to paper as real cards.
@@ -250,4 +279,4 @@ def single_page_pdf(image: Image.Image, dst: Path, cfg: Config) -> None:
     im = image.convert("RGB").copy()
     im.thumbnail((pw - 2 * margin, ph - 2 * margin))
     page.paste(im, ((pw - im.width) // 2, (ph - im.height) // 2))
-    write_pdf([page], dst, cfg)
+    _pages_to_pdf(iter([page]), dst, cfg)

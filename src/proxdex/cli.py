@@ -98,7 +98,7 @@ bleed_mm = 2.5              # cut bleed added to every edge by cardbleed
 # paper, so calibration transfers). Print with colour management OFF.
 page        = "a4"         # a4 | letter
 orientation = "portrait"   # portrait | landscape
-dpi         = 600
+dpi         = 1400         # high so the printer never upsamples; PDF stays lossless
 cols        = 3
 rows        = 3
 margin_mm   = 5.0
@@ -851,6 +851,7 @@ def _resolve_back(card: Card, cfg: Config, lib: Library):
     help="What to impose (default from [sheet]).",
 )
 @click.option("--page", default=None, help="Page size override (a4 | letter).")
+@click.option("--dpi", type=int, default=None, help="Render resolution override.")
 @click.option("--open", "open_pdf", is_flag=True, help="Open the PDF when done.")
 @click.pass_context
 def sheet(
@@ -859,6 +860,7 @@ def sheet(
     ids: tuple[str, ...],
     faces: str | None,
     page: str | None,
+    dpi: int | None,
     open_pdf: bool,
 ) -> None:
     """Impose finished cards into a print PDF and record the batch.
@@ -877,6 +879,8 @@ def sheet(
         cfg.sheet_page = page
     if faces:
         cfg.sheet_faces = faces
+    if dpi:
+        cfg.sheet_dpi = dpi
     cards = lib.select(ids) if ids else lib.cards()
     ready = [c for c in cards if c.has(Stage.PRINT)]
     missing = [c.id for c in cards if not c.has(Stage.PRINT)]
@@ -898,13 +902,12 @@ def sheet(
                 " — set [sheet] back_image or add <id>_back.png"
             )
 
-    pages = sheet_mod.build_pages(fronts, backs, cfg)
     slug = slugify(name)
     today = date.today().isoformat()
     bdir = lib.batches_dir / f"{today}_{slug}"
     bdir.mkdir(parents=True, exist_ok=True)
     pdf = bdir / f"{cfg.sheet_faces}.pdf"
-    sheet_mod.write_pdf(pages, pdf, cfg)
+    n_pages = sheet_mod.impose_to_pdf(fronts, backs, cfg, pdf)
     _write_batch(
         bdir / "batch.toml",
         {
@@ -916,8 +919,8 @@ def sheet(
         },
     )
     console.print(
-        f"[green]✓[/] {len(ready)} cards ({cfg.sheet_faces}) → {len(pages)} "
-        f"page(s) → {pdf.relative_to(lib.root)}"
+        f"[green]✓[/] {len(ready)} cards ({cfg.sheet_faces}) → {n_pages} "
+        f"page(s) @ {cfg.sheet_dpi}dpi → {pdf.relative_to(lib.root)}"
     )
     console.print(
         f"[dim]print with colour management OFF, then `proxdex printed {slug}`[/]"

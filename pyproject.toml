@@ -13,6 +13,7 @@ dependencies = [
     "requests>=2.31",
     "rich-click>=1.8",
     "cardbleed>=0.2",
+    "img2pdf>=0.5",
 ]
 keywords = ["pokemon", "card", "proxy", "printing", "tcg", "library", "upscale"]
 classifiers = [

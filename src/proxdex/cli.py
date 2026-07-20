@@ -22,7 +22,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from . import bleed, borders, report, sources
+from . import bleed, borders, media, report, sources
 from . import grade as grade_mod
 from . import upscale as upscale_mod
 from ._version import __version__
@@ -84,6 +84,17 @@ h_mm = 88.0
 
 [sources]
 bleed_mm = 2.5              # cut bleed added to every edge by cardbleed
+
+[print]
+# Media compensation baked into stage 4 (the master stays neutral).
+# "none" | "paper" | "foil". Foil (transparent plastic) washes colours out,
+# so its profile boosts saturation and density. Calibrate with a test print
+# and override any value below (uncomment to pin).
+profile = "foil"
+# saturation = 1.38
+# contrast   = 1.16
+# brightness = 0.95
+# gamma      = 0.88        # < 1 darkens midtones → more ink density
 
 [tools]
 # Upscayl (optional stage-2 step). On macOS the bundled binary and models are
@@ -614,16 +625,32 @@ def _library_frame_target(
     is_flag=True,
     help="Write stage 4 (print). Otherwise report the plan only (dry run).",
 )
+@click.option(
+    "--profile",
+    type=click.Choice(list(media.PROFILES)),
+    default=None,
+    help="Media compensation baked into the print (default from [print]).",
+)
 @click.pass_context
-def border(ctx: click.Context, ids: tuple[str, ...], write_print: bool) -> None:
-    """Extend thin frames via cardbleed so cut cards come out square.
+def border(
+    ctx: click.Context,
+    ids: tuple[str, ...],
+    write_print: bool,
+    profile: str | None,
+) -> None:
+    """Build the print-ready image: media compensation + cardbleed bleed.
 
-    Measures the top and sides, computes the per-edge extension (correction +
-    cut bleed), and runs [cyan]cardbleed[/] to build the print-ready image.
-    Without [cyan]--write-print[/] it only prints the plan.
+    Measures the top and sides, computes the per-edge extension (frame
+    correction + cut bleed), optionally pre-compensates colour for the print
+    medium (e.g. [cyan]foil[/] washes out, so saturation/density are boosted),
+    then runs [cyan]cardbleed[/]. Without [cyan]--write-print[/] it only prints
+    the plan.
     """
+    from PIL import Image
+
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
+    prof_name, recipe = media.resolve(cfg, profile)
 
     def one(card: Card) -> None:
         src = card.best(Stage.EDITED, Stage.UPSCALED, Stage.ORIGINAL)
@@ -632,12 +659,25 @@ def border(ctx: click.Context, ids: tuple[str, ...], write_print: bool) -> None:
         b = borders.measure(borders.load_rgb(src), cfg)
         ext = bleed.plan(b, borders.target(b, cfg), cfg)
         plan = f"top+{ext.top} left+{ext.left} right+{ext.right} bottom+{ext.bottom}px"
+        tag = "" if prof_name == "none" else f" [dim]({prof_name})[/]"
         if not write_print:
-            console.print(f"[cyan]{card.id}[/] from [dim]{src.name}[/]: {plan}")
+            console.print(f"[cyan]{card.id}[/] from [dim]{src.name}[/]: {plan}{tag}")
             return
         dst = card.stage_path(Stage.PRINT)
-        bleed.run(src, dst, ext, cfg)
-        console.print(f"[green]✓[/] {card.id}: {plan} → {dst.relative_to(lib.root)}")
+        feed = src
+        tmp: Path | None = None
+        if prof_name != "none":  # bake media compensation in before cardbleed
+            tmp = card.dir / f".{card.id}_print_src.png"
+            media.compensate(Image.open(src), recipe).save(tmp)
+            feed = tmp
+        try:
+            bleed.run(feed, dst, ext, cfg)
+        finally:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
+        console.print(
+            f"[green]✓[/] {card.id}: {plan}{tag} → {dst.relative_to(lib.root)}"
+        )
 
     _each(lib.select(ids), one, "bordering")
 

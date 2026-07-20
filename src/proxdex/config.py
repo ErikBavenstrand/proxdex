@@ -41,6 +41,14 @@ class Config:
     grade_contrast: float = 1.06
     grade_saturation: float = 1.10
     grade_gamma: float = 1.0
+    # --- print / media compensation (baked into stage 4) --------------------
+    #: media profile: "none" | "paper" | "foil" (see proxdex.media.PROFILES)
+    print_profile: str = "none"
+    #: per-value overrides of the active profile; None = use the profile default
+    print_saturation: float | None = None
+    print_contrast: float | None = None
+    print_brightness: float | None = None
+    print_gamma: float | None = None
     # --- external tools ------------------------------------------------------
     cardbleed_cmd: str = "cardbleed"
     #: upscayl-bin path; "" = auto-detect (bundled macOS app, then PATH)

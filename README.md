@@ -169,6 +169,32 @@ Calibrate the look with a test strip: print one sheet, compare to screen, nudge
 the numbers, reprint. Run `proxdex grade --no-normalize` to apply only the
 recipe (skip step 1).
 
+## Printing media (washed-out foil)
+
+Some media shift colour — transparent plastic foil especially, where the ink is
+semi-transparent so prints come out **lighter and less saturated** than the
+screen. `border` bakes a **media profile** into the print stage to cancel that,
+so stage 4 is print-ready for a medium while your `edited` master stays neutral
+(switch media → just re-run `border`, no regrade):
+
+```toml
+[print]
+profile = "foil"    # "none" | "paper" | "foil"
+```
+
+`foil` boosts saturation and ink density (`saturation 1.38, contrast 1.16,
+brightness 0.95, gamma 0.88`). These are a solid automatic starting point;
+**calibrate once** with a test print and override any value:
+
+```toml
+[print]
+profile    = "foil"
+saturation = 1.45   # push harder if prints still look washed out
+gamma      = 0.85
+```
+
+Override per run with `proxdex border --write-print --profile foil`.
+
 ## License
 
 MIT

@@ -10,27 +10,29 @@ which pipeline stage each card has reached, corrects thin card frames, and
 records what you've actually printed — so a growing collection stays easy to
 search, and you never reprint a card you already have.
 
-It's the glue around the tools that do the heavy lifting:
-[**cardbleed**](https://github.com/ErikBavenstrand/cardbleed) (border
-extension) and **paperloom** (print-sheet layout), plus
-[Upscayl](https://upscayl.org) for upscaling.
+It uses [**cardbleed**](https://github.com/ErikBavenstrand/cardbleed) (border
+extension) and [Upscayl](https://upscayl.org) (upscaling), and imposes the
+print sheet itself — so it owns the whole path to paper.
+
+Think of it as **author a master, then reproduce it**: stages 1–3 produce a
+device-independent master (what the card *should* look like); stage 4 + the
+sheet reproduce that master faithfully on a specific printer + medium.
 
 ## Pipeline
 
 Each card moves through four stages, one file per stage in its own folder:
 
-| # | stage      | produced by                    | proxdex command  |
-|---|------------|--------------------------------|------------------|
-| 1 | `original` | downloaded from scrydex        | `proxdex fetch` / `search` |
-| 2 | `upscaled` | Upscayl (its CLI, or the GUI)  | `proxdex upscale` / `import` |
-| 3 | `edited`   | uniform saturation/contrast    | `proxdex grade`  |
-| 4 | `print`    | frame-corrected + cardbleed    | `proxdex border` |
+| # | stage      | produced by                         | command |
+|---|------------|-------------------------------------|---------|
+| 1 | `original` | downloaded from scrydex             | `search` / `fetch` |
+| 2 | `upscaled` | Upscayl (its CLI, or the GUI)       | `upscale` / `import` |
+| 3 | `edited`   | normalize + uniform look (**master**) | `grade` |
+| 4 | `print`    | colour reproduction + cardbleed bleed | `finish` |
 
-> **Where do effects go?** Grade at **stage 3 — after upscaling, before
-> cardbleed.** Upscayl's models shift contrast and saturation themselves, so
-> grading the upscaled pixels is what-you-see-is-what-prints; and grading
-> before the border step means the extended border inherits the corrected
-> colour. See [uniform prints](#uniform-prints).
+`build` runs 2→4 in one go; `sheet` imposes the finished fronts into a print
+PDF. **Where do effects go?** Author them in `grade` (stage 3, after upscaling
+so it's what-you-see-is-what-prints); device/medium correction happens later in
+`finish`. See [uniform prints](#uniform-prints).
 
 ## Layout on disk
 
@@ -65,22 +67,36 @@ proxdex init                   # one-time: create the library here
 
 proxdex search entei ex        # find a card by name, pick which print to fetch
 proxdex fetch ex3-90 ex6-105   # or download directly by id
-proxdex upscale                # stage 2 via Upscayl's bundled CLI
-# ...or upscale in the Upscayl GUI and import the results:
-proxdex import ~/upscaled/*.png             # files ex*_upscayl_*.png as stage 2
-proxdex import scan.png --id ex6-105        # arbitrary file → looks up + files it
 
-proxdex grade                  # stage 3 for every card (uniform recipe)
-proxdex measure                # how thin is each frame? what needs extending?
-proxdex border --write-print   # stage 4 via cardbleed, per-edge
+proxdex build                  # upscale → grade → finish, for cards that need it
+proxdex sheet dark-deck        # impose finished fronts → print PDF + batch manifest
+#   ...print the PDF (colour management OFF), then:
+proxdex printed dark-deck      # mark the batch printed
 
 proxdex ls                     # every card, stage progress, printed?
-proxdex index                  # regenerate INDEX.md
 ```
 
-Commands accept card ids to scope them (`proxdex grade ex6-105`); with none,
+That's the whole loop: **search → build → sheet → printed.** The individual
+stage commands (`upscale`, `grade`, `finish`) exist for granular control, and
+`import` files loose images (Upscayl-GUI output, or `--id` an arbitrary scan):
+
+```bash
+proxdex import ~/upscaled/*.png         # ex*_upscayl_*.png → stage 2
+proxdex import scan.png --id ex6-105    # arbitrary file → looks up + files it
+```
+
+Commands accept card ids to scope them (`proxdex build ex6-105`); with none,
 they act on the whole library. `proxdex` searches up from the current
 directory for `proxdex.toml`, or pass `--root DIR`.
+
+### Print sheet
+
+`proxdex sheet <name> [ids...]` imposes each finished front at its exact
+physical size (cards carry cardbleed's bleed; crop marks mark the trim) onto
+pages and writes `print-batches/<date>-<name>/fronts.pdf` plus a manifest.
+Because proxdex renders the PDF itself, the print path is fully determined —
+**print with your printer's colour management OFF** so a calibration holds.
+Tune page/grid/margins under `[sheet]`.
 
 ### Finding cards
 
@@ -130,7 +146,7 @@ Real cards have a uniform frame on the top and both sides and a **thicker
 bottom** (set symbol, ©). Some scrydex scans are cut into the frame, so a
 printed-and-cut proxy ends up with a border that's too thin. `proxdex measure`
 reports the top and side thickness (the bottom is deliberately never measured);
-`proxdex border` computes the per-edge extension — *frame correction + cut
+`proxdex finish` computes the per-edge extension — *frame correction + cut
 bleed* — and hands it to cardbleed, which continues the existing border pattern
 rather than smearing pixels.
 
@@ -193,7 +209,7 @@ saturation = 1.45   # push harder if prints still look washed out
 gamma      = 0.85
 ```
 
-Override per run with `proxdex border --write-print --profile foil`.
+Override per run with `proxdex finish --write-print --profile foil`.
 
 ## Calibrating to your printer (closed loop)
 
@@ -204,19 +220,21 @@ that makes prints true to the original. Each medium is its own profile (e.g.
 carry different corrections.
 
 ```bash
-proxdex calibrate target --profile foil-holo        # emit a patch chart
+proxdex calibrate target --profile foil-holo --pdf  # emit a patch chart (as a PDF)
 #   → print it on that medium, scan it (auto-correction OFF), then:
 proxdex calibrate fit --profile foil-holo --scan chart_scan.png
-#   → measures a degree-2 polynomial correction; `border` now bakes it in.
+#   → measures a degree-2 polynomial correction; `finish` now bakes it in.
 
 # verify / iterate:
-proxdex calibrate target --profile foil-holo --corrected   # chart with fix baked in
-proxdex calibrate fit ... ; proxdex calibrate check --scan corrected_scan.png
+proxdex calibrate target --profile foil-holo --corrected --pdf   # chart with fix baked in
+proxdex calibrate check --scan corrected_scan.png
 #   → prints the residual error; reprint & re-fit until it plateaus.
 ```
 
-Then `proxdex border --write-print --profile foil-holo` applies the measured
-correction (it supersedes the manual `foil` preset for that profile).
+`--pdf` sends the chart through the *same* renderer as your card sheets, so the
+correction is measured on the exact path it's applied to. Then `proxdex finish`
+(and `build`) bakes the measured correction in — it supersedes the manual `foil`
+preset for that profile.
 
 **Honest limits:** the scanner is the measuring device, so this makes prints
 true *as your scanner sees them* — excellent for proxies, but not colorimetric

@@ -7,7 +7,9 @@ import json
 import re
 import shutil
 import sys
+import tomllib
 from collections.abc import Callable, Sequence
+from datetime import date
 from pathlib import Path
 from typing import TypeVar
 
@@ -26,6 +28,7 @@ from rich.table import Table
 from . import bleed, borders, media, report, sources
 from . import calibrate as calibrate_mod
 from . import grade as grade_mod
+from . import sheet as sheet_mod
 from . import upscale as upscale_mod
 from ._version import __version__
 from .config import Config
@@ -39,7 +42,8 @@ click.rich_click.COMMAND_GROUPS = {
     "proxdex": [
         {"name": "Library", "commands": ["init", "ls", "index"]},
         {"name": "Acquire", "commands": ["search", "fetch", "import"]},
-        {"name": "Prepare", "commands": ["upscale", "grade", "measure", "border"]},
+        {"name": "Prepare", "commands": ["upscale", "grade", "finish", "measure"]},
+        {"name": "Produce", "commands": ["build", "sheet", "printed"]},
         {"name": "Calibrate", "commands": ["calibrate"]},
     ]
 }
@@ -71,6 +75,7 @@ thresh            = 62      # RGB distance still counted as "the frame colour"
 normalize = true
 black_pct = 0.5             # luminance percentile mapped to black
 white_pct = 99.5            # luminance percentile mapped to white
+level_strength = 0.6        # how hard to pull toward those points (0=off, 1=full)
 # Frame white-balance target. [] = use the library's own median frame colour;
 # or pin it, e.g. [252, 214, 46], so all cards converge on that yellow.
 match_border_target = []
@@ -88,11 +93,23 @@ h_mm = 88.0
 [sources]
 bleed_mm = 2.5              # cut bleed added to every edge by cardbleed
 
+[sheet]
+# proxdex imposes finished fronts into the print PDF (it owns the whole path
+# to paper, so calibration transfers). Print with colour management OFF.
+page    = "a4"             # a4 | letter
+dpi     = 600
+cols    = 3
+rows    = 3
+margin_mm  = 5.0
+spacing_mm = 0.0
+guides     = true          # crop marks at the trim corners
+guide_mm   = 2.5
+
 [print]
-# Media compensation baked into stage 4 (the master stays neutral).
-# "none" | "paper" | "foil". Foil (transparent plastic) washes colours out,
-# so its profile boosts saturation and density. Calibrate with a test print
-# and override any value below (uncomment to pin).
+# Colour reproduction baked into stage 4 (the master stays neutral), per medium.
+# A preset here is just training wheels until you `proxdex calibrate` the
+# medium — a measured calibration then supersedes it automatically.
+# "none" | "paper" | "foil".
 profile = "foil"
 # saturation = 1.38
 # contrast   = 1.16
@@ -166,7 +183,7 @@ def cli(ctx: click.Context, root: str | None) -> None:
 
     [dim]  proxdex fetch ex3-90 ex6-105[/]
 
-    [dim]  proxdex measure && proxdex border --write-print[/]
+    [dim]  proxdex build && proxdex sheet my-deck[/]
     """
     ctx.obj = {"root": root}
 
@@ -573,8 +590,11 @@ def upscale(
     default=None,
     help="Pull each card to a common baseline before the recipe (default on).",
 )
+@click.option("--force", is_flag=True, help="Re-grade even if stage 3 exists.")
 @click.pass_context
-def grade(ctx: click.Context, ids: tuple[str, ...], normalize: bool | None) -> None:
+def grade(
+    ctx: click.Context, ids: tuple[str, ...], normalize: bool | None, force: bool
+) -> None:
     """Normalize each card to a common baseline, then apply the uniform look.
 
     Normalization white-balances the card frame and evens out black/white
@@ -593,13 +613,16 @@ def grade(ctx: click.Context, ids: tuple[str, ...], normalize: bool | None) -> N
         frame_target = _library_frame_target(lib, cfg)
 
     def one(card: Card) -> None:
+        dst = card.stage_path(Stage.EDITED)
+        if dst.exists() and not force:
+            console.print(f"[dim]· {card.id}: already graded[/]")
+            return
         src = card.best(Stage.UPSCALED, Stage.ORIGINAL)
         if src is None:
             raise FileError(f"{card.id}: nothing to grade yet")
         out = grade_mod.grade(
             Image.open(src), cfg, frame_target=frame_target, normalize=do_norm
         )
-        dst = card.stage_path(Stage.EDITED)
         out.save(dst)
         console.print(f"[green]✓[/] {card.id}: graded → {dst.relative_to(lib.root)}")
 
@@ -634,20 +657,21 @@ def _library_frame_target(
     help="Print medium: a calibrated profile name, or a none/paper/foil preset "
     "(default from [print]).",
 )
+@click.option("--force", is_flag=True, help="Overwrite an existing print stage.")
 @click.pass_context
-def border(
+def finish(
     ctx: click.Context,
     ids: tuple[str, ...],
     write_print: bool,
     profile: str | None,
+    force: bool,
 ) -> None:
-    """Build the print-ready image: media compensation + cardbleed bleed.
+    """Finish cards into print-ready stage 4: colour reproduction + bleed.
 
-    Measures the top and sides, computes the per-edge extension (frame
-    correction + cut bleed), optionally pre-compensates colour for the print
-    medium (e.g. [cyan]foil[/] washes out, so saturation/density are boosted),
-    then runs [cyan]cardbleed[/]. Without [cyan]--write-print[/] it only prints
-    the plan.
+    Corrects the frame, adds cut bleed via [cyan]cardbleed[/], and reproduces
+    the master for the print medium — a measured calibration if the profile has
+    one, else the manual preset (e.g. [cyan]foil[/]). Without
+    [cyan]--write-print[/] it only prints the plan.
     """
     from PIL import Image
 
@@ -679,6 +703,9 @@ def border(
             console.print(f"[cyan]{card.id}[/] from [dim]{src.name}[/]: {plan}{tag}")
             return
         dst = card.stage_path(Stage.PRINT)
+        if dst.exists() and not force:
+            console.print(f"[dim]· {card.id}: already finished[/]")
+            return
         feed = src
         tmp: Path | None = None
         if cal is not None or prof_name != "none":  # bake colour in before cardbleed
@@ -712,6 +739,130 @@ def index(ctx: click.Context) -> None:
     console.print(f"[green]wrote[/] {dst}")
 
 
+@cli.command()
+@click.argument("ids", nargs=-1, metavar="[ID...]")
+@click.option("--force", is_flag=True, help="Redo stages even if they exist.")
+@click.pass_context
+def build(ctx: click.Context, ids: tuple[str, ...], force: bool) -> None:
+    """Run the whole prepare pipeline for cards that need it.
+
+    upscale → grade → finish, skipping stages already present (unless
+    [cyan]--force[/]). One command to take everything from downloaded originals
+    to print-ready fronts.
+    """
+    lib = _lib(ctx)
+    cards = lib.select(ids)
+    if not cards:
+        console.print("[dim]no cards[/]")
+        return
+    stages = (
+        (
+            "upscale",
+            Stage.UPSCALED,
+            upscale,
+            {"model": None, "scale": None, "double": None},
+        ),
+        ("grade", Stage.EDITED, grade, {"normalize": None}),
+        ("finish", Stage.PRINT, finish, {"write_print": True, "profile": None}),
+    )
+    for name, stage, command, extra in stages:
+        todo = [c.id for c in cards if force or not c.has(stage)]
+        if not todo:
+            continue
+        console.print(f"[bold]{name}[/] ({len(todo)})")
+        ctx.invoke(command, ids=tuple(todo), force=force, **extra)
+    console.print("[green]build complete[/]")
+
+
+def _write_batch(path: Path, data: dict) -> None:
+    def s(v: object) -> str:
+        return '"' + str(v).replace('"', '\\"') + '"'
+
+    lines = [
+        f"name = {s(data.get('name', ''))}",
+        f"date = {s(data.get('date', ''))}",
+        f"printed = {'true' if data.get('printed') else 'false'}",
+        f"printed_date = {s(data.get('printed_date', ''))}",
+        f"paper = {s(data.get('paper', ''))}",
+        f"printer = {s(data.get('printer', ''))}",
+        f"notes = {s(data.get('notes', ''))}",
+        f"pdf = {s(data.get('pdf', 'fronts.pdf'))}",
+        "cards = [",
+    ]
+    lines += [f"  {s(cid)}," for cid in data.get("cards", [])]
+    lines.append("]")
+    path.write_text("\n".join(lines) + "\n")
+
+
+@cli.command()
+@click.argument("name")
+@click.argument("ids", nargs=-1, metavar="[ID...]")
+@click.option("--page", default=None, help="Page size override (a4 | letter).")
+@click.pass_context
+def sheet(
+    ctx: click.Context, name: str, ids: tuple[str, ...], page: str | None
+) -> None:
+    """Impose finished fronts into a print PDF and record the batch.
+
+    NAME labels the batch; with no IDs, every card with a finished front is
+    included. Writes print-batches/<date>_<name>/{fronts.pdf, batch.toml}.
+    proxdex owns the PDF, so print it with your printer's colour management
+    OFF for calibration to hold.
+    """
+    from PIL import Image
+
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    if page:
+        cfg.sheet_page = page
+    cards = lib.select(ids) if ids else lib.cards()
+    ready = [c for c in cards if c.has(Stage.PRINT)]
+    missing = [c.id for c in cards if not c.has(Stage.PRINT)]
+    if missing:
+        err.print(
+            f"[yellow]no finished front, skipping:[/] {', '.join(missing)} "
+            "[dim](run `proxdex build`)[/]"
+        )
+    if not ready:
+        raise click.UsageError("no finished fronts to impose — run `proxdex build`")
+    images = [Image.open(c.stage_path(Stage.PRINT)).convert("RGB") for c in ready]
+    pages = sheet_mod.impose(images, cfg)
+    slug = slugify(name)
+    today = date.today().isoformat()
+    bdir = lib.batches_dir / f"{today}_{slug}"
+    bdir.mkdir(parents=True, exist_ok=True)
+    sheet_mod.write_pdf(pages, bdir / "fronts.pdf", cfg)
+    _write_batch(
+        bdir / "batch.toml",
+        {"name": slug, "date": today, "cards": [c.id for c in ready]},
+    )
+    console.print(
+        f"[green]✓[/] {len(ready)} cards → {len(pages)} page(s) → "
+        f"{(bdir / 'fronts.pdf').relative_to(lib.root)}"
+    )
+    console.print(
+        f"[dim]print with colour management OFF, then `proxdex printed {slug}`[/]"
+    )
+
+
+@cli.command()
+@click.argument("name")
+@click.pass_context
+def printed(ctx: click.Context, name: str) -> None:
+    """Mark a print batch as printed (updates its manifest)."""
+    lib = _lib(ctx)
+    slug = slugify(name)
+    for tf in lib.batches_dir.glob("*/batch.toml"):
+        data = tomllib.loads(tf.read_text())
+        if data.get("name") == slug or tf.parent.name.endswith(f"_{slug}"):
+            data["printed"] = True
+            data["printed_date"] = date.today().isoformat()
+            _write_batch(tf, data)
+            console.print(f"[green]✓[/] '{slug}' printed {data['printed_date']}")
+            return
+    raise click.UsageError(f"no batch named '{name}'")
+
+
 def _cal_dir(lib: Library) -> Path:
     return lib.root / "calibration"
 
@@ -738,7 +889,7 @@ def calibrate() -> None:
 
     [dim]target[/] emits a chart → print it on the medium (scanner
     auto-correction OFF) → [dim]fit[/] reads the scan and measures a per-medium
-    correction that [cyan]border[/] then bakes in. [dim]target --corrected[/] +
+    correction that [cyan]finish[/] then bakes in. [dim]target --corrected[/] +
     [dim]check[/] verify how true the corrected print is; repeat to converge.
     """
 
@@ -751,6 +902,12 @@ def calibrate() -> None:
     help="Bake the saved correction into the chart (print this to verify).",
 )
 @click.option(
+    "--pdf",
+    "as_pdf",
+    is_flag=True,
+    help="Output a PDF via the same renderer as print sheets (path parity).",
+)
+@click.option(
     "-o",
     "--out",
     "out",
@@ -760,9 +917,18 @@ def calibrate() -> None:
 )
 @click.pass_context
 def cal_target(
-    ctx: click.Context, profile: str | None, corrected: bool, out: Path | None
+    ctx: click.Context,
+    profile: str | None,
+    corrected: bool,
+    as_pdf: bool,
+    out: Path | None,
 ) -> None:
-    """Write a printable calibration chart."""
+    """Write a printable calibration chart.
+
+    Use [cyan]--pdf[/] so the chart travels the exact same path to paper as
+    your card sheets — otherwise the correction is measured on a different
+    print path than it's applied to.
+    """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     prof = _active_profile(cfg, profile)
@@ -770,9 +936,14 @@ def cal_target(
     if corrected and stage is None:
         raise click.UsageError(f"no calibration for '{prof}' yet — run `fit` first")
     suffix = "_chart_corrected" if corrected else "_chart"
-    dst = out or _cal_dir(lib) / f"{prof}{suffix}.png"
+    ext = "pdf" if as_pdf else "png"
+    dst = out or _cal_dir(lib) / f"{prof}{suffix}.{ext}"
     dst.parent.mkdir(parents=True, exist_ok=True)
-    calibrate_mod.render_chart(stage).save(dst)
+    chart = calibrate_mod.render_chart(stage)
+    if as_pdf:
+        sheet_mod.single_page_pdf(chart, dst, cfg)
+    else:
+        chart.save(dst)
     console.print(
         f"[green]wrote[/] {dst}\n[dim]print it on '{prof}' with scanner "
         "auto-correction OFF, then `proxdex calibrate fit --scan <scan>`[/]"
@@ -798,7 +969,7 @@ def cal_fit(ctx: click.Context, profile: str | None, scan_path: Path) -> None:
         f"mean {err['mean']:.1f} / max {err['max']:.1f} RGB"
     )
     console.print(
-        f"[dim]saved {dst.relative_to(lib.root)} · `border` now bakes it in. "
+        f"[dim]saved {dst.relative_to(lib.root)} · `finish` now bakes it in. "
         "verify: `calibrate target --corrected` → print → `calibrate check`[/]"
     )
 

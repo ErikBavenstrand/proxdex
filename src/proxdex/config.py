@@ -22,6 +22,15 @@ class Config:
     card_w_mm: float = 63.0
     card_h_mm: float = 88.0
     bleed_mm: float = 2.5
+    # --- sheet imposition (proxdex owns the print PDF) -----------------------
+    sheet_page: str = "a4"  # a4 | letter
+    sheet_dpi: int = 600
+    sheet_cols: int = 3
+    sheet_rows: int = 3
+    sheet_margin_mm: float = 5.0
+    sheet_spacing_mm: float = 0.0
+    sheet_guides: bool = True
+    sheet_guide_mm: float = 2.5
     # --- border detection / correction --------------------------------------
     border_thresh: float = 62.0
     #: side border / card width; 0 = auto (match the thickest measured side)
@@ -34,6 +43,8 @@ class Config:
     #: black/white points for auto-levels, as luminance percentiles
     grade_black_pct: float = 0.5
     grade_white_pct: float = 99.5
+    #: how hard to pull toward the stretched levels (0 = off, 1 = full)
+    grade_level_strength: float = 0.6
     #: frame white-balance target [r, g, b]; [] = use the library's median frame
     match_border_target: list[int] = field(default_factory=list)
     # --- grade: the creative look (applied identically to every card) --------

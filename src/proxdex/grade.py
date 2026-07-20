@@ -42,13 +42,18 @@ def _white_balance(arr: RGB, target: Sequence[float] | None) -> RGB:
     return arr * scale
 
 
-def _auto_levels(arr: RGB, low_pct: float, high_pct: float) -> RGB:
+def _auto_levels(arr: RGB, low_pct: float, high_pct: float, strength: float) -> RGB:
+    """Stretch black/white points, but blend with the original by ``strength``
+    so a legitimately dark or bright card isn't forced to a standard range."""
+    if strength <= 0.0:
+        return arr
     lum = arr @ _LUMA
     lo = float(np.percentile(lum, low_pct))
     hi = float(np.percentile(lum, high_pct))
     if hi - lo < 1.0:
         return arr
-    return (arr - lo) * (255.0 / (hi - lo))
+    leveled = (arr - lo) * (255.0 / (hi - lo))
+    return (arr * (1.0 - strength) + leveled * strength).astype(np.float32)
 
 
 def grade(
@@ -64,7 +69,9 @@ def grade(
         arr = np.asarray(im, dtype=np.float32)
         target: Sequence[float] | None = cfg.match_border_target or frame_target
         arr = _white_balance(arr, target)
-        arr = _auto_levels(arr, cfg.grade_black_pct, cfg.grade_white_pct)
+        arr = _auto_levels(
+            arr, cfg.grade_black_pct, cfg.grade_white_pct, cfg.grade_level_strength
+        )
         im = Image.fromarray(arr.clip(0, 255).astype(np.uint8))
     im = ImageEnhance.Brightness(im).enhance(cfg.grade_brightness)
     im = ImageEnhance.Contrast(im).enhance(cfg.grade_contrast)

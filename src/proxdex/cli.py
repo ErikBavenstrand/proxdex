@@ -1083,7 +1083,7 @@ def calibrate() -> None:
 
     [dim]target[/] emits a chart → print it on the medium (scanner
     auto-correction OFF) → [dim]fit[/] reads the scan and measures a per-medium
-    correction that [cyan]finish[/] then bakes in. [dim]target --corrected[/] +
+    correction that [cyan]sheet[/] then applies. [dim]target --corrected[/] +
     [dim]check[/] verify how true the corrected print is; repeat to converge.
     """
 
@@ -1163,7 +1163,7 @@ def cal_fit(ctx: click.Context, profile: str | None, scan_path: Path) -> None:
         f"mean {err['mean']:.1f} / max {err['max']:.1f} RGB"
     )
     console.print(
-        f"[dim]saved {dst.relative_to(lib.root)} · `finish` now bakes it in. "
+        f"[dim]saved {dst.relative_to(lib.root)} · `sheet` now applies it. "
         "verify: `calibrate target --corrected` → print → `calibrate check`[/]"
     )
 

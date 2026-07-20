@@ -1,11 +1,11 @@
-"""Impose finished fronts (and backs) onto print pages and export a PDF.
+"""Impose card cells onto print pages and export a PDF.
 
-proxdex owns the whole path to paper: cards are placed at their exact physical
-size (they already carry cardbleed's bleed, so the trim box sits inset by the
-bleed). Supports fronts-only, backs-only, or duplex — where back pages are
-mirrored for the print-flip edge and can be nudged by a back offset to line up
-with the fronts. Because proxdex renders the PDF itself, the print path is
-fully determined, which is what lets colour calibration transfer.
+proxdex owns the whole path to paper. The caller passes cell images — each a
+trim-size card with cut bleed already added around it — which are placed on the
+page with the cut guides at the trim edge. Supports fronts-only, backs-only, or
+duplex (back pages mirrored for the print-flip edge, nudged by a back offset to
+line up with the fronts). Because proxdex renders the PDF itself, the print
+path is fully determined, which is what lets colour calibration transfer.
 """
 
 from __future__ import annotations

@@ -520,8 +520,13 @@ def where(ctx: click.Context) -> None:
 @click.option("--host", default="127.0.0.1", show_default=True)
 @click.option("--port", default=8756, show_default=True)
 @click.option("--no-open", is_flag=True, help="Don't open a browser tab.")
+@click.option(
+    "--reload",
+    is_flag=True,
+    help="Auto-restart on code changes (dev; run from the repo).",
+)
 @click.pass_context
-def ui(ctx: click.Context, host: str, port: int, no_open: bool) -> None:
+def ui(ctx: click.Context, host: str, port: int, no_open: bool, reload: bool) -> None:
     """Launch the local web UI (card gallery, build/sheet, previews)."""
     lib = _lib(ctx)
     try:
@@ -540,7 +545,18 @@ def ui(ctx: click.Context, host: str, port: int, no_open: bool) -> None:
 
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     console.print(f"[green]proxdex UI[/] → [bold]{url}[/]  [dim](Ctrl-C to stop)[/]")
-    uvicorn.run(create_app(lib), host=host, port=port, log_level="warning")
+    if reload:
+        os.environ["PROXDEX_ROOT"] = str(lib.root)
+        uvicorn.run(
+            "proxdex.webui:app_from_env",
+            factory=True,
+            reload=True,
+            host=host,
+            port=port,
+            log_level="warning",
+        )
+    else:
+        uvicorn.run(create_app(lib), host=host, port=port, log_level="warning")
 
 
 @cli.command()

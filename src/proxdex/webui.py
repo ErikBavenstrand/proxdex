@@ -9,6 +9,7 @@ UI and terminal share exactly one implementation. Served on localhost only.
 from __future__ import annotations
 
 import io
+import os
 import re
 import shutil
 import subprocess
@@ -32,7 +33,7 @@ from .library import Library, Stage
 _STAGES = (Stage.ORIGINAL, Stage.BORDERED, Stage.UPSCALED, Stage.EDITED)
 _BEST = (Stage.EDITED, Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL)
 _BY_LABEL = {s.label: s for s in Stage}
-_HTML = (Path(__file__).parent / "webui.html").read_text(encoding="utf-8")
+_HTML_PATH = Path(__file__).parent / "webui.html"
 _ID_OK = re.compile(r"^[A-Za-z0-9]+-[A-Za-z0-9]+$")
 
 
@@ -57,7 +58,7 @@ def create_app(lib: Library) -> FastAPI:
     # ---- pages / static ----------------------------------------------------
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return _HTML
+        return _HTML_PATH.read_text(encoding="utf-8")  # re-read → edit & refresh
 
     # ---- config ------------------------------------------------------------
     @app.get("/api/config")
@@ -335,6 +336,12 @@ def create_app(lib: Library) -> FastAPI:
             tmp.unlink(missing_ok=True)
 
     return app
+
+
+def app_from_env() -> FastAPI:
+    """Factory for ``uvicorn --reload``: discovers the library from PROXDEX_ROOT."""
+    root = os.environ.get("PROXDEX_ROOT")
+    return create_app(Library.discover(explicit=Path(root) if root else None))
 
 
 def _spool(file: UploadFile) -> Path:

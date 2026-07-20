@@ -123,10 +123,19 @@ directory for `proxdex.toml`, or pass `--root DIR`.
 ### Web UI
 
 Prefer clicking to typing? `proxdex ui` (needs the `[ui]` extra) starts a local
-server and opens a browser: a card gallery with thumbnails and stage badges
-(`O B U E`), one-click **Build** / **Make sheet**, per-card before/after
-previews, PDF links, and print-status. It reads the library directly and runs
-the same CLI under the hood — nothing leaves your machine (localhost only).
+server and opens a browser with **full parity to the CLI** — nothing leaves your
+machine (localhost only):
+
+- **Library gallery** — thumbnails + stage badges (`O B U E`) + print status.
+- **Card detail** — flip through the library (`←`/`→`), see every stage's
+  transformation side by side, and **rerun any step on that card** with its
+  own options (upscale model/scale/double, grade normalize, border), measure
+  the frame, or delete it.
+- **Search** — query the TCG API with filters, preview art, and fetch selected.
+- **Settings** — edit every `proxdex.toml` knob (comment-preserving), set the
+  card back (tcg/url/upload), and run the calibration loop (download chart,
+  upload scan, fit/check).
+- **Build / Make sheet / mark printed / regenerate index** from the toolbar.
 
 ```bash
 proxdex ui                 # → http://127.0.0.1:8756

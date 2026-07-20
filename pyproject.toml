@@ -32,6 +32,8 @@ classifiers = [
 ui = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
+    "python-multipart>=0.0.9",  # file uploads (import / back / calibration scan)
+    "tomlkit>=0.12",            # comment-preserving config edits
 ]
 
 [project.urls]
@@ -45,8 +47,11 @@ proxdex = "proxdex.cli:main"
 dev = [
     "ruff>=0.8",
     "pyright>=1.1.390",
-    "fastapi>=0.110",  # so lint/typecheck see the optional web-UI module
+    # so lint/typecheck see the optional web-UI module
+    "fastapi>=0.110",
     "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
+    "tomlkit>=0.12",
 ]
 
 [tool.ruff]

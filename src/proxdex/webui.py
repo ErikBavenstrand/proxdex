@@ -1,33 +1,49 @@
-"""Local web UI: a FastAPI app over the existing library and CLI.
+"""Local web UI: a FastAPI app with full parity to the CLI.
 
-Display data is read straight from the library (fast, no subprocess); actions
-(build / sheet / printed) shell out to the real ``proxdex`` CLI so the UI and
-terminal share exactly one implementation. Launched by ``proxdex ui``; served
-only on localhost.
+Display + light queries (cards, search, measure, config) are computed in-process
+from the library; mutating actions (fetch, border/upscale/grade/build, sheet,
+back, import, printed, calibrate) shell out to the real ``proxdex`` CLI so the
+UI and terminal share exactly one implementation. Served on localhost only.
 """
 
 from __future__ import annotations
 
 import io
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Body, FastAPI
-from fastapi.responses import FileResponse, HTMLResponse, Response
+import requests
+import tomlkit
+from fastapi import Body, FastAPI, File, Form, Query, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from PIL import Image
 
-from . import report
+from . import borders, media, report, sources
+from . import upscale as upscale_mod
+from .config import Config
+from .errors import ProxdexError
 from .library import Library, Stage
 
 _STAGES = (Stage.ORIGINAL, Stage.BORDERED, Stage.UPSCALED, Stage.EDITED)
+_BEST = (Stage.EDITED, Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL)
 _BY_LABEL = {s.label: s for s in Stage}
 _HTML = (Path(__file__).parent / "webui.html").read_text(encoding="utf-8")
+_ID_OK = re.compile(r"^[A-Za-z0-9]+-[A-Za-z0-9]+$")
+
+
+def _safe_ids(ids: list[Any]) -> list[str]:
+    return [s for s in (str(i) for i in ids) if _ID_OK.match(s)]
 
 
 def create_app(lib: Library) -> FastAPI:
     app = FastAPI(title="proxdex", docs_url=None, redoc_url=None)
+    cfg_path = lib.root / "proxdex.toml"
+    cal_dir = lib.root / "calibration"
 
     def run_cli(args: list[str]) -> dict[str, Any]:
         proc = subprocess.run(
@@ -38,25 +54,53 @@ def create_app(lib: Library) -> FastAPI:
         )
         return {"ok": proc.returncode == 0, "log": proc.stdout + proc.stderr}
 
-    def known_ids(ids: list[str]) -> list[str]:
-        """Keep only ids that resolve to a card (guards the subprocess argv)."""
-        return [i for i in ids if lib.find(i) is not None]
-
+    # ---- pages / static ----------------------------------------------------
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         return _HTML
 
+    # ---- config ------------------------------------------------------------
     @app.get("/api/config")
     def api_config() -> dict[str, Any]:
-        return {"root": str(lib.root)}
+        text = cfg_path.read_text() if cfg_path.exists() else ""
+        doc = tomlkit.parse(text)
+        sections: dict[str, Any] = {}
+        for name, table in doc.items():
+            if hasattr(table, "items"):
+                sections[name] = {k: _unwrap(v) for k, v in table.items()}
+        return {"root": str(lib.root), "sections": sections}
 
+    @app.put("/api/config")
+    def api_config_put(body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        text = cfg_path.read_text() if cfg_path.exists() else ""
+        doc = tomlkit.parse(text)
+        for section, kv in body.get("sections", {}).items():
+            if section not in doc:
+                doc[section] = tomlkit.table()
+            for key, value in kv.items():
+                doc[section][key] = value
+        cfg_path.write_text(tomlkit.dumps(doc))
+        return {"ok": True}
+
+    @app.get("/api/meta")
+    def api_meta() -> dict[str, Any]:
+        calibrated = sorted(p.stem for p in cal_dir.glob("*.json"))
+        return {
+            "models": list(upscale_mod.MODELS),
+            "profiles": list(media.PROFILES) + calibrated,
+            "faces": ["fronts", "backs", "duplex"],
+            "pages": ["a4", "letter"],
+            "stages": [s.label for s in _STAGES],
+        }
+
+    # ---- cards / images ----------------------------------------------------
     @app.get("/api/cards")
     def api_cards() -> list[dict[str, Any]]:
         by_card = report.card_batch_index(lib)
-        cards: list[dict[str, Any]] = []
+        result: list[dict[str, Any]] = []
         for card in lib.cards():
             batch = by_card.get(card.id)
-            cards.append(
+            result.append(
                 {
                     "id": card.id,
                     "name": card.name.title(),
@@ -66,12 +110,12 @@ def create_app(lib: Library) -> FastAPI:
                     "printed": bool(batch and batch.printed),
                 }
             )
-        return cards
+        return result
 
     @app.get("/api/thumb/{cid}")
     def api_thumb(cid: str) -> Response:
         card = lib.find(cid)
-        src = card.best(*reversed(_STAGES)) if card else None
+        src = card.best(*_BEST) if card else None
         if src is None:
             return Response(status_code=404)
         im = Image.open(src).convert("RGB")
@@ -88,23 +132,146 @@ def create_app(lib: Library) -> FastAPI:
             return Response(status_code=404)
         return FileResponse(card.stage_path(st))
 
-    @app.post("/api/build")
-    def api_build(body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
-        ids = known_ids(list(body.get("ids") or []))
-        return run_cli(["build", *ids])
+    @app.get("/api/measure/{cid}")
+    def api_measure(cid: str) -> dict[str, Any]:
+        card = lib.find(cid)
+        src = card.best(*_BEST) if card else None
+        if src is None:
+            return {"error": "no image"}
+        cfg = Config.load(lib.root)
+        b = borders.measure(borders.load_rgb(src), cfg)
+        tgt = borders.target(b, cfg)
+        need = b.top < tgt.top - 2 or b.left < tgt.side - 2 or b.right < tgt.side - 2
+        return {
+            "w": b.w,
+            "h": b.h,
+            "top": round(b.top),
+            "left": round(b.left),
+            "right": round(b.right),
+            "side_pct": round(b.side_ratio * 100, 1),
+            "verdict": "extend" if need else "ok",
+        }
 
+    @app.delete("/api/card/{cid}")
+    def api_delete(cid: str) -> dict[str, Any]:
+        card = lib.find(cid)
+        if card is None:
+            return {"ok": False, "log": f"{cid}: not found"}
+        shutil.rmtree(card.dir, ignore_errors=True)
+        report.write_index(lib)
+        return {"ok": True, "log": f"deleted {cid}"}
+
+    # ---- search / acquire --------------------------------------------------
+    @app.get("/api/search")
+    def api_search(
+        q: str,
+        set_filter: Annotated[str | None, Query(alias="set")] = None,
+        rarity: str | None = None,
+        year: str | None = None,
+        limit: int = 60,
+    ) -> Any:
+        cfg = Config.load(lib.root)
+        try:
+            found = sources.search(
+                q, cfg, set_filter=set_filter, rarity=rarity, year=year, limit=limit
+            )
+        except (requests.RequestException, ProxdexError) as exc:
+            return {"error": f"search failed (try again): {exc}"}
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "set": r.set_name,
+                "year": r.year,
+                "number": f"{r.number}/{r.printed_total}",
+                "rarity": r.rarity,
+                "artist": r.artist,
+                "image": cfg.scrydex_url.format(id=r.id),
+                "have": lib.find(r.id) is not None,
+            }
+            for r in found
+        ]
+
+    @app.post("/api/fetch")
+    def api_fetch(body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        ids = _safe_ids(body.get("ids") or [])
+        if not ids:
+            return {"ok": False, "log": "no valid ids"}
+        return run_cli(["fetch", *ids])
+
+    @app.post("/api/import")
+    def api_import(
+        file: Annotated[UploadFile, File()],
+        cid: Annotated[str, Form(alias="id")],
+        stage: Annotated[str, Form()] = "original",
+    ) -> dict[str, Any]:
+        tmp = _spool(file)
+        try:
+            args = ["import", str(tmp), "--id", cid, "--stage", stage, "--move"]
+            return run_cli(args)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    # ---- prepare steps -----------------------------------------------------
+    @app.post("/api/step")
+    def api_step(body: Annotated[dict[str, Any], Body()]) -> Any:
+        cmd = str(body.get("cmd", ""))
+        if cmd not in {"border", "upscale", "grade", "build"}:
+            return JSONResponse(
+                {"ok": False, "log": f"bad step {cmd}"}, status_code=400
+            )
+        args = [cmd, *_safe_ids(body.get("ids") or [])]
+        opts = body.get("opts") or {}
+        if cmd == "upscale":
+            if opts.get("model"):
+                args += ["--model", str(opts["model"])]
+            if opts.get("scale"):
+                args += ["--scale", str(int(opts["scale"]))]
+            if "double" in opts:
+                args.append("--double" if opts["double"] else "--no-double")
+        if cmd == "grade" and "normalize" in opts:
+            args.append("--normalize" if opts["normalize"] else "--no-normalize")
+        if body.get("force"):
+            args.append("--force")
+        return run_cli(args)
+
+    # ---- produce -----------------------------------------------------------
     @app.post("/api/sheet")
     def api_sheet(body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
-        name = str(body.get("name") or "deck")
-        faces = str(body.get("faces") or "fronts")
-        args = ["sheet", name, "--faces", faces]
+        args = ["sheet", str(body.get("name") or "deck")]
+        args += ["--faces", str(body.get("faces") or "fronts")]
         if body.get("profile"):
             args += ["--profile", str(body["profile"])]
+        if body.get("page"):
+            args += ["--page", str(body["page"])]
+        if body.get("dpi"):
+            args += ["--dpi", str(int(body["dpi"]))]
         return run_cli(args)
 
     @app.post("/api/printed/{name}")
     def api_printed(name: str) -> dict[str, Any]:
         return run_cli(["printed", name])
+
+    @app.post("/api/index")
+    def api_index() -> dict[str, Any]:
+        report.write_index(lib)
+        return {"ok": True, "log": "INDEX.md regenerated"}
+
+    @app.post("/api/back")
+    def api_back(body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        if body.get("tcg"):
+            return run_cli(["back", "--tcg", str(body["tcg"])])
+        if body.get("url"):
+            return run_cli(["back", "--url", str(body["url"])])
+        return {"ok": False, "log": "give a url or tcg"}
+
+    @app.post("/api/back/upload")
+    def api_back_upload(file: Annotated[UploadFile, File()]) -> dict[str, Any]:
+        tmp = _spool(file)
+        try:
+            return run_cli(["back", "--file", str(tmp)])
+        finally:
+            tmp.unlink(missing_ok=True)
 
     @app.get("/api/batches")
     def api_batches() -> list[dict[str, Any]]:
@@ -126,4 +293,57 @@ def create_app(lib: Library) -> FastAPI:
             return Response(status_code=404)
         return FileResponse(path, media_type="application/pdf")
 
+    # ---- calibrate ---------------------------------------------------------
+    @app.get("/api/calibrate")
+    def api_calibrate_list() -> list[dict[str, Any]]:
+        import json
+
+        out: list[dict[str, Any]] = []
+        for f in sorted(cal_dir.glob("*.json")):
+            data = json.loads(f.read_text())
+            out.append(
+                {
+                    "profile": data.get("profile", f.stem),
+                    "error": data.get("uncorrected_error", {}),
+                }
+            )
+        return out
+
+    @app.get("/api/calibrate/chart")
+    def api_cal_chart(profile: str, corrected: bool = False) -> Response:
+        args = ["calibrate", "target", "--profile", profile, "--pdf"]
+        if corrected:
+            args.append("--corrected")
+        res = run_cli(args)
+        suffix = "_chart_corrected" if corrected else "_chart"
+        pdf = cal_dir / f"{profile}{suffix}.pdf"
+        if not res["ok"] or not pdf.is_file():
+            return JSONResponse({"ok": False, "log": res["log"]}, status_code=400)
+        return FileResponse(pdf, media_type="application/pdf")
+
+    @app.post("/api/calibrate/fit")
+    def api_cal_fit(
+        file: Annotated[UploadFile, File()],
+        profile: Annotated[str, Form()],
+        check: Annotated[bool, Form()] = False,
+    ) -> dict[str, Any]:
+        tmp = _spool(file)
+        sub = "check" if check else "fit"
+        try:
+            return run_cli(["calibrate", sub, "--profile", profile, "--scan", str(tmp)])
+        finally:
+            tmp.unlink(missing_ok=True)
+
     return app
+
+
+def _spool(file: UploadFile) -> Path:
+    """Write an uploaded file to a temp path (sync — used in sync handlers)."""
+    suffix = Path(file.filename or "upload.png").suffix or ".png"
+    tmp = Path(tempfile.mkstemp(suffix=suffix)[1])
+    tmp.write_bytes(file.file.read())
+    return tmp
+
+
+def _unwrap(value: Any) -> Any:
+    return value.unwrap() if hasattr(value, "unwrap") else value

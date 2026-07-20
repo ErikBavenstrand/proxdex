@@ -103,18 +103,25 @@ Type `1`, `1,3`, `1-3`, an id, or `all`. Narrow with `--set base1`,
 ### Upscaling
 
 `proxdex upscale` drives Upscayl's engine (`upscayl-bin`) directly — no GUI
-round-trip. On macOS the bundled binary and models are auto-detected inside
-`Upscayl.app`; elsewhere set the paths under `[tools]`. Pick the model and
-scale once in `proxdex.toml`:
+round-trip — and mirrors the app's own options: any of the seven built-in
+models, an output scale, and optional **Double Upscayl** (runs the model twice,
+so 2× doubled = 4×, up to 16×). The command construction matches the app
+exactly, including only passing `-s` when the scale differs from the model's
+native 4×. On macOS the bundled binary and models are auto-detected inside
+`Upscayl.app`; elsewhere set the paths under `[tools]`.
+
+Set defaults once in `proxdex.toml`:
 
 ```toml
 [tools]
-upscayl_model = "digital-art-4x"   # ultrasharp-4x, remacri-4x, high-fidelity-4x, ...
-upscayl_scale = 2                  # 2, 3, or 4
+upscayl_model  = "digital-art-4x"  # + upscayl-standard-4x, upscayl-lite-4x, high-fidelity-4x,
+                                   #   remacri-4x, ultramix-balanced-4x, ultrasharp-4x
+upscayl_scale  = 2                 # 1, 2, 3, or 4
+upscayl_double = false             # run the model twice
 ```
 
-Override per run with `--model` / `--scale`. If you'd rather use the Upscayl
-GUI, skip this step and `proxdex import` its output instead.
+Override per run: `proxdex upscale --model ultrasharp-4x --scale 4 --double`.
+Prefer the GUI? Skip this step and `proxdex import` its output instead.
 
 ## Border correction
 

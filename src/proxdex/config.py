@@ -43,6 +43,8 @@ class Config:
     upscayl_models: str = ""
     upscayl_model: str = "digital-art-4x"
     upscayl_scale: int = 2
+    #: "double upscayl" — run the model twice (2x doubled → 4x, up to 16x)
+    upscayl_double: bool = False
 
     @classmethod
     def load(cls, root: Path) -> Config:

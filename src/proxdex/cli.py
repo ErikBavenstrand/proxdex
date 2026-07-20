@@ -81,7 +81,8 @@ bleed_mm = 2.5              # cut bleed added to every edge by cardbleed
 # Upscayl (optional stage-2 step). On macOS the bundled binary and models are
 # auto-detected; set explicit paths on other platforms.
 upscayl_model = "digital-art-4x"  # or ultrasharp-4x, remacri-4x, high-fidelity-4x, ...
-upscayl_scale = 2                 # 2, 3, or 4
+upscayl_scale = 2                 # 1, 2, 3, or 4
+upscayl_double = false            # run the model twice (2x doubled = 4x, up to 16x)
 # upscayl_bin    = "/Applications/Upscayl.app/Contents/Resources/bin/upscayl-bin"
 # upscayl_models = "/Applications/Upscayl.app/Contents/Resources/models"
 """
@@ -437,8 +438,24 @@ def measure(ctx: click.Context, ids: tuple[str, ...]) -> None:
 
 @cli.command()
 @click.argument("ids", nargs=-1, metavar="[ID...]")
-@click.option("--model", default=None, help="Override the Upscayl model.")
-@click.option("--scale", type=int, default=None, help="Override output scale (2/3/4).")
+@click.option(
+    "--model",
+    type=click.Choice(upscale_mod.MODELS),
+    default=None,
+    help="Upscayl model (default from config: [cyan]digital-art-4x[/]).",
+)
+@click.option(
+    "--scale",
+    type=click.IntRange(1, 4),
+    default=None,
+    help="Output scale 1-4 (default from config: [cyan]2[/]).",
+)
+@click.option(
+    "--double/--no-double",
+    "double",
+    default=None,
+    help="Double Upscayl: run the model twice (2× → 4×, up to 16×).",
+)
 @click.option("--force", is_flag=True, help="Re-upscale even if stage 2 exists.")
 @click.pass_context
 def upscale(
@@ -446,16 +463,22 @@ def upscale(
     ids: tuple[str, ...],
     model: str | None,
     scale: int | None,
+    double: bool | None,
     force: bool,
 ) -> None:
     """Upscale originals with Upscayl's CLI → stage 2 (upscaled).
 
     Optional step; needs Upscayl installed (its bundled [cyan]upscayl-bin[/] is
-    auto-detected on macOS). Set the default model/scale under [cyan][tools][/]
-    in proxdex.toml.
+    auto-detected on macOS). Mirrors the app's own options — pick any of the
+    seven models, a scale, and optional [cyan]--double[/]. Defaults live under
+    [cyan][tools][/] in proxdex.toml.
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
+    use_model = model or cfg.upscayl_model
+    use_scale = cfg.upscayl_scale if scale is None else scale
+    use_double = cfg.upscayl_double if double is None else double
+    tag = f"{use_model} ×{use_scale}{' ×2' if use_double else ''}"
 
     def one(card: Card) -> None:
         src = card.stage_path(Stage.ORIGINAL)
@@ -465,8 +488,13 @@ def upscale(
         if dst.exists() and not force:
             console.print(f"[dim]· {card.id}: already upscaled[/]")
             return
-        upscale_mod.run(src, dst, cfg, model=model, scale=scale)
-        console.print(f"[green]✓[/] {card.id}: upscaled → {dst.relative_to(lib.root)}")
+        upscale_mod.run(
+            src, dst, cfg, model=use_model, scale=use_scale, double=use_double
+        )
+        console.print(
+            f"[green]✓[/] {card.id}: upscaled [dim]({tag})[/] → "
+            f"{dst.relative_to(lib.root)}"
+        )
 
     _each(lib.select(ids), one, "upscaling")
 

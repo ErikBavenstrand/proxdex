@@ -37,6 +37,12 @@ class Config:
     match_border_target: list[int] = field(default_factory=list)
     # --- external tools ------------------------------------------------------
     cardbleed_cmd: str = "cardbleed"
+    #: upscayl-bin path; "" = auto-detect (bundled macOS app, then PATH)
+    upscayl_bin: str = ""
+    #: Upscayl models folder; "" = auto-detect
+    upscayl_models: str = ""
+    upscayl_model: str = "digital-art-4x"
+    upscayl_scale: int = 2
 
     @classmethod
     def load(cls, root: Path) -> Config:

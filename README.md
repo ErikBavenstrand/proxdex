@@ -21,8 +21,8 @@ Each card moves through four stages, one file per stage in its own folder:
 
 | # | stage      | produced by                    | proxdex command  |
 |---|------------|--------------------------------|------------------|
-| 1 | `original` | downloaded from scrydex        | `proxdex fetch`  |
-| 2 | `upscaled` | Upscayl                        | `proxdex import` |
+| 1 | `original` | downloaded from scrydex        | `proxdex fetch` / `search` |
+| 2 | `upscaled` | Upscayl (its CLI, or the GUI)  | `proxdex upscale` / `import` |
 | 3 | `edited`   | uniform saturation/contrast    | `proxdex grade`  |
 | 4 | `print`    | frame-corrected + cardbleed    | `proxdex border` |
 
@@ -65,7 +65,8 @@ proxdex init                   # one-time: create the library here
 
 proxdex search entei ex        # find a card by name, pick which print to fetch
 proxdex fetch ex3-90 ex6-105   # or download directly by id
-# ...upscale with Upscayl into some folder, then:
+proxdex upscale                # stage 2 via Upscayl's bundled CLI
+# ...or upscale in the Upscayl GUI and import the results:
 proxdex import ~/upscaled/*.png   # files ex*_upscayl_*.png as stage 2
 
 proxdex grade                  # stage 3 for every card (uniform recipe)
@@ -98,6 +99,22 @@ Fetch which? [numbers/ranges/ids · 'all' · blank to cancel]: 1
 Type `1`, `1,3`, `1-3`, an id, or `all`. Narrow with `--set base1`,
 `--rarity holo`, `--year 2004`; skip the prompt with `--select 1,3` or
 `--fetch`; add `--open` to preview result images in your browser.
+
+### Upscaling
+
+`proxdex upscale` drives Upscayl's engine (`upscayl-bin`) directly — no GUI
+round-trip. On macOS the bundled binary and models are auto-detected inside
+`Upscayl.app`; elsewhere set the paths under `[tools]`. Pick the model and
+scale once in `proxdex.toml`:
+
+```toml
+[tools]
+upscayl_model = "digital-art-4x"   # ultrasharp-4x, remacri-4x, high-fidelity-4x, ...
+upscayl_scale = 2                  # 2, 3, or 4
+```
+
+Override per run with `--model` / `--scale`. If you'd rather use the Upscayl
+GUI, skip this step and `proxdex import` its output instead.
 
 ## Border correction
 

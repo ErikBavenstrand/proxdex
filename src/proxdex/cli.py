@@ -23,6 +23,7 @@ from rich.table import Table
 
 from . import bleed, borders, report, sources
 from . import grade as grade_mod
+from . import upscale as upscale_mod
 from ._version import __version__
 from .config import Config
 from .errors import FileError, ProxdexError
@@ -35,7 +36,7 @@ click.rich_click.COMMAND_GROUPS = {
     "proxdex": [
         {"name": "Library", "commands": ["init", "ls", "index"]},
         {"name": "Acquire", "commands": ["search", "fetch", "import"]},
-        {"name": "Prepare", "commands": ["measure", "grade", "border"]},
+        {"name": "Prepare", "commands": ["upscale", "grade", "measure", "border"]},
     ]
 }
 
@@ -75,6 +76,14 @@ h_mm = 88.0
 
 [sources]
 bleed_mm = 2.5              # cut bleed added to every edge by cardbleed
+
+[tools]
+# Upscayl (optional stage-2 step). On macOS the bundled binary and models are
+# auto-detected; set explicit paths on other platforms.
+upscayl_model = "digital-art-4x"  # or ultrasharp-4x, remacri-4x, high-fidelity-4x, ...
+upscayl_scale = 2                 # 2, 3, or 4
+# upscayl_bin    = "/Applications/Upscayl.app/Contents/Resources/bin/upscayl-bin"
+# upscayl_models = "/Applications/Upscayl.app/Contents/Resources/models"
 """
 
 
@@ -424,6 +433,42 @@ def measure(ctx: click.Context, ids: tuple[str, ...]) -> None:
             verdict,
         )
     console.print(table)
+
+
+@cli.command()
+@click.argument("ids", nargs=-1, metavar="[ID...]")
+@click.option("--model", default=None, help="Override the Upscayl model.")
+@click.option("--scale", type=int, default=None, help="Override output scale (2/3/4).")
+@click.option("--force", is_flag=True, help="Re-upscale even if stage 2 exists.")
+@click.pass_context
+def upscale(
+    ctx: click.Context,
+    ids: tuple[str, ...],
+    model: str | None,
+    scale: int | None,
+    force: bool,
+) -> None:
+    """Upscale originals with Upscayl's CLI → stage 2 (upscaled).
+
+    Optional step; needs Upscayl installed (its bundled [cyan]upscayl-bin[/] is
+    auto-detected on macOS). Set the default model/scale under [cyan][tools][/]
+    in proxdex.toml.
+    """
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+
+    def one(card: Card) -> None:
+        src = card.stage_path(Stage.ORIGINAL)
+        if not src.exists():
+            raise FileError(f"{card.id}: no original yet (fetch it first)")
+        dst = card.stage_path(Stage.UPSCALED)
+        if dst.exists() and not force:
+            console.print(f"[dim]· {card.id}: already upscaled[/]")
+            return
+        upscale_mod.run(src, dst, cfg, model=model, scale=scale)
+        console.print(f"[green]✓[/] {card.id}: upscaled → {dst.relative_to(lib.root)}")
+
+    _each(lib.select(ids), one, "upscaling")
 
 
 @cli.command()

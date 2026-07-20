@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob
+import json
 import re
 import shutil
 import sys
@@ -23,6 +24,7 @@ from rich.progress import (
 from rich.table import Table
 
 from . import bleed, borders, media, report, sources
+from . import calibrate as calibrate_mod
 from . import grade as grade_mod
 from . import upscale as upscale_mod
 from ._version import __version__
@@ -38,6 +40,7 @@ click.rich_click.COMMAND_GROUPS = {
         {"name": "Library", "commands": ["init", "ls", "index"]},
         {"name": "Acquire", "commands": ["search", "fetch", "import"]},
         {"name": "Prepare", "commands": ["upscale", "grade", "measure", "border"]},
+        {"name": "Calibrate", "commands": ["calibrate"]},
     ]
 }
 
@@ -627,9 +630,9 @@ def _library_frame_target(
 )
 @click.option(
     "--profile",
-    type=click.Choice(list(media.PROFILES)),
     default=None,
-    help="Media compensation baked into the print (default from [print]).",
+    help="Print medium: a calibrated profile name, or a none/paper/foil preset "
+    "(default from [print]).",
 )
 @click.pass_context
 def border(
@@ -651,6 +654,19 @@ def border(
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     prof_name, recipe = media.resolve(cfg, profile)
+    # a measured calibration for this medium supersedes the manual preset
+    cal = calibrate_mod.load(_cal_dir(lib), prof_name) if prof_name != "none" else None
+    if cal is not None:
+        tag = f" [dim]({prof_name} · calibrated)[/]"
+    elif prof_name != "none":
+        tag = f" [dim]({prof_name})[/]"
+        if prof_name not in media.PROFILES:
+            err.print(
+                f"[yellow]note[/] '{prof_name}' has no calibration or preset — "
+                f"printing uncompensated (run `proxdex calibrate fit`)"
+            )
+    else:
+        tag = ""
 
     def one(card: Card) -> None:
         src = card.best(Stage.EDITED, Stage.UPSCALED, Stage.ORIGINAL)
@@ -659,16 +675,21 @@ def border(
         b = borders.measure(borders.load_rgb(src), cfg)
         ext = bleed.plan(b, borders.target(b, cfg), cfg)
         plan = f"top+{ext.top} left+{ext.left} right+{ext.right} bottom+{ext.bottom}px"
-        tag = "" if prof_name == "none" else f" [dim]({prof_name})[/]"
         if not write_print:
             console.print(f"[cyan]{card.id}[/] from [dim]{src.name}[/]: {plan}{tag}")
             return
         dst = card.stage_path(Stage.PRINT)
         feed = src
         tmp: Path | None = None
-        if prof_name != "none":  # bake media compensation in before cardbleed
+        if cal is not None or prof_name != "none":  # bake colour in before cardbleed
             tmp = card.dir / f".{card.id}_print_src.png"
-            media.compensate(Image.open(src), recipe).save(tmp)
+            im = Image.open(src)
+            corrected = (
+                calibrate_mod.apply_to_image(im, cal)
+                if cal is not None
+                else media.compensate(im, recipe)
+            )
+            corrected.save(tmp)
             feed = tmp
         try:
             bleed.run(feed, dst, ext, cfg)
@@ -689,6 +710,137 @@ def index(ctx: click.Context) -> None:
     lib = _lib(ctx)
     dst = report.write_index(lib)
     console.print(f"[green]wrote[/] {dst}")
+
+
+def _cal_dir(lib: Library) -> Path:
+    return lib.root / "calibration"
+
+
+def _active_profile(cfg: Config, profile: str | None) -> str:
+    return profile or cfg.print_profile or "none"
+
+
+_SCAN = click.option(
+    "--scan",
+    "scan_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The scanned chart image.",
+)
+_PROFILE = click.option(
+    "--profile", default=None, help="Medium profile (default from [print])."
+)
+
+
+@cli.group()
+def calibrate() -> None:
+    """Colour-calibrate a print medium with a print+scan loop.
+
+    [dim]target[/] emits a chart → print it on the medium (scanner
+    auto-correction OFF) → [dim]fit[/] reads the scan and measures a per-medium
+    correction that [cyan]border[/] then bakes in. [dim]target --corrected[/] +
+    [dim]check[/] verify how true the corrected print is; repeat to converge.
+    """
+
+
+@calibrate.command("target")
+@_PROFILE
+@click.option(
+    "--corrected",
+    is_flag=True,
+    help="Bake the saved correction into the chart (print this to verify).",
+)
+@click.option(
+    "-o",
+    "--out",
+    "out",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output path (default: <lib>/calibration/<profile>_chart.png).",
+)
+@click.pass_context
+def cal_target(
+    ctx: click.Context, profile: str | None, corrected: bool, out: Path | None
+) -> None:
+    """Write a printable calibration chart."""
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    prof = _active_profile(cfg, profile)
+    stage = calibrate_mod.load(_cal_dir(lib), prof) if corrected else None
+    if corrected and stage is None:
+        raise click.UsageError(f"no calibration for '{prof}' yet — run `fit` first")
+    suffix = "_chart_corrected" if corrected else "_chart"
+    dst = out or _cal_dir(lib) / f"{prof}{suffix}.png"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    calibrate_mod.render_chart(stage).save(dst)
+    console.print(
+        f"[green]wrote[/] {dst}\n[dim]print it on '{prof}' with scanner "
+        "auto-correction OFF, then `proxdex calibrate fit --scan <scan>`[/]"
+    )
+
+
+@calibrate.command("fit")
+@_PROFILE
+@_SCAN
+@click.pass_context
+def cal_fit(ctx: click.Context, profile: str | None, scan_path: Path) -> None:
+    """Measure a correction for the medium from a scanned chart."""
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    prof = _active_profile(cfg, profile)
+    target = np.array(calibrate_mod.chart_patches(), np.float32)
+    measured = calibrate_mod.read_scan(scan_path)
+    err = calibrate_mod.error(measured, target)
+    stage = calibrate_mod.fit(measured, target)
+    dst = calibrate_mod.save(_cal_dir(lib), prof, stage, err)
+    console.print(
+        f"[green]calibrated[/] '{prof}': raw print was off by "
+        f"mean {err['mean']:.1f} / max {err['max']:.1f} RGB"
+    )
+    console.print(
+        f"[dim]saved {dst.relative_to(lib.root)} · `border` now bakes it in. "
+        "verify: `calibrate target --corrected` → print → `calibrate check`[/]"
+    )
+
+
+@calibrate.command("check")
+@_PROFILE
+@_SCAN
+@click.pass_context
+def cal_check(ctx: click.Context, profile: str | None, scan_path: Path) -> None:
+    """Report residual error from a scan of the *corrected* chart."""
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    prof = _active_profile(cfg, profile)
+    target = np.array(calibrate_mod.chart_patches(), np.float32)
+    err = calibrate_mod.error(calibrate_mod.read_scan(scan_path), target)
+    console.print(
+        f"'{prof}' residual after correction: "
+        f"mean {err['mean']:.1f} / max {err['max']:.1f} RGB [dim](lower is truer)[/]"
+    )
+
+
+@calibrate.command("show")
+@click.pass_context
+def cal_show(ctx: click.Context) -> None:
+    """List the measured calibrations in this library."""
+    lib = _lib(ctx)
+    files = sorted(_cal_dir(lib).glob("*.json"))
+    if not files:
+        console.print("[dim]no calibrations yet — run `calibrate fit`[/]")
+        return
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for col in ("Profile", "Model", "Raw err (mean/max)"):
+        table.add_column(col)
+    for f in files:
+        data = json.loads(f.read_text())
+        e = data.get("uncorrected_error", {})
+        table.add_row(
+            data.get("profile", f.stem),
+            data.get("model", "?"),
+            f"{e.get('mean', 0):.1f} / {e.get('max', 0):.1f}",
+        )
+    console.print(table)
 
 
 def _card_id_from(stem: str) -> str | None:

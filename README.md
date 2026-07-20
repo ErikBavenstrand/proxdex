@@ -195,6 +195,35 @@ gamma      = 0.85
 
 Override per run with `proxdex border --write-print --profile foil`.
 
+## Calibrating to your printer (closed loop)
+
+If you have a scanner, proxdex can *measure* a per-medium correction instead of
+guessing at a preset — print a chart, scan it, and it fits the colour transform
+that makes prints true to the original. Each medium is its own profile (e.g.
+`paper` on white, `foil-holo` for foil on a holographic backing), so they can
+carry different corrections.
+
+```bash
+proxdex calibrate target --profile foil-holo        # emit a patch chart
+#   → print it on that medium, scan it (auto-correction OFF), then:
+proxdex calibrate fit --profile foil-holo --scan chart_scan.png
+#   → measures a degree-2 polynomial correction; `border` now bakes it in.
+
+# verify / iterate:
+proxdex calibrate target --profile foil-holo --corrected   # chart with fix baked in
+proxdex calibrate fit ... ; proxdex calibrate check --scan corrected_scan.png
+#   → prints the residual error; reprint & re-fit until it plateaus.
+```
+
+Then `proxdex border --write-print --profile foil-holo` applies the measured
+correction (it supersedes the manual `foil` preset for that profile).
+
+**Honest limits:** the scanner is the measuring device, so this makes prints
+true *as your scanner sees them* — excellent for proxies, but not colorimetric
+(that needs a reference target or a spectrophotometer). Some saturated colours
+are simply outside a medium's gamut and can't be fully reached. And you **must
+turn off the scanner's auto colour/contrast**, or it fights the loop.
+
 ## License
 
 MIT

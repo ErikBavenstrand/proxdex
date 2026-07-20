@@ -93,7 +93,7 @@ def _geometry(cfg: Config) -> Geo:
     )
 
 
-def _fit(im: Image.Image, cw: int, ch: int, mode: str) -> Image.Image:
+def fit(im: Image.Image, cw: int, ch: int, mode: str) -> Image.Image:
     """Scale any-size input to exactly the card cell (cw x ch).
 
     Guarantees the printed card is the configured physical size regardless of
@@ -214,7 +214,7 @@ def _render(
             continue
         col, row = i % cfg.sheet_cols, i // cfg.sheet_cols
         x, y = _cell_xy(g, col, row)
-        page.paste(_fit(im, cw, ch, cfg.sheet_fit.lower()), (x + ox, y + oy))
+        page.paste(fit(im, cw, ch, cfg.sheet_fit.lower()), (x + ox, y + oy))
         if guides_on and cfg.sheet_guide_style.lower() == "corners":
             trim = (
                 round(x + g.bleed),

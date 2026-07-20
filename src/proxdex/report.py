@@ -51,15 +51,16 @@ def write_index(lib: Library) -> Path:
     lines = [
         "# Proxy Card Index",
         "",
-        f"_{len(cards)} cards · stages: 1 original · 2 upscaled · 3 edited · 4 print_",
+        f"_{len(cards)} cards · stages: 1 original · 2 bordered · 3 upscaled · "
+        "4 edited (trim master); bleed added at print_",
         "",
-        "| Card | Name | Set | Orig | Upscl | Edit | Print | Batch | Printed |",
-        "|------|------|-----|:----:|:-----:|:----:|:-----:|-------|:-------:|",
+        "| Card | Name | Set | Orig | Bord | Upscl | Edit | Batch | Printed |",
+        "|------|------|-----|:----:|:----:|:-----:|:----:|-------|:-------:|",
     ]
     for card in cards:
         marks = [
             " ✓ " if card.has(s) else " · "
-            for s in (Stage.ORIGINAL, Stage.UPSCALED, Stage.EDITED, Stage.PRINT)
+            for s in (Stage.ORIGINAL, Stage.BORDERED, Stage.UPSCALED, Stage.EDITED)
         ]
         batch = by_card.get(card.id)
         printed = "✓" if batch and batch.printed else ""

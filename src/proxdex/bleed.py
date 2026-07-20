@@ -51,14 +51,23 @@ class Extension:
         ]
 
 
-def plan(b: Borders, tgt: Target, cfg: Config) -> Extension:
-    bleed_px = cfg.bleed_mm * cfg.px_per_mm(b.w)
+def frame_plan(b: Borders, tgt: Target) -> Extension:
+    """Per-edge expansion to bring a too-thin frame up to trim proportions.
+
+    Top and sides only (the bottom frame is legitimately thicker); no cut bleed
+    — that is added later, at the sheet step, outside the trim.
+    """
     return Extension(
-        top=round(max(0.0, tgt.top - b.top) + bleed_px),
-        left=round(max(0.0, tgt.side - b.left) + bleed_px),
-        right=round(max(0.0, tgt.side - b.right) + bleed_px),
-        bottom=round(bleed_px),
+        top=round(max(0.0, tgt.top - b.top)),
+        left=round(max(0.0, tgt.side - b.left)),
+        right=round(max(0.0, tgt.side - b.right)),
+        bottom=0,
     )
+
+
+def uniform(px: int) -> Extension:
+    """Equal extension on all four edges — the cut bleed added at print time."""
+    return Extension(top=px, bottom=px, left=px, right=px)
 
 
 def run(src: Path, dst: Path, ext: Extension, cfg: Config) -> None:

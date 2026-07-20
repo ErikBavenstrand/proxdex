@@ -9,8 +9,10 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import tomllib
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import TypeVar
@@ -46,7 +48,7 @@ click.rich_click.COMMAND_GROUPS = {
     "proxdex": [
         {"name": "Library", "commands": ["init", "where", "ls", "index"]},
         {"name": "Acquire", "commands": ["search", "fetch", "import"]},
-        {"name": "Prepare", "commands": ["upscale", "grade", "finish", "measure"]},
+        {"name": "Prepare", "commands": ["border", "upscale", "grade", "measure"]},
         {"name": "Produce", "commands": ["build", "back", "sheet", "printed"]},
         {"name": "Calibrate", "commands": ["calibrate"]},
     ]
@@ -57,21 +59,21 @@ err = Console(stderr=True, highlight=False)
 
 T = TypeVar("T")
 
-_STAGES = (Stage.ORIGINAL, Stage.UPSCALED, Stage.EDITED, Stage.PRINT)
+_STAGES = (Stage.ORIGINAL, Stage.BORDERED, Stage.UPSCALED, Stage.EDITED)
 _STAGE_BY_LABEL = {s.label: s for s in Stage}
 
 DEFAULT_TOML = """\
 # proxdex library config — tune here, no code edits needed.
 
 [border]
-# Frame-thickness targets as a fraction of card width / height.
-# 0.0 = auto: pad the thin edges up to match the sides (bottom is never
-# measured). After eyeballing a known-good card with `proxdex measure`, set
-# e.g. target_side_ratio = 0.045 to also fix cards whose frame is uniformly
-# too thin for a real card.
+# `proxdex border` expands a too-thin card frame to correct trim proportions,
+# BEFORE upscaling. Frame-thickness targets as a fraction of card width/height:
+# 0.0 = auto (pad thin edges up to match the sides; bottom never measured).
+# Set e.g. target_side_ratio = 0.045 to also fix uniformly-thin frames.
 target_side_ratio = 0.0
 target_top_ratio  = 0.0
 thresh            = 62      # RGB distance still counted as "the frame colour"
+tolerance_mm      = 0.3     # skip the fix when the deficit is smaller than this
 
 [grade]
 # 1) normalize: pull each card to a common baseline first (so scans and
@@ -98,8 +100,10 @@ h_mm = 88.0
 bleed_mm = 2.5              # cut bleed added to every edge by cardbleed
 
 [sheet]
-# proxdex imposes finished cards into the print PDF (it owns the whole path to
-# paper, so calibration transfers). Print with colour management OFF.
+# proxdex imposes the trim-size masters into the print PDF: each card is sized
+# to the actual card size, colour-corrected for the medium, then cut bleed is
+# extended OUTSIDE the trim (cut guides sit at the card edge). It owns the whole
+# path to paper, so calibration transfers. Print with colour management OFF.
 page        = "a4"         # a4 | letter
 orientation = "portrait"   # portrait | landscape
 dpi         = 1400         # high so the printer never upsamples; PDF stays lossless
@@ -140,9 +144,9 @@ reg_marks    = "none"        # none | corners
 reg_inset_mm = 10.0
 
 [print]
-# Colour reproduction baked into stage 4 (the master stays neutral), per medium.
-# A preset here is just training wheels until you `proxdex calibrate` the
-# medium — a measured calibration then supersedes it automatically.
+# Colour reproduction applied at sheet time (the stored master stays neutral),
+# per medium. A preset here is just training wheels until you `proxdex
+# calibrate` the medium — a measured calibration then supersedes it.
 # "none" | "paper" | "foil".
 profile = "foil"
 # saturation = 1.38
@@ -151,7 +155,7 @@ profile = "foil"
 # gamma      = 0.88        # < 1 darkens midtones → more ink density
 
 [tools]
-# Upscayl (optional stage-2 step). On macOS the bundled binary and models are
+# Upscayl (the upscale stage). On macOS the bundled binary and models are
 # auto-detected; set explicit paths on other platforms.
 upscayl_model = "digital-art-4x"  # or ultrasharp-4x, remacri-4x, high-fidelity-4x, ...
 upscayl_scale = 2                 # 1, 2, 3, or 4
@@ -214,8 +218,9 @@ def _each(items: Sequence[T], fn: Callable[[T], None], verb: str) -> int:
 def cli(ctx: click.Context, root: str | None) -> None:
     """[bold]proxdex[/] — organize and drive your Pokémon proxy pipeline.
 
-    A card flows through four stages: [cyan]original[/] → [cyan]upscaled[/] →
-    [cyan]edited[/] → [cyan]print[/]. proxdex fetches sources, files each
+    A card flows through four stages: [cyan]original[/] → [cyan]bordered[/] →
+    [cyan]upscaled[/] → [cyan]edited[/] (the trim master); bleed and colour are
+    added at [cyan]sheet[/] time. proxdex fetches sources, files each
     stage in a predictable place, corrects thin frames, and tracks what you've
     actually printed.
 
@@ -521,7 +526,7 @@ def ls(ctx: click.Context) -> None:
     table.add_column("Card")
     table.add_column("Name")
     table.add_column("Set")
-    table.add_column("O U E P", justify="center")
+    table.add_column("O B U E", justify="center")
     table.add_column("Batch")
     table.add_column("Printed", justify="center")
     for card in lib.cards():
@@ -535,7 +540,7 @@ def ls(ctx: click.Context) -> None:
             "[green]✓[/]" if batch and batch.printed else "",
         )
     console.print(table)
-    console.print("[dim]stages: O original · U upscaled · E edited · P print[/]")
+    console.print("[dim]stages: O original · B bordered · U upscaled · E edited[/]")
 
 
 @cli.command()
@@ -557,7 +562,7 @@ def measure(ctx: click.Context, ids: tuple[str, ...]) -> None:
     ):
         table.add_column(col, justify=just)  # type: ignore[arg-type]
     for card in lib.select(ids):
-        src = card.best(Stage.EDITED, Stage.UPSCALED, Stage.ORIGINAL)
+        src = card.best(Stage.EDITED, Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL)
         if src is None:
             table.add_row(card.id, "[dim]no image[/]", "", "", "", "", "")
             continue
@@ -597,7 +602,7 @@ def measure(ctx: click.Context, ids: tuple[str, ...]) -> None:
     default=None,
     help="Double Upscayl: run the model twice (2× → 4×, up to 16×).",
 )
-@click.option("--force", is_flag=True, help="Re-upscale even if stage 2 exists.")
+@click.option("--force", is_flag=True, help="Re-upscale even if it exists.")
 @click.pass_context
 def upscale(
     ctx: click.Context,
@@ -607,12 +612,12 @@ def upscale(
     double: bool | None,
     force: bool,
 ) -> None:
-    """Upscale originals with Upscayl's CLI → stage 2 (upscaled).
+    """Upscale with Upscayl → stage 3 (upscaled), after any border fix.
 
-    Optional step; needs Upscayl installed (its bundled [cyan]upscayl-bin[/] is
-    auto-detected on macOS). Mirrors the app's own options — pick any of the
-    seven models, a scale, and optional [cyan]--double[/]. Defaults live under
-    [cyan][tools][/] in proxdex.toml.
+    Runs on the bordered image if present, else the original — so frame
+    expansion happens first. Needs Upscayl installed (its bundled
+    [cyan]upscayl-bin[/] is auto-detected on macOS). Mirrors the app's own
+    options; defaults live under [cyan][tools][/].
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
@@ -622,8 +627,8 @@ def upscale(
     tag = f"{use_model} ×{use_scale}{' ×2' if use_double else ''}"
 
     def one(card: Card) -> None:
-        src = card.stage_path(Stage.ORIGINAL)
-        if not src.exists():
+        src = card.best(Stage.BORDERED, Stage.ORIGINAL)
+        if src is None:
             raise FileError(f"{card.id}: no original yet (fetch it first)")
         dst = card.stage_path(Stage.UPSCALED)
         if dst.exists() and not force:
@@ -659,9 +664,9 @@ def grade(
     Normalization white-balances the card frame and evens out black/white
     points so scanned and digitally-drawn cards start from the same place;
     then one identical recipe (saturation/contrast) makes the batch print
-    uniformly. Writes stage 3 (edited). Tune both under [cyan][grade][/].
+    uniformly. Writes stage 4 (edited) — the trim-size master. Tune both under
+    [cyan][grade][/].
     """
-
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     do_norm = cfg.grade_normalize if normalize is None else normalize
@@ -675,7 +680,7 @@ def grade(
         if dst.exists() and not force:
             console.print(f"[dim]· {card.id}: already graded[/]")
             return
-        src = card.best(Stage.UPSCALED, Stage.ORIGINAL)
+        src = card.best(Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL)
         if src is None:
             raise FileError(f"{card.id}: nothing to grade yet")
         out = grade_mod.grade(
@@ -692,7 +697,7 @@ def _library_frame_target(lib: Library) -> tuple[float, float, float] | None:
     """Median frame colour across the whole library — the consensus to aim at."""
     colors: list[NDArray[np.float32]] = []
     for card in lib.cards():
-        src = card.best(Stage.UPSCALED, Stage.ORIGINAL)
+        src = card.best(Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL)
         if src is not None:
             colors.append(borders.frame_color(borders.load_rgb(src)))
     if not colors:
@@ -703,84 +708,38 @@ def _library_frame_target(lib: Library) -> tuple[float, float, float] | None:
 
 @cli.command()
 @click.argument("ids", nargs=-1, metavar="[ID...]")
-@click.option(
-    "--write-print",
-    is_flag=True,
-    help="Write stage 4 (print). Otherwise report the plan only (dry run).",
-)
-@click.option(
-    "--profile",
-    default=None,
-    help="Print medium: a calibrated profile name, or a none/paper/foil preset "
-    "(default from [print]).",
-)
-@click.option("--force", is_flag=True, help="Overwrite an existing print stage.")
+@click.option("--force", is_flag=True, help="Re-run even if a bordered image exists.")
 @click.pass_context
-def finish(
-    ctx: click.Context,
-    ids: tuple[str, ...],
-    write_print: bool,
-    profile: str | None,
-    force: bool,
-) -> None:
-    """Finish cards into print-ready stage 4: colour reproduction + bleed.
+def border(ctx: click.Context, ids: tuple[str, ...], force: bool) -> None:
+    """Expand a too-thin card frame to correct proportions → stage 2 (bordered).
 
-    Corrects the frame, adds cut bleed via [cyan]cardbleed[/], and reproduces
-    the master for the print medium — a measured calibration if the profile has
-    one, else the manual preset (e.g. [cyan]foil[/]). Without
-    [cyan]--write-print[/] it only prints the plan.
+    Optional pre-upscale step for scans cropped into the frame. Measures the top
+    and sides (the bottom is legitimately thicker) and, if short of target by
+    more than a small tolerance, uses [cyan]cardbleed[/] to continue the frame
+    outward. Cards already at size are left untouched. No cut bleed here — that
+    is added later at [cyan]sheet[/] time, outside the trim.
     """
-
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    prof_name, recipe = media.resolve(cfg, profile)
-    # a measured calibration for this medium supersedes the manual preset
-    cal = calibrate_mod.load(_cal_dir(lib), prof_name) if prof_name != "none" else None
-    if cal is not None:
-        tag = f" [dim]({prof_name} · calibrated)[/]"
-    elif prof_name != "none":
-        tag = f" [dim]({prof_name})[/]"
-        if prof_name not in media.PROFILES:
-            err.print(
-                f"[yellow]note[/] '{prof_name}' has no calibration or preset — "
-                f"printing uncompensated (run `proxdex calibrate fit`)"
-            )
-    else:
-        tag = ""
 
     def one(card: Card) -> None:
-        src = card.best(Stage.EDITED, Stage.UPSCALED, Stage.ORIGINAL)
-        if src is None:
-            raise FileError(f"{card.id}: nothing to process yet")
-        b = borders.measure(borders.load_rgb(src), cfg)
-        ext = bleed.plan(b, borders.target(b, cfg), cfg)
-        plan = f"top+{ext.top} left+{ext.left} right+{ext.right} bottom+{ext.bottom}px"
-        if not write_print:
-            console.print(f"[cyan]{card.id}[/] from [dim]{src.name}[/]: {plan}{tag}")
-            return
-        dst = card.stage_path(Stage.PRINT)
+        dst = card.stage_path(Stage.BORDERED)
         if dst.exists() and not force:
-            console.print(f"[dim]· {card.id}: already finished[/]")
+            console.print(f"[dim]· {card.id}: already bordered[/]")
             return
-        feed = src
-        tmp: Path | None = None
-        if cal is not None or prof_name != "none":  # bake colour in before cardbleed
-            tmp = card.dir / f".{card.id}_print_src.png"
-            im = Image.open(src)
-            corrected = (
-                calibrate_mod.apply_to_image(im, cal)
-                if cal is not None
-                else media.compensate(im, recipe)
-            )
-            corrected.save(tmp)
-            feed = tmp
-        try:
-            bleed.run(feed, dst, ext, cfg)
-        finally:
-            if tmp is not None:
-                tmp.unlink(missing_ok=True)
+        src = card.stage_path(Stage.ORIGINAL)
+        if not src.exists():
+            raise FileError(f"{card.id}: no original yet (fetch it first)")
+        b = borders.measure(borders.load_rgb(src), cfg)
+        ext = bleed.frame_plan(b, borders.target(b, cfg))
+        tol = round(cfg.border_tolerance_mm * cfg.px_per_mm(b.w))
+        if max(ext.top, ext.left, ext.right) <= tol:
+            console.print(f"[dim]· {card.id}: frame already correct[/]")
+            return
+        bleed.run(src, dst, ext, cfg)
         console.print(
-            f"[green]✓[/] {card.id}: {plan}{tag} → {dst.relative_to(lib.root)}"
+            f"[green]✓[/] {card.id}: frame +top{ext.top} +left{ext.left} "
+            f"+right{ext.right}px → {dst.relative_to(lib.root)}"
         )
 
     _each(lib.select(ids), one, "bordering")
@@ -801,33 +760,34 @@ def index(ctx: click.Context) -> None:
 @click.option("--force", is_flag=True, help="Redo stages even if they exist.")
 @click.pass_context
 def build(ctx: click.Context, ids: tuple[str, ...], force: bool) -> None:
-    """Run the whole prepare pipeline for cards that need it.
+    """Prepare cards into trim-size masters: border → upscale → grade.
 
-    upscale → grade → finish, skipping stages already present (unless
-    [cyan]--force[/]). One command to take everything from downloaded originals
-    to print-ready fronts.
+    Skips stages already present (unless [cyan]--force[/]). Bleed and colour
+    reproduction are not baked in here — they're applied at [cyan]sheet[/] time.
     """
     lib = _lib(ctx)
     cards = lib.select(ids)
     if not cards:
         console.print("[dim]no cards[/]")
         return
-    stages = (
-        (
-            "upscale",
-            Stage.UPSCALED,
+    # border + upscale run on cards not yet upscaled (border self-skips if fine)
+    to_upscale = [c.id for c in cards if force or not c.has(Stage.UPSCALED)]
+    if to_upscale:
+        console.print(f"[bold]border[/] ({len(to_upscale)})")
+        ctx.invoke(border, ids=tuple(to_upscale), force=force)
+        console.print(f"[bold]upscale[/] ({len(to_upscale)})")
+        ctx.invoke(
             upscale,
-            {"model": None, "scale": None, "double": None},
-        ),
-        ("grade", Stage.EDITED, grade, {"normalize": None}),
-        ("finish", Stage.PRINT, finish, {"write_print": True, "profile": None}),
-    )
-    for name, stage, command, extra in stages:
-        todo = [c.id for c in cards if force or not c.has(stage)]
-        if not todo:
-            continue
-        console.print(f"[bold]{name}[/] ({len(todo)})")
-        ctx.invoke(command, ids=tuple(todo), force=force, **extra)
+            ids=tuple(to_upscale),
+            model=None,
+            scale=None,
+            double=None,
+            force=force,
+        )
+    to_grade = [c.id for c in cards if force or not c.has(Stage.EDITED)]
+    if to_grade:
+        console.print(f"[bold]grade[/] ({len(to_grade)})")
+        ctx.invoke(grade, ids=tuple(to_grade), normalize=None, force=force)
     console.print("[green]build complete[/]")
 
 
@@ -854,17 +814,44 @@ def _write_batch(path: Path, data: dict[str, object]) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
-def _resolve_back(card: Card, cfg: Config, lib: Library) -> Image.Image | None:
+def _resolve_back_path(card: Card, cfg: Config, lib: Library) -> Path | None:
     """Per-card <id>_back.png, then [sheet] back_image, then <lib>/back.png."""
     candidates = [card.dir / f"{card.id}_back.png"]
     if cfg.sheet_back_image:
         shared = Path(cfg.sheet_back_image)
         candidates.append(shared if shared.is_absolute() else lib.root / shared)
     candidates.append(lib.root / "back.png")
-    for path in candidates:
-        if path.exists():
-            return Image.open(path).convert("RGB")
-    return None
+    return next((p for p in candidates if p.exists()), None)
+
+
+@dataclass(slots=True)
+class _Repro:
+    """The print-time reproduction: fit any master to trim, colour-correct for
+    the medium, then extend cut bleed outside the trim with cardbleed."""
+
+    cfg: Config
+    profile: str
+    recipe: media.Recipe
+    cal: calibrate_mod.Stage | None
+    tmpdir: Path
+
+    def cell(self, master: Image.Image) -> Image.Image:
+        cfg = self.cfg
+        ppm = cfg.sheet_dpi / 25.4
+        trim_w, trim_h = round(cfg.card_w_mm * ppm), round(cfg.card_h_mm * ppm)
+        im = sheet_mod.fit(master, trim_w, trim_h, cfg.sheet_fit.lower())
+        if self.cal is not None:
+            im = calibrate_mod.apply_to_image(im, self.cal)
+        elif self.profile != "none":
+            im = media.compensate(im, self.recipe)
+        if cfg.bleed_mm <= 0:
+            return im
+        bp = round(cfg.bleed_mm * ppm)
+        src = Path(tempfile.mkstemp(suffix=".png", dir=self.tmpdir)[1])
+        dst = Path(tempfile.mkstemp(suffix=".png", dir=self.tmpdir)[1])
+        im.save(src)
+        bleed.run(src, dst, bleed.uniform(bp), cfg)
+        return Image.open(dst).convert("RGB")
 
 
 _SCRYFALL_BACK = "https://cards.scryfall.io/back.png"
@@ -886,10 +873,6 @@ _SCRYFALL_BACK = "https://cards.scryfall.io/back.png"
     help="Preset source: [cyan]mtg[/] = Scryfall's standard back.",
 )
 @click.option(
-    "--profile", default=None, help="Bake this medium's colour correction in."
-)
-@click.option("--no-bleed", is_flag=True, help="Source is already bleeded.")
-@click.option(
     "-o",
     "--out",
     "out",
@@ -903,21 +886,18 @@ def back(
     url: str | None,
     file_path: Path | None,
     tcg: str | None,
-    profile: str | None,
-    no_bleed: bool,
     out: Path | None,
 ) -> None:
-    """Set the shared card back: fetch/import, colour-correct, add bleed.
+    """Set the shared card back — a trim-size master.
 
-    Source: [cyan]--file[/], [cyan]--url[/], or [cyan]--tcg mtg[/] (Scryfall's
-    standard back). There's no reliable Pokémon-back API — supply your own
-    high-res scan via --file/--url. The image is run through the same medium
-    correction as the fronts and bleeded with cardbleed, then saved to
-    [cyan]back.png[/] and used by `sheet --faces backs|duplex`.
+    Just fetches/imports and stores the image; colour correction and cut bleed
+    are applied at [cyan]sheet[/] time (exactly like the fronts), so front and
+    back match on the medium. Source: [cyan]--file[/], [cyan]--url[/], or
+    [cyan]--tcg mtg[/] (Scryfall's standard back). There's no reliable
+    Pokémon-back API — supply your own scan. A per-card [cyan]<id>_back.png[/]
+    overrides this shared one.
     """
-
     lib = _lib(ctx)
-    cfg = Config.load(lib.root)
     if not url and not file_path and tcg == "mtg":
         url = _SCRYFALL_BACK
     if not url and not file_path:
@@ -938,29 +918,12 @@ def back(
             raise ProxdexError(f"download failed ({resp.status_code}) for {url}")
         im = Image.open(io.BytesIO(resp.content)).convert("RGB")
 
-    # match the fronts on the medium (calibration if present, else preset)
-    prof_name, recipe = media.resolve(cfg, profile)
-    cal = calibrate_mod.load(_cal_dir(lib), prof_name) if prof_name != "none" else None
-    if cal is not None:
-        im = calibrate_mod.apply_to_image(im, cal)
-    elif prof_name != "none":
-        im = media.compensate(im, recipe)
-
     dst = out or lib.root / "back.png"
-    if no_bleed:
-        im.save(dst)
-    else:
-        tmp = lib.root / ".back_src.png"
-        im.save(tmp)
-        bp = round(cfg.bleed_mm * cfg.px_per_mm(im.width))
-        try:
-            bleed.run(
-                tmp, dst, bleed.Extension(top=bp, bottom=bp, left=bp, right=bp), cfg
-            )
-        finally:
-            tmp.unlink(missing_ok=True)
-    tag = f" [dim]({prof_name})[/]" if prof_name != "none" else ""
-    console.print(f"[green]✓[/] card back → {dst.relative_to(lib.root)}{tag}")
+    im.save(dst)
+    console.print(
+        f"[green]✓[/] card back → {dst.relative_to(lib.root)} "
+        "[dim](colour + bleed applied at sheet time)[/]"
+    )
 
 
 @cli.command()
@@ -974,6 +937,9 @@ def back(
 )
 @click.option("--page", default=None, help="Page size override (a4 | letter).")
 @click.option("--dpi", type=int, default=None, help="Render resolution override.")
+@click.option(
+    "--profile", default=None, help="Medium colour profile (default from [print])."
+)
 @click.option("--open", "open_pdf", is_flag=True, help="Open the PDF when done.")
 @click.pass_context
 def sheet(
@@ -983,17 +949,17 @@ def sheet(
     faces: str | None,
     page: str | None,
     dpi: int | None,
+    profile: str | None,
     open_pdf: bool,
 ) -> None:
-    """Impose finished cards into a print PDF and record the batch.
+    """Impose the trim masters into a print PDF and record the batch.
 
-    NAME labels the batch; with no IDs, every card with a finished front is
-    included. Each card is scaled to the exact configured card size at sheet
-    DPI, so any input resolution prints at the right physical size. Fronts,
-    backs, or duplex (back pages mirrored + offset). proxdex owns the PDF —
-    print with colour management OFF for calibration to hold.
+    Each card is scaled to the exact configured card size at sheet DPI, colour-
+    corrected for the medium, then given cut bleed *outside* the trim via
+    cardbleed — the individual masters stay bleed-free. Cut guides sit at the
+    card edge. Fronts, backs, or duplex (back pages mirrored + offset). proxdex
+    owns the PDF — print with colour management OFF for calibration to hold.
     """
-
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     if page:
@@ -1003,32 +969,51 @@ def sheet(
     if dpi:
         cfg.sheet_dpi = dpi
     cards = lib.select(ids) if ids else lib.cards()
-    ready = [c for c in cards if c.has(Stage.PRINT)]
-    missing = [c.id for c in cards if not c.has(Stage.PRINT)]
+    ready = [c for c in cards if c.has(Stage.EDITED)]
+    missing = [c.id for c in cards if not c.has(Stage.EDITED)]
     if missing:
         err.print(
-            f"[yellow]no finished front, skipping:[/] {', '.join(missing)} "
+            f"[yellow]no master, skipping:[/] {', '.join(missing)} "
             "[dim](run `proxdex build`)[/]"
         )
     if not ready:
-        raise click.UsageError("no finished fronts to impose — run `proxdex build`")
+        raise click.UsageError("no card masters to impose — run `proxdex build`")
 
-    fronts = [Image.open(c.stage_path(Stage.PRINT)).convert("RGB") for c in ready]
-    backs = [_resolve_back(c, cfg, lib) for c in ready]
-    if cfg.sheet_faces in ("backs", "duplex"):
-        no_back = [c.id for c, b in zip(ready, backs, strict=True) if b is None]
-        if no_back:
-            raise click.UsageError(
-                f"{cfg.sheet_faces} needs backs, but none for: {', '.join(no_back)}"
-                " — set [sheet] back_image or add <id>_back.png"
-            )
+    prof_name, recipe = media.resolve(cfg, profile)
+    cal = calibrate_mod.load(_cal_dir(lib), prof_name) if prof_name != "none" else None
+    if prof_name != "none" and cal is None and prof_name not in media.PROFILES:
+        err.print(f"[yellow]note[/] '{prof_name}' has no calibration or preset")
 
-    slug = slugify(name)
-    today = date.today().isoformat()
-    bdir = lib.batches_dir / f"{today}_{slug}"
-    bdir.mkdir(parents=True, exist_ok=True)
-    pdf = bdir / f"{cfg.sheet_faces}.pdf"
-    n_pages = sheet_mod.impose_to_pdf(fronts, backs, cfg, pdf)
+    tmpdir = Path(tempfile.mkdtemp(prefix="proxdex-sheet-"))
+    try:
+        repro = _Repro(cfg, prof_name, recipe, cal, tmpdir)
+        fronts = [
+            repro.cell(Image.open(c.stage_path(Stage.EDITED)).convert("RGB"))
+            for c in ready
+        ]
+        backs: list[Image.Image | None] = [None] * len(ready)
+        if cfg.sheet_faces in ("backs", "duplex"):
+            cache: dict[Path, Image.Image] = {}
+            paths = [_resolve_back_path(c, cfg, lib) for c in ready]
+            no_back = [c.id for c, p in zip(ready, paths, strict=True) if p is None]
+            if no_back:
+                raise click.UsageError(
+                    f"{cfg.sheet_faces} needs backs, none for: {', '.join(no_back)}"
+                    " — `proxdex back ...`, [sheet] back_image, or <id>_back.png"
+                )
+            for i, p in enumerate(paths):
+                if p is not None and p not in cache:
+                    cache[p] = repro.cell(Image.open(p).convert("RGB"))
+                backs[i] = cache[p] if p is not None else None
+
+        slug = slugify(name)
+        today = date.today().isoformat()
+        bdir = lib.batches_dir / f"{today}_{slug}"
+        bdir.mkdir(parents=True, exist_ok=True)
+        pdf = bdir / f"{cfg.sheet_faces}.pdf"
+        n_pages = sheet_mod.impose_to_pdf(fronts, backs, cfg, pdf)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
     _write_batch(
         bdir / "batch.toml",
         {

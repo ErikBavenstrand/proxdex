@@ -62,6 +62,8 @@ class Config:
     target_side_ratio: float = 0.0
     #: top border / card height; 0 = auto (match the sides)
     target_top_ratio: float = 0.0
+    #: `border` skips a card when the needed frame fix is below this (mm)
+    border_tolerance_mm: float = 0.3
     # --- grade: normalize (per-card, dynamic) then look (uniform) ------------
     #: pull every card to a common baseline before the creative recipe
     grade_normalize: bool = True

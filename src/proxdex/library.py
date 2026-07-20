@@ -15,10 +15,10 @@ ENV_ROOT = "PROXDEX_ROOT"
 
 
 class Stage(IntEnum):
-    ORIGINAL = 1
-    UPSCALED = 2
-    EDITED = 3
-    PRINT = 4
+    ORIGINAL = 1  # source scan (scrydex)
+    BORDERED = 2  # frame expanded to correct trim proportions (optional)
+    UPSCALED = 3  # Upscayl, after any border fix
+    EDITED = 4  # graded — the trim-size master (no cut bleed)
 
     @property
     def label(self) -> str:
@@ -27,9 +27,9 @@ class Stage(IntEnum):
 
 _STAGE_LABELS = {
     Stage.ORIGINAL: "original",
+    Stage.BORDERED: "bordered",
     Stage.UPSCALED: "upscaled",
     Stage.EDITED: "edited",
-    Stage.PRINT: "print",
 }
 
 

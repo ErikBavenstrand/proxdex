@@ -56,8 +56,33 @@ so it's what-you-see-is-what-prints); device/medium correction happens later in
 ## Install
 
 ```bash
-uv tool install proxdex        # or: pip install proxdex
+uv tool install proxdex        # global CLI in ~/.local/bin  (or: pip install proxdex)
+uv tool install .              # from a local checkout
+uv tool upgrade proxdex        # later
 ```
+
+`cardbleed` ships as a dependency, so it's bundled in proxdex's own venv — no
+separate install, and proxdex finds it there even though it isn't on your PATH.
+
+### Library vs. tool
+
+The **tool** is installed once; your **library** (cards, config, batches) is
+just a folder. proxdex locates it, git-style:
+
+1. `--root DIR`, else
+2. the nearest `proxdex.toml` searching up from the current directory, else
+3. `$PROXDEX_ROOT` (set this in your shell profile to run from anywhere):
+
+```bash
+export PROXDEX_ROOT=~/Documents/Pokémon\ Proxies
+proxdex where     # confirm which library + config is active
+```
+
+Config lives in `<library>/proxdex.toml` (created by `init`), so it travels
+with the data and each library can differ. New config keys added by a tool
+upgrade fall back to defaults, so old libraries keep working. `INDEX.md` is
+**regenerated automatically** after any command that changes state (no need to
+run `index` by hand).
 
 ## Usage
 

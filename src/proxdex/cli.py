@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import glob
 import json
+import os
 import re
 import shutil
 import sys
@@ -42,7 +44,7 @@ click.rich_click.SHOW_ARGUMENTS = True
 click.rich_click.STYLE_OPTIONS_TABLE_LEADING = 0
 click.rich_click.COMMAND_GROUPS = {
     "proxdex": [
-        {"name": "Library", "commands": ["init", "ls", "index"]},
+        {"name": "Library", "commands": ["init", "where", "ls", "index"]},
         {"name": "Acquire", "commands": ["search", "fetch", "import"]},
         {"name": "Prepare", "commands": ["upscale", "grade", "finish", "measure"]},
         {"name": "Produce", "commands": ["build", "back", "sheet", "printed"]},
@@ -169,6 +171,12 @@ def _dots(card: Card) -> str:
     return " ".join("[green]✓[/]" if card.has(s) else "[dim]·[/]" for s in _STAGES)
 
 
+def _reindex(lib: Library) -> None:
+    """Refresh INDEX.md after a state change; never break the command over it."""
+    with contextlib.suppress(Exception):
+        report.write_index(lib)
+
+
 def _each(items: Sequence[T], fn: Callable[[T], None], verb: str) -> int:
     """Run ``fn`` over items with a progress bar; skip per-item FileErrors."""
     failed = 0
@@ -286,6 +294,7 @@ def fetch(ctx: click.Context, ids: tuple[str, ...], force: bool) -> None:
     _each(
         ids, lambda cid: _acquire(lib, cfg, sources.lookup(cid, cfg), force), "fetching"
     )
+    _reindex(lib)
 
 
 @cli.command()
@@ -365,6 +374,7 @@ def search(
         console.print("[dim]nothing selected.[/]")
         return
     _each(chosen, lambda r: _acquire(lib, cfg, r.to_meta(), force), "fetching")
+    _reindex(lib)
 
 
 def _print_results(results: Sequence[sources.SearchResult]) -> None:
@@ -485,6 +495,20 @@ def import_(
     if not files:
         raise click.UsageError("no files matched")
     _each(files, one, "importing")
+    _reindex(lib)
+
+
+@cli.command()
+@click.pass_context
+def where(ctx: click.Context) -> None:
+    """Show the active library root and config (which one am I operating on?)."""
+    lib = _lib(ctx)
+    cfg_file = lib.root / "proxdex.toml"
+    mark = "[green]✓[/]" if cfg_file.exists() else "[red]missing[/]"
+    console.print(f"[bold]library[/]  {lib.root}")
+    console.print(f"config    {cfg_file} {mark}")
+    if env := os.environ.get("PROXDEX_ROOT"):
+        console.print(f"[dim]PROXDEX_ROOT={env}[/]")
 
 
 @cli.command()
@@ -614,6 +638,7 @@ def upscale(
         )
 
     _each(lib.select(ids), one, "upscaling")
+    _reindex(lib)
 
 
 @cli.command()
@@ -660,6 +685,7 @@ def grade(
         console.print(f"[green]✓[/] {card.id}: graded → {dst.relative_to(lib.root)}")
 
     _each(lib.select(ids), one, "grading")
+    _reindex(lib)
 
 
 def _library_frame_target(lib: Library) -> tuple[float, float, float] | None:
@@ -758,6 +784,7 @@ def finish(
         )
 
     _each(lib.select(ids), one, "bordering")
+    _reindex(lib)
 
 
 @cli.command()
@@ -1012,6 +1039,7 @@ def sheet(
             "pdf": pdf.name,
         },
     )
+    _reindex(lib)
     console.print(
         f"[green]✓[/] {len(ready)} cards ({cfg.sheet_faces}) → {n_pages} "
         f"page(s) @ {cfg.sheet_dpi}dpi → {pdf.relative_to(lib.root)}"
@@ -1038,6 +1066,7 @@ def printed(ctx: click.Context, name: str) -> None:
             data["printed"] = True
             data["printed_date"] = date.today().isoformat()
             _write_batch(tf, data)
+            _reindex(lib)
             console.print(f"[green]✓[/] '{slug}' printed {data['printed_date']}")
             return
     raise click.UsageError(f"no batch named '{name}'")

@@ -9,12 +9,26 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from .borders import Borders, Target
 from .config import Config
 from .errors import FileError
+
+
+def _resolve_exe(cmd: str) -> str | None:
+    """Find ``cmd`` on PATH, or next to the running interpreter.
+
+    cardbleed is a dependency, so after ``uv tool install proxdex`` it lives in
+    proxdex's isolated venv (beside this interpreter) but not on the user's
+    PATH — check there too so stage 4 works out of the box.
+    """
+    if (found := shutil.which(cmd)) is not None:
+        return found
+    sibling = Path(sys.executable).parent / cmd
+    return str(sibling) if sibling.exists() else None
 
 
 @dataclass(slots=True)
@@ -48,11 +62,12 @@ def plan(b: Borders, tgt: Target, cfg: Config) -> Extension:
 
 
 def run(src: Path, dst: Path, ext: Extension, cfg: Config) -> None:
-    exe = shutil.which(cfg.cardbleed_cmd)
+    exe = _resolve_exe(cfg.cardbleed_cmd)
     if exe is None:
         raise FileError(
-            f"{cfg.cardbleed_cmd!r} is not on PATH — install it with "
-            "`pip install cardbleed` (or `uv sync`)"
+            f"{cfg.cardbleed_cmd!r} not found — it ships as a proxdex dependency, "
+            "so reinstall with `uv tool install --force proxdex`, or `pip install "
+            "cardbleed`"
         )
     suffix = "__cb"
     cmd = [

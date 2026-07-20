@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from enum import IntEnum
@@ -10,6 +11,7 @@ from pathlib import Path
 from .errors import LibraryError
 
 MARKER = "proxdex.toml"
+ENV_ROOT = "PROXDEX_ROOT"
 
 
 class Stage(IntEnum):
@@ -82,9 +84,15 @@ class Library:
         for candidate in (current, *current.parents):
             if (candidate / MARKER).exists():
                 return cls(candidate)
+        # fall back to a default library set for a global install
+        if env := os.environ.get(ENV_ROOT):
+            root = Path(env).expanduser().resolve()
+            if (root / MARKER).exists():
+                return cls(root)
+            raise LibraryError(f"{ENV_ROOT}={env} has no {MARKER}")
         raise LibraryError(
             f"no proxdex library here or in any parent (looking for {MARKER}).\n"
-            "run `proxdex init` in your library folder, or pass --root PATH."
+            f"run `proxdex init`, pass --root PATH, or set {ENV_ROOT}."
         )
 
     @property

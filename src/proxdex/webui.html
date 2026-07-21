@@ -61,6 +61,20 @@
   .warn{background:rgba(240,178,75,.13);border:1px solid var(--warn);color:var(--warn);
     border-radius:10px;padding:8px 12px;margin-bottom:12px;font-size:13px}
   .warn button{margin:0 6px}
+  /* frame-align overlay */
+  .alignlayer{position:absolute;inset:0;z-index:5}
+  .al-work{position:absolute;object-fit:fill;box-shadow:0 0 0 1px var(--accent)}
+  .al-ref{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;
+    pointer-events:none;mix-blend-mode:normal}
+  .al-h{position:absolute;background:rgba(110,168,254,.28);z-index:6;touch-action:none}
+  .al-h:hover,.al-h.drag{background:rgba(110,168,254,.6)}
+  .al-h.top,.al-h.bottom{left:0;right:0;height:16px;cursor:ns-resize}
+  .al-h.left,.al-h.right{top:0;bottom:0;width:16px;cursor:ew-resize}
+  .al-h.top{top:0}.al-h.bottom{bottom:0}.al-h.left{left:0}.al-h.right{right:0}
+  .al-edge{position:absolute;background:var(--ok);z-index:6;pointer-events:none;opacity:.9}
+  .edgef{display:grid;grid-template-columns:44px 1fr auto;gap:6px;align-items:center;margin:4px 0}
+  .edgef b{font-variant-numeric:tabular-nums;font-size:12px;min-width:42px;text-align:right}
+  .edgef .stp{display:flex;gap:4px}.edgef .stp button{padding:4px 9px}
   .side{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;height:fit-content}
   .side h3{margin:0 0 2px} .side .sub{color:var(--dim);font-size:12px;margin-bottom:14px}
   .act{border-top:1px solid var(--line);padding:12px 0;display:flex;flex-direction:column;gap:8px}
@@ -192,7 +206,7 @@ async function loadBatches(){
 function present(c){ return state.meta.stages.filter(k=>c.stages[k]); }
 function openCard(i){ state.idx=i; state.stage=null; state.view='card';
   document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active')); render(); }
-function step(d){ state.idx=(state.idx+d+state.cards.length)%state.cards.length; state.stage=null; renderCard(); }
+function step(d){ exitAlign(); state.idx=(state.idx+d+state.cards.length)%state.cards.length; state.stage=null; renderCard(); }
 function showStage(k){ state.stage=k;  // toggle visibility only — no re-render, no reload
   document.querySelectorAll('.stageimg').forEach(el=>el.classList.toggle('show',el.dataset.k===k));
   document.querySelectorAll('.stagelist button[data-k]').forEach(b=>b.classList.toggle('active',b.dataset.k===k)); }
@@ -201,6 +215,7 @@ function cycleStage(d){ const p=present(state.cards[state.idx]); if(!p.length)re
   let i=p.indexOf(state.stage); i=(i+d+p.length)%p.length; showStage(p[i]); }
 const viewsrc=(id,k)=>`/api/view/${id}/${k}?v=${state.ver[id]||0}`;
 function renderCard(){
+  align.on=false;  // a full re-render wipes any align overlay
   const c=state.cards[state.idx]; if(!c){ state.view='library'; return render(); }
   const stg = state.meta.stages, p = present(c);
   if(!state.stage || !c.stages[state.stage]) state.stage = p.length ? p[p.length-1] : null;
@@ -221,8 +236,10 @@ function renderCard(){
       <div>${viewer}</div>
       <div class="side">
         <h3>${c.name}</h3><div class="sub">${c.id} · ${c.set}</div>
-        <div class="act"><div class="t">Border (frame fix)</div>
-          <button onclick="runStep('border',{},true)">Run border (force)</button></div>
+        <div class="act"><div class="t">Border · frame align</div>
+          <button onclick="startAlign()" ${c.stages.original?'':'disabled'}>◧ Align to real card</button>
+          <button onclick="runStep('border',{},true)">Auto border (aspect only)</button>
+          <div id="alpanel"></div></div>
         <div class="act"><div class="t">Upscale</div>
           <div class="field"><label>model</label><select id="u_model">${models}</select></div>
           <div class="field"><label>scale</label><select id="u_scale"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></div>
@@ -262,9 +279,84 @@ async function runStep(cmd, opts, force){
 async function measure(){
   const c=state.cards[state.idx];
   try{ const r=await get('/api/measure/'+c.id);
-    $('#mout').textContent = r.error?r.error:`top ${r.top} · left ${r.left} · right ${r.right} · side ${r.side_pct}% → ${r.verdict}`;
+    $('#mout').textContent = r.error?r.error:`${r.w}×${r.h} · aspect ${r.aspect} (card ${r.card_aspect}) · Δ${r.delta} · ${r.format_ok?'ok':'format off'}`;
   }catch(e){ $('#mout').textContent='error'; }
 }
+
+/* ---------- frame align: drag to expand until it matches the real card ---------- */
+const align = { on:false, mm:{top:0,bottom:0,left:0,right:0}, meas:null, refOpacity:0.5 };
+const mmr = v => (Math.round(v*10)/10).toFixed(1);
+async function startAlign(){
+  const c=state.cards[state.idx]; if(!c) return;
+  align.on=true; align.mm={top:0,bottom:0,left:0,right:0};
+  try{ align.meas=await get('/api/measure/'+c.id+'?stage=original'); }catch(e){ align.meas=null; }
+  if(!align.meas || align.meas.error){ toast('need an original image to align'); align.on=false; return; }
+  buildAlignLayer(c); renderAlignPanel(); alLayout();
+}
+function buildAlignLayer(c){
+  const v=$('.viewer'); if(!v) return;
+  document.querySelectorAll('.stageimg').forEach(el=>el.style.visibility='hidden');
+  const old=$('#allayer'); if(old) old.remove();
+  const layer=document.createElement('div'); layer.className='alignlayer'; layer.id='allayer';
+  layer.innerHTML=`<img class="al-work" id="al_work" src="${viewsrc(c.id,'original')}">
+    <img class="al-ref" id="al_ref" src="/api/reference/${c.id}" style="opacity:${align.refOpacity}"
+      onerror="this.style.display='none';toast('no online reference for ${c.id} — align to the card outline')">
+    <div class="al-h top" data-e="top"></div><div class="al-h bottom" data-e="bottom"></div>
+    <div class="al-h left" data-e="left"></div><div class="al-h right" data-e="right"></div>`;
+  v.appendChild(layer);
+  layer.querySelectorAll('.al-h').forEach(h=>h.addEventListener('pointerdown',startDrag));
+}
+function startDrag(ev){
+  ev.preventDefault();
+  const edge=ev.currentTarget.dataset.e, r=$('.viewer').getBoundingClientRect(), m=align.meas;
+  const start={x:ev.clientX,y:ev.clientY,...align.mm}, mmY=m.card_h_mm/r.height, mmX=m.card_w_mm/r.width;
+  ev.currentTarget.classList.add('drag');
+  const move=e=>{ const dx=e.clientX-start.x, dy=e.clientY-start.y;
+    if(edge==='top') align.mm.top=Math.max(0,start.top+dy*mmY);
+    else if(edge==='bottom') align.mm.bottom=Math.max(0,start.bottom-dy*mmY);
+    else if(edge==='left') align.mm.left=Math.max(0,start.left+dx*mmX);
+    else if(edge==='right') align.mm.right=Math.max(0,start.right-dx*mmX);
+    alLayout(); };
+  const up=()=>{ document.removeEventListener('pointermove',move); document.removeEventListener('pointerup',up);
+    document.querySelectorAll('.al-h').forEach(h=>h.classList.remove('drag')); };
+  document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
+}
+function alPlan(){ const m=align.meas, mm=align.mm, ppm=m.w/m.card_w_mm;
+  let t=mm.top*ppm,b=mm.bottom*ppm,l=mm.left*ppm,rr=mm.right*ppm;
+  const card=m.card_w_mm/m.card_h_mm;
+  if(m.fix_aspect){ const nw=m.w+l+rr, nh=m.h+t+b;
+    if(nw/nh>card){ const pad=nw/card-nh; t+=pad*m.bias_y; b+=pad*(1-m.bias_y); }
+    else if(nw/nh<card){ const pad=nh*card-nw; l+=pad*m.bias_x; rr+=pad*(1-m.bias_x); } }
+  return {t,b,l,r:rr}; }
+function alLayout(){ const m=align.meas; if(!m) return; const e=alPlan();
+  const fw=m.w+e.l+e.r, fh=m.h+e.t+e.b, w=$('#al_work'); if(!w) return;
+  w.style.left=(100*e.l/fw)+'%'; w.style.top=(100*e.t/fh)+'%';
+  w.style.width=(100*m.w/fw)+'%'; w.style.height=(100*m.h/fh)+'%';
+  const rd=$('#al_read'); if(rd) rd.innerHTML=`result aspect <b>${(fw/fh).toFixed(3)}</b> · card ${m.card_aspect}`;
+  document.querySelectorAll('#alpanel b[data-e]').forEach(b=>{ b.textContent=mmr(align.mm[b.dataset.e]); });
+}
+const nudge=(edge,d)=>{ align.mm[edge]=Math.max(0,align.mm[edge]+d); alLayout(); };
+const setRefOpacity=v=>{ align.refOpacity=+v; const r=$('#al_ref'); if(r) r.style.opacity=v; };
+function renderAlignPanel(){
+  const p=$('#alpanel'); if(!p) return;
+  const edge=(e,l)=>`<div class="edgef"><label>${l}</label><b data-e="${e}">0.0</b>
+    <span class="stp"><button onclick="nudge('${e}',-0.5)">−</button><button onclick="nudge('${e}',0.5)">+</button></span></div>`;
+  p.innerHTML=`<div style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:8px">
+    <div class="tag" style="margin-bottom:6px">drag the blue edges (or ±) until your card matches the ghosted real card, then apply</div>
+    ${edge('top','top')}${edge('bottom','bottom')}${edge('left','left')}${edge('right','right')}
+    <div class="field"><label>ghost</label><input type="range" min="0" max="1" step="0.05" value="${align.refOpacity}" oninput="setRefOpacity(this.value)"></div>
+    <div id="al_read" class="tag" style="margin:6px 0"></div>
+    <div class="row"><button class="primary" onclick="applyAlign()">Apply → border</button>
+      <button onclick="exitAlign()">cancel</button>
+      <button class="ghost" onclick="align.mm={top:0,bottom:0,left:0,right:0};alLayout()">reset</button></div></div>`;
+}
+async function applyAlign(){
+  const mm={...align.mm}; exitAlign();
+  await runStep('border',{top:mm.top,bottom:mm.bottom,left:mm.left,right:mm.right},true);
+}
+function exitAlign(){ if(!align.on) return; align.on=false;
+  const l=$('#allayer'); if(l) l.remove(); const p=$('#alpanel'); if(p) p.innerHTML='';
+  document.querySelectorAll('.stageimg').forEach(el=>el.style.visibility=''); }
 async function delCard(){ const c=state.cards[state.idx];
   if(!confirm('Delete '+c.id+' and all its files?')) return;
   await act('/api/card/'+c.id,{_method:'DELETE'},'deleted'); state.view='library'; render(); }
@@ -387,6 +479,7 @@ async function makeSheet(){
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{state.view=b.dataset.view;render();});
 document.addEventListener('keydown',e=>{ if(state.view!=='card')return;
   if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
+  if(align.on){ if(e.key==='Escape')exitAlign(); return; }
   if(e.key==='ArrowRight')step(1); else if(e.key==='ArrowLeft')step(-1);
   else if(e.key==='ArrowUp'){e.preventDefault();cycleStage(-1);} else if(e.key==='ArrowDown'){e.preventDefault();cycleStage(1);}
   else if(e.key==='Escape'){state.view='library';render();}});

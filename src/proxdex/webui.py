@@ -35,6 +35,8 @@ _BEST = (Stage.EDITED, Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL)
 _BY_LABEL = {s.label: s for s in Stage}
 _HTML_PATH = Path(__file__).parent / "webui.html"
 _ID_OK = re.compile(r"^[A-Za-z0-9]+-[A-Za-z0-9]+$")
+#: cached official card images (ghosted alignment overlay), keyed by card id
+_REF_DIR = ".refs"
 
 
 def _safe_ids(ids: list[Any]) -> list[str]:
@@ -147,11 +149,35 @@ def create_app(lib: Library) -> FastAPI:
             return Response(status_code=404)
         return FileResponse(card.stage_path(st))
 
+    @app.get("/api/reference/{cid}")
+    def api_reference(cid: str) -> Response:
+        """The official card art for this id (fetched by set+id, cached),
+        downscaled — the ghosted target you align a scan's frame against."""
+        if not _ID_OK.match(cid):
+            return Response(status_code=404)
+        cache = lib.root / _REF_DIR / f"{cid}.png"
+        if not cache.exists():
+            cfg = Config.load(lib.root)
+            try:
+                fetched = sources.download_large(cid, cfg)
+            except (requests.RequestException, ProxdexError):
+                return Response(status_code=404)
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            fetched.save(cache)
+        im = Image.open(cache).convert("RGB")
+        im.thumbnail((1000, 1400))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=88)
+        return Response(buf.getvalue(), media_type="image/jpeg")
+
     @app.get("/api/measure/{cid}")
-    def api_measure(cid: str) -> dict[str, Any]:
+    def api_measure(cid: str, stage: str | None = None) -> dict[str, Any]:
         card = lib.find(cid)
-        src = card.best(*_BEST) if card else None
-        if src is None:
+        if card is None:
+            return {"error": "no image"}
+        st = _BY_LABEL.get(stage) if stage else None
+        src = card.stage_path(st) if st and card.has(st) else card.best(*_BEST)
+        if src is None or not src.exists():
             return {"error": "no image"}
         cfg = Config.load(lib.root)
         w, h = borders.size(src)
@@ -163,6 +189,12 @@ def create_app(lib: Library) -> FastAPI:
             "card_aspect": round(cfg.card_w_mm / cfg.card_h_mm, 3),
             "delta": round(bleed.aspect_delta(w, h, cfg), 3),
             "format_ok": bleed.format_ok(w, h, cfg),
+            # aspect-fix config so the UI can replicate bleed.plan for a live preview
+            "card_w_mm": cfg.card_w_mm,
+            "card_h_mm": cfg.card_h_mm,
+            "fix_aspect": cfg.border_fix_aspect,
+            "bias_x": cfg.border_aspect_bias_x,
+            "bias_y": cfg.border_aspect_bias_y,
             "plan": {
                 "top": plan.top,
                 "bottom": plan.bottom,
@@ -241,6 +273,11 @@ def create_app(lib: Library) -> FastAPI:
             )
         args = [cmd, *_safe_ids(body.get("ids") or [])]
         opts = body.get("opts") or {}
+        if cmd == "border":
+            for edge in ("top", "bottom", "left", "right"):
+                val = opts.get(edge)
+                if val:
+                    args += [f"--{edge}", str(float(val))]
         if cmd == "upscale":
             if opts.get("model"):
                 args += ["--model", str(opts["model"])]

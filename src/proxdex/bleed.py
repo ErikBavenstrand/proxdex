@@ -75,15 +75,18 @@ def plan(
     bottom_mm: float = 0.0,
     left_mm: float = 0.0,
     right_mm: float = 0.0,
+    fix_aspect: bool | None = None,
 ) -> Extension:
-    """Edges to add: explicit per-edge growth first, then (if
-    ``border_fix_aspect``) pad the short axis to the card aspect, split per
-    ``aspect_bias_x/y``. All expansion, never crop.
+    """Edges to add: explicit per-edge growth first, then (if aspect-fix is on)
+    pad the short axis to the card aspect, split per ``aspect_bias_x/y``. All
+    expansion, never crop. ``fix_aspect`` overrides the config when not None —
+    the align UI passes exact margins with it off.
     """
+    fix = cfg.border_fix_aspect if fix_aspect is None else fix_aspect
     ppm = cfg.px_per_mm(w)
     top, bottom = top_mm * ppm, bottom_mm * ppm
     left, right = left_mm * ppm, right_mm * ppm
-    if cfg.border_fix_aspect:
+    if fix:
         nw, nh = w + left + right, h + top + bottom
         card = cfg.card_w_mm / cfg.card_h_mm
         if nw / nh > card:  # too wide → add height

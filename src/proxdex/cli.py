@@ -749,6 +749,12 @@ def _library_frame_target(lib: Library) -> tuple[float, float, float] | None:
 )
 @click.option("--left", "left_mm", type=float, default=0.0, help="Expand left (mm).")
 @click.option("--right", "right_mm", type=float, default=0.0, help="Expand right (mm).")
+@click.option(
+    "--fix-aspect/--no-fix-aspect",
+    "fix_aspect",
+    default=None,
+    help="Override config: pad the short axis to card aspect (default: config).",
+)
 @click.option("--force", is_flag=True, help="Re-run even if a bordered image exists.")
 @click.option("--dry-run", is_flag=True, help="Report the per-edge plan; don't write.")
 @click.pass_context
@@ -759,6 +765,7 @@ def border(
     bottom_mm: float,
     left_mm: float,
     right_mm: float,
+    fix_aspect: bool | None,
     force: bool,
     dry_run: bool,
 ) -> None:
@@ -787,7 +794,7 @@ def border(
         if not src.exists():
             raise FileError(f"{card.id}: no original yet (fetch it first)")
         w, h = borders.size(src)
-        ext = bleed.plan(w, h, cfg, **edges)
+        ext = bleed.plan(w, h, cfg, fix_aspect=fix_aspect, **edges)
         fmt = "" if bleed.format_ok(w, h, cfg) else " [yellow](format off)[/]"
         plan = f"+top{ext.top} +bottom{ext.bottom} +left{ext.left} +right{ext.right}px"
         if max(ext.top, ext.bottom, ext.left, ext.right) == 0:

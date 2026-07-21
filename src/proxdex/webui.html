@@ -246,7 +246,7 @@ async function checkFormat(id){
   try{ const r=await get('/api/measure/'+id);
     if(r.error||r.format_ok){ el.innerHTML=''; return; }
     const pl=r.plan;
-    el.innerHTML=`<div class="warn">⚠ format off (aspect ${r.aspect>0?'too wide':'too tall'}, Δ${r.aspect}).
+    el.innerHTML=`<div class="warn">⚠ format off (${r.delta>0?'too wide':'too tall'}, Δ${r.delta}).
       <code>border</code> would pad +top${pl.top} +bottom${pl.bottom} +left${pl.left} +right${pl.right}px.
       <button onclick="runStep('build',{},true)">Rebuild to fix</button>
       <span class="tag">tune fill in Settings → [border] aspect_bias_x/y</span></div>`;

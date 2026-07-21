@@ -1,8 +1,8 @@
-"""Drive ``cardbleed`` with per-edge extensions computed from the measured
-frame, so the printed-and-cut card ends up with correct proportions.
+"""Drive ``cardbleed`` to expand a card's edges — never crop, never auto-detect.
 
-The extension for the top and sides is ``(frame correction) + (cut bleed)``;
-the bottom (never measured, already thick) just gets the cut bleed.
+Two expansions: bring the card to the correct aspect ratio (pad the short axis),
+and optional explicit per-edge growth (from the CLI/UI) to nudge the framing.
+The cut bleed added at sheet time is separate (``uniform``).
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .borders import Borders, Target
 from .config import Config
 from .errors import FileError
 
@@ -55,37 +54,44 @@ class Extension:
 ASPECT_TOL = 0.004
 
 
-def aspect_delta(b: Borders, cfg: Config) -> float:
+def aspect_delta(w: int, h: int, cfg: Config) -> float:
     """Image aspect minus card aspect; ~0 means correctly formatted.
 
-    Positive = image is too wide (needs height); negative = too tall (needs
-    width). Above ``ASPECT_TOL`` the card's format is off.
+    Positive = too wide (needs height); negative = too tall (needs width).
     """
-    return b.w / b.h - cfg.card_w_mm / cfg.card_h_mm
+    return w / h - cfg.card_w_mm / cfg.card_h_mm
 
 
-def format_ok(b: Borders, cfg: Config) -> bool:
-    return abs(aspect_delta(b, cfg)) <= ASPECT_TOL
+def format_ok(w: int, h: int, cfg: Config) -> bool:
+    return abs(aspect_delta(w, h, cfg)) <= ASPECT_TOL
 
 
-def border_plan(b: Borders, tgt: Target, cfg: Config) -> Extension:
-    """Per-edge expansion: bring a thin frame to trim proportions, and (if
-    ``border_fix_aspect``) pad the short axis to the card aspect — distributing
-    that padding per ``aspect_bias_x/y``. No cut bleed (that's added at sheet).
+def plan(
+    w: int,
+    h: int,
+    cfg: Config,
+    *,
+    top_mm: float = 0.0,
+    bottom_mm: float = 0.0,
+    left_mm: float = 0.0,
+    right_mm: float = 0.0,
+) -> Extension:
+    """Edges to add: explicit per-edge growth first, then (if
+    ``border_fix_aspect``) pad the short axis to the card aspect, split per
+    ``aspect_bias_x/y``. All expansion, never crop.
     """
-    top = max(0.0, tgt.top - b.top)
-    left = max(0.0, tgt.side - b.left)
-    right = max(0.0, tgt.side - b.right)
-    bottom = 0.0
+    ppm = cfg.px_per_mm(w)
+    top, bottom = top_mm * ppm, bottom_mm * ppm
+    left, right = left_mm * ppm, right_mm * ppm
     if cfg.border_fix_aspect:
-        w, h = b.w + left + right, b.h + top + bottom
+        nw, nh = w + left + right, h + top + bottom
         card = cfg.card_w_mm / cfg.card_h_mm
-        if w / h > card:  # too wide → add height
-            pad = w / card - h
+        if nw / nh > card:  # too wide → add height
+            pad = nw / card - nh
             top += pad * cfg.border_aspect_bias_y
             bottom += pad * (1.0 - cfg.border_aspect_bias_y)
-        elif w / h < card:  # too tall → add width
-            pad = h * card - w
+        elif nw / nh < card:  # too tall → add width
+            pad = nh * card - nw
             left += pad * cfg.border_aspect_bias_x
             right += pad * (1.0 - cfg.border_aspect_bias_x)
     return Extension(

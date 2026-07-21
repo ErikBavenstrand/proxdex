@@ -2,8 +2,8 @@
 
 The TOML may be flat or grouped into ``[sections]``. A key under a section is
 matched to a field by trying the bare key first, then ``<section>_<key>`` —
-so ``[grade] contrast`` sets ``grade_contrast`` and ``[border]
-target_side_ratio`` sets ``target_side_ratio``.
+so ``[grade] contrast`` sets ``grade_contrast`` and ``[border] fix_aspect``
+sets ``border_fix_aspect``.
 """
 
 from __future__ import annotations
@@ -56,15 +56,8 @@ class Config:
     sheet_reg_marks: str = "none"  # none | corners
     sheet_reg_inset_mm: float = 10.0
     sheet_open: bool = False  # open the PDF after writing
-    # --- border detection / correction --------------------------------------
-    border_thresh: float = 62.0
-    #: side border / card width; 0 = auto (match the thickest measured side)
-    target_side_ratio: float = 0.0
-    #: top border / card height; 0 = auto (match the sides)
-    target_top_ratio: float = 0.0
-    #: `border` skips a card when the needed frame fix is below this (mm)
-    border_tolerance_mm: float = 0.3
-    #: also pad the short axis so the card matches the card aspect ratio
+    # --- border: expand-only (no auto edge detection) -----------------------
+    #: pad the short axis so the card matches the card aspect ratio
     border_fix_aspect: bool = True
     #: how to split aspect padding — fraction added on the left / top (0..1)
     border_aspect_bias_x: float = 0.5

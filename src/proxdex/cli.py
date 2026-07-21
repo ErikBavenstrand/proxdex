@@ -66,17 +66,11 @@ DEFAULT_TOML = """\
 # proxdex library config — tune here, no code edits needed.
 
 [border]
-# `proxdex border` expands a too-thin card frame to correct trim proportions,
-# BEFORE upscaling. Frame-thickness targets as a fraction of card width/height:
-# 0.0 = auto (pad thin edges up to match the sides; bottom never measured).
-# Set e.g. target_side_ratio = 0.045 to also fix uniformly-thin frames.
-target_side_ratio = 0.0
-target_top_ratio  = 0.0
-thresh            = 62      # RGB distance still counted as "the frame colour"
-tolerance_mm      = 0.3     # skip the fix when the deficit is smaller than this
-# also pad the short axis so the card matches the card aspect (fills the cutout,
-# nothing cropped at print). bias = fraction of the padding added on left / top:
+# `proxdex border` only EXPANDS edges (via cardbleed) — no auto edge detection.
+# It pads the short axis so the card matches the card aspect (fills the cutout,
+# nothing cropped at print); bias = fraction of that padding added on left/top:
 # 0.5 = even, 1 = all left/top, 0 = all right/bottom.
+# Nudge specific edges per card with `proxdex border <id> --top/--bottom/… <mm>`.
 fix_aspect     = true
 aspect_bias_x  = 0.5
 aspect_bias_y  = 0.5
@@ -596,41 +590,28 @@ def ls(ctx: click.Context) -> None:
 @click.argument("ids", nargs=-1, metavar="[ID...]")
 @click.pass_context
 def measure(ctx: click.Context, ids: tuple[str, ...]) -> None:
-    """Measure top/side frame thickness and flag cards needing extension."""
+    """Report each card's pixel size and whether its aspect matches the card."""
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     table = Table(box=None, pad_edge=False, header_style="bold")
     for col, just in (
         ("Card", "left"),
         ("Size", "left"),
-        ("top", "right"),
-        ("left", "right"),
-        ("right", "right"),
-        ("side%", "right"),
+        ("aspect", "right"),
         ("format", "left"),
-        ("", "left"),
     ):
         table.add_column(col, justify=just)  # type: ignore[arg-type]
     for card in lib.select(ids):
         src = card.best(Stage.EDITED, Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL)
         if src is None:
-            table.add_row(card.id, "[dim]no image[/]", "", "", "", "", "", "")
+            table.add_row(card.id, "[dim]no image[/]", "", "")
             continue
-        b = borders.measure(borders.load_rgb(src), cfg)
-        tgt = borders.target(b, cfg)
-        need = b.top < tgt.top - 2 or b.left < tgt.side - 2 or b.right < tgt.side - 2
-        delta = bleed.aspect_delta(b, cfg)
-        fmt = "[green]ok[/]" if bleed.format_ok(b, cfg) else f"[yellow]{delta:+.3f}[/]"
-        table.add_row(
-            card.id,
-            f"{b.w}×{b.h}",
-            f"{b.top:.0f}",
-            f"{b.left:.0f}",
-            f"{b.right:.0f}",
-            f"{b.side_ratio * 100:.1f}%",
-            fmt,
-            "[yellow]extend[/]" if need else "[green]ok[/]",
+        w, h = borders.size(src)
+        delta = bleed.aspect_delta(w, h, cfg)
+        fmt = (
+            "[green]ok[/]" if bleed.format_ok(w, h, cfg) else f"[yellow]{delta:+.3f}[/]"
         )
+        table.add_row(card.id, f"{w}×{h}", f"{w / h:.3f}", fmt)
     console.print(table)
 
 
@@ -760,22 +741,42 @@ def _library_frame_target(lib: Library) -> tuple[float, float, float] | None:
 
 @cli.command()
 @click.argument("ids", nargs=-1, metavar="[ID...]")
+@click.option(
+    "--top", "top_mm", type=float, default=0.0, help="Expand the top edge (mm)."
+)
+@click.option(
+    "--bottom", "bottom_mm", type=float, default=0.0, help="Expand bottom (mm)."
+)
+@click.option("--left", "left_mm", type=float, default=0.0, help="Expand left (mm).")
+@click.option("--right", "right_mm", type=float, default=0.0, help="Expand right (mm).")
 @click.option("--force", is_flag=True, help="Re-run even if a bordered image exists.")
 @click.option("--dry-run", is_flag=True, help="Report the per-edge plan; don't write.")
 @click.pass_context
 def border(
-    ctx: click.Context, ids: tuple[str, ...], force: bool, dry_run: bool
+    ctx: click.Context,
+    ids: tuple[str, ...],
+    top_mm: float,
+    bottom_mm: float,
+    left_mm: float,
+    right_mm: float,
+    force: bool,
+    dry_run: bool,
 ) -> None:
-    """Fix a card's frame + format → stage 2 (bordered), before upscaling.
+    """Expand a card's edges → stage 2 (bordered), before upscaling.
 
-    Continues a too-thin frame outward with [cyan]cardbleed[/] and, when
-    [cyan][border] fix_aspect[/] is on, pads the short axis so the card matches
-    the card aspect ratio (so it fills the cutout and nothing gets cropped at
-    print) — split per [cyan]aspect_bias_x/y[/]. Cards already correct are left
-    alone. [cyan]--dry-run[/] just reports the plan.
+    Only ever *adds* border (via [cyan]cardbleed[/]) — no auto edge detection.
+    It pads the short axis so the card matches the card aspect ratio, then adds
+    any explicit [cyan]--top/--bottom/--left/--right[/] growth you give (mm) to
+    nudge the framing. [cyan]--dry-run[/] just reports the plan.
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
+    edges = {
+        "top_mm": top_mm,
+        "bottom_mm": bottom_mm,
+        "left_mm": left_mm,
+        "right_mm": right_mm,
+    }
 
     def one(card: Card) -> None:
         dst = card.stage_path(Stage.BORDERED)
@@ -785,14 +786,12 @@ def border(
         src = card.stage_path(Stage.ORIGINAL)
         if not src.exists():
             raise FileError(f"{card.id}: no original yet (fetch it first)")
-        b = borders.measure(borders.load_rgb(src), cfg)
-        ext = bleed.border_plan(b, borders.target(b, cfg), cfg)
-        tol = round(cfg.border_tolerance_mm * cfg.px_per_mm(b.w))
-        ok_fmt = bleed.format_ok(b, cfg)
-        fmt = "" if ok_fmt else " [yellow](format off)[/]"
+        w, h = borders.size(src)
+        ext = bleed.plan(w, h, cfg, **edges)
+        fmt = "" if bleed.format_ok(w, h, cfg) else " [yellow](format off)[/]"
         plan = f"+top{ext.top} +bottom{ext.bottom} +left{ext.left} +right{ext.right}px"
-        if max(ext.top, ext.bottom, ext.left, ext.right) <= tol and ok_fmt:
-            console.print(f"[dim]· {card.id}: frame & format already correct[/]")
+        if max(ext.top, ext.bottom, ext.left, ext.right) == 0:
+            console.print(f"[dim]· {card.id}: nothing to expand[/]")
             return
         if dry_run:
             console.print(f"[cyan]{card.id}[/]: {plan}{fmt}")

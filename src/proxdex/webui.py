@@ -154,21 +154,15 @@ def create_app(lib: Library) -> FastAPI:
         if src is None:
             return {"error": "no image"}
         cfg = Config.load(lib.root)
-        b = borders.measure(borders.load_rgb(src), cfg)
-        tgt = borders.target(b, cfg)
-        need = b.top < tgt.top - 2 or b.left < tgt.side - 2 or b.right < tgt.side - 2
-        plan = bleed.border_plan(b, tgt, cfg)
-        delta = bleed.aspect_delta(b, cfg)
+        w, h = borders.size(src)
+        plan = bleed.plan(w, h, cfg)  # aspect-only auto plan
         return {
-            "w": b.w,
-            "h": b.h,
-            "top": round(b.top),
-            "left": round(b.left),
-            "right": round(b.right),
-            "side_pct": round(b.side_ratio * 100, 1),
-            "verdict": "extend" if need else "ok",
-            "aspect": round(delta, 3),
-            "format_ok": bleed.format_ok(b, cfg),
+            "w": w,
+            "h": h,
+            "aspect": round(w / h, 3),
+            "card_aspect": round(cfg.card_w_mm / cfg.card_h_mm, 3),
+            "delta": round(bleed.aspect_delta(w, h, cfg), 3),
+            "format_ok": bleed.format_ok(w, h, cfg),
             "plan": {
                 "top": plan.top,
                 "bottom": plan.bottom,

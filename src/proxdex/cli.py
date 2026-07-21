@@ -48,7 +48,7 @@ click.rich_click.COMMAND_GROUPS = {
     "proxdex": [
         {"name": "Library", "commands": ["init", "where", "ls", "index", "ui"]},
         {"name": "Acquire", "commands": ["search", "fetch", "import"]},
-        {"name": "Prepare", "commands": ["border", "upscale", "grade", "measure"]},
+        {"name": "Prepare", "commands": ["border", "upscale", "grade"]},
         {"name": "Produce", "commands": ["build", "back", "sheet", "printed"]},
         {"name": "Calibrate", "commands": ["calibrate"]},
     ]
@@ -65,15 +65,9 @@ _STAGE_BY_LABEL = {s.label: s for s in Stage}
 DEFAULT_TOML = """\
 # proxdex library config — tune here, no code edits needed.
 
-[border]
-# `proxdex border` only EXPANDS edges (via cardbleed) — no auto edge detection.
-# It pads the short axis so the card matches the card aspect (fills the cutout,
-# nothing cropped at print); bias = fraction of that padding added on left/top:
-# 0.5 = even, 1 = all left/top, 0 = all right/bottom.
-# Nudge specific edges per card with `proxdex border <id> --top/--bottom/… <mm>`.
-fix_aspect     = true
-aspect_bias_x  = 0.5
-aspect_bias_y  = 0.5
+# `proxdex border` only EXPANDS edges (via cardbleed) — no auto edge detection,
+# no auto aspect fix. Give the growth per edge: `proxdex border <id>
+# --top/--bottom/--left/--right <mm>`, or use the UI frame-align tool.
 
 [grade]
 # 1) normalize: pull each card to a common baseline first (so scans and
@@ -588,35 +582,6 @@ def ls(ctx: click.Context) -> None:
 
 @cli.command()
 @click.argument("ids", nargs=-1, metavar="[ID...]")
-@click.pass_context
-def measure(ctx: click.Context, ids: tuple[str, ...]) -> None:
-    """Report each card's pixel size and whether its aspect matches the card."""
-    lib = _lib(ctx)
-    cfg = Config.load(lib.root)
-    table = Table(box=None, pad_edge=False, header_style="bold")
-    for col, just in (
-        ("Card", "left"),
-        ("Size", "left"),
-        ("aspect", "right"),
-        ("format", "left"),
-    ):
-        table.add_column(col, justify=just)  # type: ignore[arg-type]
-    for card in lib.select(ids):
-        src = card.best(Stage.EDITED, Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL)
-        if src is None:
-            table.add_row(card.id, "[dim]no image[/]", "", "")
-            continue
-        w, h = borders.size(src)
-        delta = bleed.aspect_delta(w, h, cfg)
-        fmt = (
-            "[green]ok[/]" if bleed.format_ok(w, h, cfg) else f"[yellow]{delta:+.3f}[/]"
-        )
-        table.add_row(card.id, f"{w}×{h}", f"{w / h:.3f}", fmt)
-    console.print(table)
-
-
-@cli.command()
-@click.argument("ids", nargs=-1, metavar="[ID...]")
 @click.option(
     "--model",
     type=click.Choice(upscale_mod.MODELS),
@@ -749,12 +714,6 @@ def _library_frame_target(lib: Library) -> tuple[float, float, float] | None:
 )
 @click.option("--left", "left_mm", type=float, default=0.0, help="Expand left (mm).")
 @click.option("--right", "right_mm", type=float, default=0.0, help="Expand right (mm).")
-@click.option(
-    "--fix-aspect/--no-fix-aspect",
-    "fix_aspect",
-    default=None,
-    help="Override config: pad the short axis to card aspect (default: config).",
-)
 @click.option("--force", is_flag=True, help="Re-run even if a bordered image exists.")
 @click.option("--dry-run", is_flag=True, help="Report the per-edge plan; don't write.")
 @click.pass_context
@@ -765,16 +724,15 @@ def border(
     bottom_mm: float,
     left_mm: float,
     right_mm: float,
-    fix_aspect: bool | None,
     force: bool,
     dry_run: bool,
 ) -> None:
     """Expand a card's edges → stage 2 (bordered), before upscaling.
 
-    Only ever *adds* border (via [cyan]cardbleed[/]) — no auto edge detection.
-    It pads the short axis so the card matches the card aspect ratio, then adds
-    any explicit [cyan]--top/--bottom/--left/--right[/] growth you give (mm) to
-    nudge the framing. [cyan]--dry-run[/] just reports the plan.
+    Only ever *adds* border (via [cyan]cardbleed[/]) — no auto edge detection,
+    no auto aspect fix. Give the growth per edge with
+    [cyan]--top/--bottom/--left/--right[/] (mm), or use the UI frame-align tool.
+    [cyan]--dry-run[/] just reports the plan.
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
@@ -793,20 +751,17 @@ def border(
         src = card.stage_path(Stage.ORIGINAL)
         if not src.exists():
             raise FileError(f"{card.id}: no original yet (fetch it first)")
-        w, h = borders.size(src)
-        ext = bleed.plan(w, h, cfg, fix_aspect=fix_aspect, **edges)
-        fmt = "" if bleed.format_ok(w, h, cfg) else " [yellow](format off)[/]"
+        w, _ = borders.size(src)
+        ext = bleed.plan(w, cfg, **edges)
         plan = f"+top{ext.top} +bottom{ext.bottom} +left{ext.left} +right{ext.right}px"
         if max(ext.top, ext.bottom, ext.left, ext.right) == 0:
-            console.print(f"[dim]· {card.id}: nothing to expand[/]")
+            console.print(f"[dim]· {card.id}: nothing to expand (give --top/… mm)[/]")
             return
         if dry_run:
-            console.print(f"[cyan]{card.id}[/]: {plan}{fmt}")
+            console.print(f"[cyan]{card.id}[/]: {plan}")
             return
         bleed.run(src, dst, ext, cfg)
-        console.print(
-            f"[green]✓[/] {card.id}: {plan}{fmt} → {dst.relative_to(lib.root)}"
-        )
+        console.print(f"[green]✓[/] {card.id}: {plan} → {dst.relative_to(lib.root)}")
 
     _each(lib.select(ids), one, "bordering")
     if not dry_run:

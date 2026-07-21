@@ -2,8 +2,8 @@
 
 The TOML may be flat or grouped into ``[sections]``. A key under a section is
 matched to a field by trying the bare key first, then ``<section>_<key>`` —
-so ``[grade] contrast`` sets ``grade_contrast`` and ``[border] fix_aspect``
-sets ``border_fix_aspect``.
+so ``[grade] contrast`` sets ``grade_contrast`` and ``[print] profile`` sets
+``print_profile``.
 """
 
 from __future__ import annotations
@@ -56,12 +56,6 @@ class Config:
     sheet_reg_marks: str = "none"  # none | corners
     sheet_reg_inset_mm: float = 10.0
     sheet_open: bool = False  # open the PDF after writing
-    # --- border: expand-only (no auto edge detection) -----------------------
-    #: pad the short axis so the card matches the card aspect ratio
-    border_fix_aspect: bool = True
-    #: how to split aspect padding — fraction added on the left / top (0..1)
-    border_aspect_bias_x: float = 0.5
-    border_aspect_bias_y: float = 0.5
     # --- grade: normalize (per-card, dynamic) then look (uniform) ------------
     #: pull every card to a common baseline before the creative recipe
     grade_normalize: bool = True

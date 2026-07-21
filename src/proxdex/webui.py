@@ -1,6 +1,6 @@
 """Local web UI: a FastAPI app with full parity to the CLI.
 
-Display + light queries (cards, search, measure, config) are computed in-process
+Display + light queries (cards, search, frame, config) are computed in-process
 from the library; mutating actions (fetch, border/upscale/grade/build, sheet,
 back, import, printed, calibrate) shell out to the real ``proxdex`` CLI so the
 UI and terminal share exactly one implementation. Served on localhost only.
@@ -24,7 +24,7 @@ from fastapi import Body, FastAPI, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from PIL import Image
 
-from . import bleed, borders, frames, media, report, sources
+from . import borders, frames, media, report, sources
 from . import upscale as upscale_mod
 from .config import Config
 from .errors import ProxdexError
@@ -147,8 +147,9 @@ def create_app(lib: Library) -> FastAPI:
             return Response(status_code=404)
         return FileResponse(card.stage_path(st))
 
-    @app.get("/api/measure/{cid}")
-    def api_measure(cid: str, stage: str | None = None) -> dict[str, Any]:
+    @app.get("/api/frame/{cid}")
+    def api_frame(cid: str, stage: str | None = None) -> dict[str, Any]:
+        """Image pixel size + this card's era frame guide, for the align tool."""
         card = lib.find(cid)
         if card is None:
             return {"error": "no image"}
@@ -158,29 +159,15 @@ def create_app(lib: Library) -> FastAPI:
             return {"error": "no image"}
         cfg = Config.load(lib.root)
         w, h = borders.size(src)
-        plan = bleed.plan(w, h, cfg)  # aspect-only auto plan
         guide = frames.for_set(card.set_id)
         return {
             "w": w,
             "h": h,
-            "aspect": round(w / h, 3),
             "card_aspect": round(cfg.card_w_mm / cfg.card_h_mm, 3),
-            "delta": round(bleed.aspect_delta(w, h, cfg), 3),
-            "format_ok": bleed.format_ok(w, h, cfg),
-            # aspect-fix config so the UI can replicate bleed.plan for a live preview
             "card_w_mm": cfg.card_w_mm,
             "card_h_mm": cfg.card_h_mm,
-            "fix_aspect": cfg.border_fix_aspect,
-            "bias_x": cfg.border_aspect_bias_x,
-            "bias_y": cfg.border_aspect_bias_y,
             # frame-size guide for this era: inner border inset [top,right,bottom,left]
             "guide": {"id": guide.id, "name": guide.name, "inset": list(guide.inset)},
-            "plan": {
-                "top": plan.top,
-                "bottom": plan.bottom,
-                "left": plan.left,
-                "right": plan.right,
-            },
         }
 
     @app.delete("/api/card/{cid}")
@@ -258,8 +245,6 @@ def create_app(lib: Library) -> FastAPI:
                 val = opts.get(edge)
                 if val:
                     args += [f"--{edge}", str(float(val))]
-            if "fix_aspect" in opts:
-                args.append("--fix-aspect" if opts["fix_aspect"] else "--no-fix-aspect")
         if cmd == "upscale":
             if opts.get("model"):
                 args += ["--model", str(opts["model"])]

@@ -58,25 +58,23 @@
   .stageimg.show{opacity:1}
   .viewer .ph{position:absolute;inset:0;display:grid;place-items:center;color:var(--dim);
     font-size:13px;text-align:center;padding:20px}
-  .warn{background:rgba(240,178,75,.13);border:1px solid var(--warn);color:var(--warn);
-    border-radius:10px;padding:8px 12px;margin-bottom:12px;font-size:13px}
-  .warn button{margin:0 6px}
   /* frame-align overlay: drag the lines onto the card's inner border edge */
   .alignlayer{position:absolute;inset:0;z-index:5}
   .al-work{position:absolute;inset:0;width:100%;height:100%;object-fit:fill}
   .al-line{position:absolute;z-index:7;touch-action:none}
-  .al-line::before{content:"";position:absolute;background:#00e9ff;
-    box-shadow:0 0 0 1.5px #061014,0 0 8px rgba(0,233,255,.9)}
-  .al-line.top,.al-line.bottom{left:0;right:0;height:24px;margin-top:-12px;cursor:ns-resize}
-  .al-line.left,.al-line.right{top:0;bottom:0;width:24px;margin-left:-12px;cursor:ew-resize}
-  .al-line.top::before,.al-line.bottom::before{left:0;right:0;top:11px;height:3px}
-  .al-line.left::before,.al-line.right::before{top:0;bottom:0;left:11px;width:3px}
-  .al-line:hover::before,.al-line.drag::before{background:#fff;box-shadow:0 0 0 1.5px #061014,0 0 12px #00e9ff}
-  .al-line .knob{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-    display:grid;place-items:center;font-size:10px;font-weight:800;color:#061014;background:#00e9ff;
-    border:1.5px solid #061014;border-radius:5px;box-shadow:0 1px 5px rgba(0,0,0,.55)}
-  .al-line.top .knob,.al-line.bottom .knob{width:24px;height:17px}
-  .al-line.left .knob,.al-line.right .knob{width:17px;height:24px}
+  .al-line::before{content:"";position:absolute;background:#00e9ff;box-shadow:0 0 0 .5px rgba(0,0,0,.55)}
+  .al-line.top,.al-line.bottom{left:0;right:0;height:22px;margin-top:-11px;cursor:ns-resize}
+  .al-line.left,.al-line.right{top:0;bottom:0;width:22px;margin-left:-11px;cursor:ew-resize}
+  .al-line.top::before,.al-line.bottom::before{left:0;right:0;top:10px;height:1px}
+  .al-line.left::before,.al-line.right::before{top:0;bottom:0;left:10px;width:1px}
+  .al-line:hover::before,.al-line.drag::before{height:2px;background:#fff;box-shadow:0 0 0 .5px rgba(0,0,0,.6),0 0 5px rgba(0,233,255,.7)}
+  .al-line.left:hover::before,.al-line.right:hover::before,.al-line.left.drag::before,.al-line.right.drag::before{height:auto;width:2px}
+  .al-line .knob{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);opacity:.8;
+    display:grid;place-items:center;font-size:8px;font-weight:700;color:#061014;background:#00e9ff;
+    border-radius:4px;box-shadow:0 1px 3px rgba(0,0,0,.4)}
+  .al-line.top .knob,.al-line.bottom .knob{width:18px;height:13px}
+  .al-line.left .knob,.al-line.right .knob{width:13px;height:18px}
+  .al-line:hover .knob,.al-line.drag .knob{opacity:1}
   .edgef{display:grid;grid-template-columns:52px 1fr;gap:8px;align-items:center;margin:3px 0;font-size:12px}
   .edgef b{font-variant-numeric:tabular-nums;text-align:right}
   .edgef .warnpx{color:var(--warn)}
@@ -235,7 +233,6 @@ function renderCard(){
       <b>${c.name}</b><span class="tag">${c.id} · ${state.idx+1}/${state.cards.length}
         · ←/→ cards · ↑/↓ stages</span>
     </div>
-    <div id="fmtwarn"></div>
     <div class="detail">
       <div class="stagelist"><div class="cap">stages</div>${list}</div>
       <div>${viewer}</div>
@@ -243,7 +240,6 @@ function renderCard(){
         <h3>${c.name}</h3><div class="sub">${c.id} · ${c.set}</div>
         <div class="act"><div class="t">Border · frame align</div>
           <button onclick="startAlign()" ${c.stages.original?'':'disabled'}>◧ Align border to spec</button>
-          <button onclick="runStep('border',{},true)">Auto border (aspect only)</button>
           <div id="alpanel"></div></div>
         <div class="act"><div class="t">Upscale</div>
           <div class="field"><label>model</label><select id="u_model">${models}</select></div>
@@ -255,24 +251,10 @@ function renderCard(){
           <button onclick="runStep('grade',{normalize:$('#g_norm').checked},true)">Run grade</button></div>
         <div class="act"><div class="t">Whole pipeline</div>
           <button class="primary" onclick="runStep('build',{},true)">Build (border→upscale→grade)</button></div>
-        <div class="act"><div class="t">Inspect</div>
-          <button onclick="measure()">Measure frame</button><div id="mout" class="tag"></div></div>
         <div class="act"><button class="bad" onclick="delCard()">Delete card</button></div>
       </div>
     </div>`;
   const m=$('#u_model'); if(m) m.value = state.meta.models.includes('digital-art-4x')?'digital-art-4x':m.value;
-  checkFormat(c.id);
-}
-async function checkFormat(id){
-  const el=$('#fmtwarn'); if(!el) return;
-  try{ const r=await get('/api/measure/'+id);
-    if(r.error||r.format_ok){ el.innerHTML=''; return; }
-    const pl=r.plan;
-    el.innerHTML=`<div class="warn">⚠ format off (${r.delta>0?'too wide':'too tall'}, Δ${r.delta}).
-      <code>border</code> would pad +top${pl.top} +bottom${pl.bottom} +left${pl.left} +right${pl.right}px.
-      <button onclick="runStep('build',{},true)">Rebuild to fix</button>
-      <span class="tag">tune fill in Settings → [border] aspect_bias_x/y</span></div>`;
-  }catch(e){ el.innerHTML=''; }
 }
 async function runStep(cmd, opts, force){
   const c=state.cards[state.idx];
@@ -280,12 +262,6 @@ async function runStep(cmd, opts, force){
   await act('/api/step',{cmd, ids:[c.id], opts, force},`${cmd} · ${c.id}`);
   const nc=state.cards[state.idx];
   if(nc && nc.stages[produced]){ state.stage=produced; renderCard(); }  // show the result
-}
-async function measure(){
-  const c=state.cards[state.idx];
-  try{ const r=await get('/api/measure/'+c.id);
-    $('#mout').textContent = r.error?r.error:`${r.w}×${r.h} · aspect ${r.aspect} (card ${r.card_aspect}) · Δ${r.delta} · ${r.format_ok?'ok':'format off'}`;
-  }catch(e){ $('#mout').textContent='error'; }
 }
 
 /* ---------- frame align ---------------------------------------------------
@@ -297,7 +273,7 @@ const mmr = v => (Math.round(v*10)/10).toFixed(1);
 async function startAlign(){
   const c=state.cards[state.idx]; if(!c) return;
   align.on=true;
-  try{ align.meas=await get('/api/measure/'+c.id+'?stage=original'); }catch(e){ align.meas=null; }
+  try{ align.meas=await get('/api/frame/'+c.id+'?stage=original'); }catch(e){ align.meas=null; }
   const m=align.meas;
   if(!m || m.error){ toast('need an original image to align'); align.on=false; return; }
   const v=$('.viewer');                          // show the scan at its own aspect (undistorted)
@@ -339,26 +315,30 @@ function startDrag(ev){
 }
 function computeExtend(){
   const m=align.meas, [gt,gr,gb,gl]=m.guide.inset, w=m.w, h=m.h, b=align.blue;
-  // the marked inner-border edge in image px
-  const FL=b.l*w, FR=(1-b.r)*w, FT=b.t*h, FB=(1-b.b)*h;
-  // the era fixes the border fraction, so the marked inner frame sets the full card size
-  const newW=(FR-FL)/(1-gl-gr), newH=(FB-FT)/(1-gt-gb);
-  const raw={l:newW*gl-FL, r:0, t:newH*gt-FT, b:0}; raw.r=newW-w-raw.l; raw.b=newH-h-raw.t;
+  // marked inner border edges (px) and the inner-frame size they enclose
+  const FL=b.l*w, FR=(1-b.r)*w, FT=b.t*h, FB=(1-b.b)*h, Wf=FR-FL, Hf=FB-FT;
+  // px-per-mm each axis implies (inner frame = card minus its border fractions);
+  // take the larger so the exact-aspect card is big enough to never need cropping
+  const sx=Wf/(m.card_w_mm*(1-gl-gr)), sy=Hf/(m.card_h_mm*(1-gt-gb)), s=Math.max(sx,sy);
+  const newW=m.card_w_mm*s, newH=m.card_h_mm*s;   // exact 63:88 by construction
+  // extend each edge by (target border) − (border already present in the scan)
+  const raw={l:gl*newW-FL, r:gr*newW-(w-FR), t:gt*newH-FT, b:gb*newH-(h-FB)};
   const warn={}; for(const k of ['l','r','t','b']) if(raw[k]<-0.5) warn[k]=Math.round(-raw[k]);
   const ppm=w/m.card_w_mm, px=k=>Math.max(0,raw[k]);
   align.ext={ mm:{left:px('l')/ppm,right:px('r')/ppm,top:px('t')/ppm,bottom:px('b')/ppm},
-    warn, aspect:(newW/newH) };
+    warn, uneven:Math.abs(sx-sy)/Math.max(sx,sy)>0.02, aspect:newW/newH };
   renderExtReadout();
 }
 function renderExtReadout(){
   const e=align.ext; if(!e) return;
   const row=(mk,lbl)=>`<div class="edgef"><label>${lbl}</label><b>+${mmr(e.mm[mk])} mm</b></div>`;
   const rd=$('#al_read'); if(!rd) return;
-  const off=Math.abs(e.aspect-align.meas.card_aspect)>0.02;
+  const notes=[];
+  if(Object.keys(e.warn).length) notes.push('a marked edge is already wider than spec — can extend, not crop');
+  if(e.uneven) notes.push('marks imply an uneven border; aspect stays exact so one axis ends slightly thicker');
   rd.innerHTML=`${row('top','top')}${row('bottom','bottom')}${row('left','left')}${row('right','right')}
-    <div class="tag" style="margin-top:4px">result aspect <b style="color:${off?'var(--warn)':'var(--ok)'}">${e.aspect.toFixed(3)}</b> · card ${align.meas.card_aspect}
-    ${Object.keys(e.warn).length?'<br><span class="warnpx">⚠ marked border already wider than spec on an edge — can extend, not crop</span>':''}
-    ${off?'<br><span class="warnpx">aspect off — make sure each line sits exactly on the inner border edge</span>':''}</div>`;
+    <div class="tag" style="margin-top:4px">aspect <b style="color:var(--ok)">${e.aspect.toFixed(3)}</b> (exact) · border → ${align.meas.guide.name}
+    ${notes.map(n=>`<br><span class="warnpx">⚠ ${n}</span>`).join('')}</div>`;
 }
 function renderAlignPanel(){
   const p=$('#alpanel'); if(!p) return; const g=align.meas.guide;
@@ -373,7 +353,7 @@ function renderAlignPanel(){
 async function applyAlign(){
   const e=align.ext; if(!e){ exitAlign(); return; }
   const mm=e.mm; exitAlign();
-  await runStep('border',{top:mm.top,bottom:mm.bottom,left:mm.left,right:mm.right,fix_aspect:false},true);
+  await runStep('border',{top:mm.top,bottom:mm.bottom,left:mm.left,right:mm.right},true);
 }
 function exitAlign(){ if(!align.on) return; align.on=false;
   const v=$('.viewer'); if(v) v.style.aspectRatio=align.oldAspect||'';

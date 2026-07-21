@@ -50,55 +50,25 @@ class Extension:
         ]
 
 
-# aspect deviation above which a card visibly doesn't fill the cutout
-ASPECT_TOL = 0.004
-
-
-def aspect_delta(w: int, h: int, cfg: Config) -> float:
-    """Image aspect minus card aspect; ~0 means correctly formatted.
-
-    Positive = too wide (needs height); negative = too tall (needs width).
-    """
-    return w / h - cfg.card_w_mm / cfg.card_h_mm
-
-
-def format_ok(w: int, h: int, cfg: Config) -> bool:
-    return abs(aspect_delta(w, h, cfg)) <= ASPECT_TOL
-
-
 def plan(
     w: int,
-    h: int,
     cfg: Config,
     *,
     top_mm: float = 0.0,
     bottom_mm: float = 0.0,
     left_mm: float = 0.0,
     right_mm: float = 0.0,
-    fix_aspect: bool | None = None,
 ) -> Extension:
-    """Edges to add: explicit per-edge growth first, then (if aspect-fix is on)
-    pad the short axis to the card aspect, split per ``aspect_bias_x/y``. All
-    expansion, never crop. ``fix_aspect`` overrides the config when not None —
-    the align UI passes exact margins with it off.
+    """Per-edge growth (mm) converted to pixels. Expansion only — proxdex never
+    crops or auto-detects; the caller decides each edge (CLI flags or the UI
+    frame-align tool), so this is a plain unit conversion.
     """
-    fix = cfg.border_fix_aspect if fix_aspect is None else fix_aspect
     ppm = cfg.px_per_mm(w)
-    top, bottom = top_mm * ppm, bottom_mm * ppm
-    left, right = left_mm * ppm, right_mm * ppm
-    if fix:
-        nw, nh = w + left + right, h + top + bottom
-        card = cfg.card_w_mm / cfg.card_h_mm
-        if nw / nh > card:  # too wide → add height
-            pad = nw / card - nh
-            top += pad * cfg.border_aspect_bias_y
-            bottom += pad * (1.0 - cfg.border_aspect_bias_y)
-        elif nw / nh < card:  # too tall → add width
-            pad = nh * card - nw
-            left += pad * cfg.border_aspect_bias_x
-            right += pad * (1.0 - cfg.border_aspect_bias_x)
     return Extension(
-        top=round(top), bottom=round(bottom), left=round(left), right=round(right)
+        top=round(top_mm * ppm),
+        bottom=round(bottom_mm * ppm),
+        left=round(left_mm * ppm),
+        right=round(right_mm * ppm),
     )
 
 

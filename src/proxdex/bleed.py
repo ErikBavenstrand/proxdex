@@ -94,6 +94,8 @@ def run(src: Path, dst: Path, ext: Extension, cfg: Config) -> None:
         "--suffix",
         suffix,
         "--force",
+        # square rounded/transparent card corners into the border (print-ready)
+        "--fill-corners",
         *ext.as_flags(),
     ]
     try:

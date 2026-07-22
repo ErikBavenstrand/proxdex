@@ -241,10 +241,15 @@ def create_app(lib: Library) -> FastAPI:
         args = [cmd, *_safe_ids(body.get("ids") or [])]
         opts = body.get("opts") or {}
         if cmd == "border":
-            for edge in ("top", "bottom", "left", "right"):
-                val = opts.get(edge)
-                if val:
-                    args += [f"--{edge}", str(float(val))]
+            inner = opts.get("inner")
+            if inner:  # marked inner-border edges (fractions) → era-based solve
+                for edge in ("top", "right", "bottom", "left"):
+                    args += [f"--inner-{edge}", str(float(inner[edge]))]
+            else:
+                for edge in ("top", "bottom", "left", "right"):
+                    val = opts.get(edge)
+                    if val:
+                        args += [f"--{edge}", str(float(val))]
         if cmd == "upscale":
             if opts.get("model"):
                 args += ["--model", str(opts["model"])]

@@ -15,7 +15,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import TypeVar
+from typing import TypeVar, cast
 
 import numpy as np
 import rich_click as click
@@ -31,7 +31,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from . import bleed, borders, media, report, sources
+from . import bleed, borders, frames, media, report, sources
 from . import calibrate as calibrate_mod
 from . import grade as grade_mod
 from . import sheet as sheet_mod
@@ -714,6 +714,10 @@ def _library_frame_target(lib: Library) -> tuple[float, float, float] | None:
 )
 @click.option("--left", "left_mm", type=float, default=0.0, help="Expand left (mm).")
 @click.option("--right", "right_mm", type=float, default=0.0, help="Expand right (mm).")
+@click.option("--inner-top", type=float, default=None, help="Inner frac (top).")
+@click.option("--inner-right", type=float, default=None, help="Inner frac (right).")
+@click.option("--inner-bottom", type=float, default=None, help="Inner frac (bottom).")
+@click.option("--inner-left", type=float, default=None, help="Inner frac (left).")
 @click.option("--force", is_flag=True, help="Re-run even if a bordered image exists.")
 @click.option("--dry-run", is_flag=True, help="Report the per-edge plan; don't write.")
 @click.pass_context
@@ -724,18 +728,32 @@ def border(
     bottom_mm: float,
     left_mm: float,
     right_mm: float,
+    inner_top: float | None,
+    inner_right: float | None,
+    inner_bottom: float | None,
+    inner_left: float | None,
     force: bool,
     dry_run: bool,
 ) -> None:
     """Expand a card's edges → stage 2 (bordered), before upscaling.
 
-    Only ever *adds* border (via [cyan]cardbleed[/]) — no auto edge detection,
-    no auto aspect fix. Give the growth per edge with
-    [cyan]--top/--bottom/--left/--right[/] (mm), or use the UI frame-align tool.
-    [cyan]--dry-run[/] just reports the plan.
+    Only ever *adds* border (via [cyan]cardbleed[/]) — no auto edge detection.
+    Two ways to say how much:
+
+    • [cyan]--top/--bottom/--left/--right[/] <mm>: grow each edge by that much.
+
+    • [cyan]--inner-top/-right/-bottom/-left[/] <fraction 0-1>: where the card's
+    inner border edge currently sits; from the set's era spec proxdex computes
+    the growth that hits the exact card aspect AND correct border widths.
+
+    [cyan]--dry-run[/] reports the plan without writing.
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
+    inner = (inner_top, inner_right, inner_bottom, inner_left)
+    use_inner = any(v is not None for v in inner)
+    if use_inner and not all(v is not None for v in inner):
+        raise click.UsageError("give all four --inner-top/-right/-bottom/-left or none")
     edges = {
         "top_mm": top_mm,
         "bottom_mm": bottom_mm,
@@ -751,17 +769,34 @@ def border(
         src = card.stage_path(Stage.ORIGINAL)
         if not src.exists():
             raise FileError(f"{card.id}: no original yet (fetch it first)")
-        w, _ = borders.size(src)
-        ext = bleed.plan(w, cfg, **edges)
+        w, h = borders.size(src)
+        note = ""
+        if use_inner:
+            guide = frames.for_set(card.set_id)
+            sol = frames.solve_extension(
+                w, h, cast("tuple[float, float, float, float]", inner), guide,
+                cfg.card_w_mm, cfg.card_h_mm,
+            )
+            ext = bleed.plan(
+                w, cfg, top_mm=sol.top, bottom_mm=sol.bottom,
+                left_mm=sol.left, right_mm=sol.right,
+            )
+            over = ""
+            if sol.inflation > 0.03:
+                over = f", +{sol.inflation * 100:.0f}% over spec"
+            note = f" [dim]({guide.name}; aspect {sol.result_aspect:.3f}{over})[/]"
+        else:
+            ext = bleed.plan(w, cfg, **edges)
         plan = f"+top{ext.top} +bottom{ext.bottom} +left{ext.left} +right{ext.right}px"
         if max(ext.top, ext.bottom, ext.left, ext.right) == 0:
-            console.print(f"[dim]· {card.id}: nothing to expand (give --top/… mm)[/]")
+            console.print(f"[dim]· {card.id}: nothing to expand[/]")
             return
         if dry_run:
-            console.print(f"[cyan]{card.id}[/]: {plan}")
+            console.print(f"[cyan]{card.id}[/]: {plan}{note}")
             return
         bleed.run(src, dst, ext, cfg)
-        console.print(f"[green]✓[/] {card.id}: {plan} → {dst.relative_to(lib.root)}")
+        rel = dst.relative_to(lib.root)
+        console.print(f"[green]✓[/] {card.id}: {plan}{note} → {rel}")
 
     _each(lib.select(ids), one, "bordering")
     if not dry_run:

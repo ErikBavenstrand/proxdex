@@ -313,32 +313,35 @@ function startDrag(ev){
     document.querySelectorAll('.al-line').forEach(h=>h.classList.remove('drag')); };
   document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
 }
+/* live preview only — mirrors frames.solve_extension in Python, which is
+   authoritative on apply (the CLI does the real calc). Keep the two in sync. */
+function alSplit(total, fA, fB, cA, cB){
+  const tot=cA+cB+total; let a=tot*fA/(fA+fB), eA=a-cA, eB=(tot-a)-cB;
+  if(eA<0){ eB+=eA; eA=0; } if(eB<0){ eA+=eB; eB=0; }
+  return [Math.max(eA,0), Math.max(eB,0)];
+}
 function computeExtend(){
   const m=align.meas, [gt,gr,gb,gl]=m.guide.inset, w=m.w, h=m.h, b=align.blue;
-  // marked inner border edges (px) and the inner-frame size they enclose
-  const FL=b.l*w, FR=(1-b.r)*w, FT=b.t*h, FB=(1-b.b)*h, Wf=FR-FL, Hf=FB-FT;
-  // px-per-mm each axis implies (inner frame = card minus its border fractions);
-  // take the larger so the exact-aspect card is big enough to never need cropping
-  const sx=Wf/(m.card_w_mm*(1-gl-gr)), sy=Hf/(m.card_h_mm*(1-gt-gb)), s=Math.max(sx,sy);
-  const newW=m.card_w_mm*s, newH=m.card_h_mm*s;   // exact 63:88 by construction
-  // extend each edge by (target border) − (border already present in the scan)
-  const raw={l:gl*newW-FL, r:gr*newW-(w-FR), t:gt*newH-FT, b:gb*newH-(h-FB)};
-  const warn={}; for(const k of ['l','r','t','b']) if(raw[k]<-0.5) warn[k]=Math.round(-raw[k]);
-  const ppm=w/m.card_w_mm, px=k=>Math.max(0,raw[k]);
-  align.ext={ mm:{left:px('l')/ppm,right:px('r')/ppm,top:px('t')/ppm,bottom:px('b')/ppm},
-    warn, uneven:Math.abs(sx-sy)/Math.max(sx,sy)>0.02, aspect:newW/newH };
+  const R=m.card_w_mm/m.card_h_mm;
+  const bl=b.l*w, br=b.r*w, bt=b.t*h, bb=b.b*h;      // current border px per edge
+  const iw=w-bl-br, ih=h-bt-bb;
+  const wspec=iw/(1-gl-gr), hspec=ih/(1-gt-gb);
+  const wp=Math.max(w, R*h, wspec, R*hspec), hp=wp/R; // exact aspect by construction
+  const [eL,eR]=alSplit(wp-w, gl, gr, bl, br);
+  const [eT,eB]=alSplit(hp-h, gt, gb, bt, bb);
+  const ppm=w/m.card_w_mm;
+  align.ext={ mm:{left:eL/ppm,right:eR/ppm,top:eT/ppm,bottom:eB/ppm},
+    aspect:(w+eL+eR)/(h+eT+eB), inflation:Math.max(wp/wspec,hp/hspec)-1 };
   renderExtReadout();
 }
 function renderExtReadout(){
   const e=align.ext; if(!e) return;
   const row=(mk,lbl)=>`<div class="edgef"><label>${lbl}</label><b>+${mmr(e.mm[mk])} mm</b></div>`;
   const rd=$('#al_read'); if(!rd) return;
-  const notes=[];
-  if(Object.keys(e.warn).length) notes.push('a marked edge is already wider than spec — can extend, not crop');
-  if(e.uneven) notes.push('marks imply an uneven border; aspect stays exact so one axis ends slightly thicker');
+  const infl=e.inflation>0.03;
   rd.innerHTML=`${row('top','top')}${row('bottom','bottom')}${row('left','left')}${row('right','right')}
     <div class="tag" style="margin-top:4px">aspect <b style="color:var(--ok)">${e.aspect.toFixed(3)}</b> (exact) · border → ${align.meas.guide.name}
-    ${notes.map(n=>`<br><span class="warnpx">⚠ ${n}</span>`).join('')}</div>`;
+    ${infl?`<br><span class="warnpx">⚠ marks/scan not on-aspect — borders end ~${Math.round(e.inflation*100)}% over spec (aspect kept exact)</span>`:''}</div>`;
 }
 function renderAlignPanel(){
   const p=$('#alpanel'); if(!p) return; const g=align.meas.guide;
@@ -351,9 +354,8 @@ function renderAlignPanel(){
       <button class="ghost" onclick="align.blue={t:0.08,r:0.08,b:0.08,l:0.08};positionLines();computeExtend()">reset</button></div></div>`;
 }
 async function applyAlign(){
-  const e=align.ext; if(!e){ exitAlign(); return; }
-  const mm=e.mm; exitAlign();
-  await runStep('border',{top:mm.top,bottom:mm.bottom,left:mm.left,right:mm.right},true);
+  const b={...align.blue}; exitAlign();   // send the marks; the CLI does the real solve
+  await runStep('border',{inner:{top:b.t,right:b.r,bottom:b.b,left:b.l}},true);
 }
 function exitAlign(){ if(!align.on) return; align.on=false;
   const v=$('.viewer'); if(v) v.style.aspectRatio=align.oldAspect||'';

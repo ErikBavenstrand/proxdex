@@ -106,10 +106,12 @@ rows        = 3
 margin_mm   = 5.0
 spacing_mm  = 0.0          # gap between cards, x
 spacing_y_mm = 0.0
-# Any-size input is scaled to the exact card size (see [card]) at this dpi:
-# cover = fill card, aspect-preserving (matching-aspect cards lose nothing);
-# contain = whole image + white pad; stretch = force exact size.
-fit = "cover"
+# How the trim master maps to the exact card cell (see [card]) at this dpi.
+# stretch = force to the exact cell (default): the border step sized the card
+# per-axis to 63x88mm, so its pixels may not be exactly 63:88 and must fill the
+# cell 1:1. cover = fill preserving aspect (center-crops overflow); contain =
+# whole image + white pad. Use cover/contain only for raw imports, not masters.
+fit = "stretch"
 
 # what to output
 faces       = "fronts"     # fronts | backs | duplex

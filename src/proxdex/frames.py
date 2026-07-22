@@ -24,17 +24,27 @@ class FrameGuide:
     inset: tuple[float, float, float, float]
 
 
-def _uniform(border_px: float, w: float, h: float) -> tuple[float, float, float, float]:
-    """A uniform ``border_px`` on a ``w``×``h`` reference card, as edge fractions."""
-    fx, fy = border_px / w, border_px / h
-    return (fy, fx, fy, fx)
+def _mm(
+    top: float,
+    right: float,
+    bottom: float,
+    left: float,
+    w: float = 63.0,
+    h: float = 88.0,
+) -> tuple[float, float, float, float]:
+    """Per-edge border widths (mm) → inset fractions [top, right, bottom, left]
+    of a ``w``×``h`` mm card. Insets are taken against the true card so the
+    ratios stay consistent with the card aspect (no reference-size skew)."""
+    return (top / h, right / w, bottom / h, left / w)
 
 
-# Base Set..Neo Destiny (yellow-border WOTC era): uniform 20px on a 372x515 card.
+# Base Set..Neo Destiny (yellow-border WOTC era). Measured off a real card with
+# calipers (top 3.3 / bottom 3.6 / left 3.2 / right 3.1 mm); the border wanders a
+# little card-to-card, so we use the tidy averages top/bottom 3.45, sides 3.15mm.
 _WOTC = FrameGuide(
     id="wotc",
     name="WOTC vintage (Base-Neo Destiny)",
-    inset=_uniform(20, 372, 515),
+    inset=_mm(3.45, 3.15, 3.45, 3.15),
 )
 
 GUIDES: dict[str, FrameGuide] = {_WOTC.id: _WOTC}
@@ -107,21 +117,33 @@ def solve_extension(
     ft, fr, fb, fl = inner
     bt, br, bb, bl = ft * h, fr * w, fb * h, fl * w  # current border px per edge
     gt, gr, gb, gl = guide.inset
-    r = card_w_mm / card_h_mm
-    inner_w, inner_h = w - bl - br, h - bt - bb
-    w_spec = inner_w / (1 - gl - gr)  # card width that makes L/R borders exact
-    h_spec = inner_h / (1 - gt - gb)  # card height that makes T/B borders exact
-    # final card: exact aspect, big enough that no edge crops and borders ≥ spec
-    w_final = max(float(w), r * h, w_spec, r * h_spec)
-    h_final = w_final / r
+    inner_w, inner_h = w - bl - br, h - bt - bb  # the (fixed) inner frame in px
+    # The final card is card_w_mm:card_h_mm exactly, so it has ONE free variable:
+    # the scale s (px per mm), with w_final = card_w_mm*s, h_final = card_h_mm*s.
+    # aw, ah are how many px the inner frame *should* span at s=1 per axis; each
+    # axis alone wants s_axis = inner_px / a. With the aspect locked we can't hit
+    # both, so take the least-squares s that minimizes total border deviation
+    # (edges of the longer axis carry more weight).
+    aw = (1 - gl - gr) * card_w_mm
+    ah = (1 - gt - gb) * card_h_mm
+    s = (aw * inner_w + ah * inner_h) / (aw * aw + ah * ah)
+    s = max(s, w / card_w_mm, h / card_h_mm)  # never crop: final ≥ current
+    w_final, h_final = card_w_mm * s, card_h_mm * s
+    # grow each edge toward its own target border (deficit); _split re-centres and
+    # never crops, so a single cropped/thin edge takes the growth.
     ext_l, ext_r = _split(w_final - w, gl, gr, bl, br)
     ext_t, ext_b = _split(h_final - h, gt, gb, bt, bb)
     ppm = w / card_w_mm
+    border_w = (bl + br + (w_final - w)) / 2  # resulting per-edge border, px
+    border_h = (bt + bb + (h_final - h)) / 2
     return Extend(
         top=ext_t / ppm,
         bottom=ext_b / ppm,
         left=ext_l / ppm,
         right=ext_r / ppm,
         result_aspect=(w + ext_l + ext_r) / (h + ext_t + ext_b),
-        inflation=max(w_final / w_spec, h_final / h_spec) - 1,
+        inflation=max(
+            abs(border_w - gl * w_final) / (gl * w_final),
+            abs(border_h - gt * h_final) / (gt * h_final),
+        ),
     )

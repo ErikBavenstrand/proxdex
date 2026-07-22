@@ -322,16 +322,21 @@ function alSplit(total, fA, fB, cA, cB){
 }
 function computeExtend(){
   const m=align.meas, [gt,gr,gb,gl]=m.guide.inset, w=m.w, h=m.h, b=align.blue;
-  const R=m.card_w_mm/m.card_h_mm;
+  const cw=m.card_w_mm, ch=m.card_h_mm;
   const bl=b.l*w, br=b.r*w, bt=b.t*h, bb=b.b*h;      // current border px per edge
-  const iw=w-bl-br, ih=h-bt-bb;
-  const wspec=iw/(1-gl-gr), hspec=ih/(1-gt-gb);
-  const wp=Math.max(w, R*h, wspec, R*hspec), hp=wp/R; // exact aspect by construction
-  const [eL,eR]=alSplit(wp-w, gl, gr, bl, br);
-  const [eT,eB]=alSplit(hp-h, gt, gb, bt, bb);
-  const ppm=w/m.card_w_mm;
+  const iw=w-bl-br, ih=h-bt-bb;                       // inner frame (fixed)
+  // one free variable (scale s, px/mm) with aspect locked; least-squares fit so
+  // borders land as close to spec as possible; grow each edge by its deficit.
+  const aw=(1-gl-gr)*cw, ah=(1-gt-gb)*ch;
+  let s=(aw*iw+ah*ih)/(aw*aw+ah*ah);
+  s=Math.max(s, w/cw, h/ch);                          // never crop
+  const wf=cw*s, hf=ch*s;
+  const [eL,eR]=alSplit(wf-w, gl, gr, bl, br);
+  const [eT,eB]=alSplit(hf-h, gt, gb, bt, bb);
+  const ppm=w/cw, borderW=(bl+br+(wf-w))/2, borderH=(bt+bb+(hf-h))/2;
   align.ext={ mm:{left:eL/ppm,right:eR/ppm,top:eT/ppm,bottom:eB/ppm},
-    aspect:(w+eL+eR)/(h+eT+eB), inflation:Math.max(wp/wspec,hp/hspec)-1 };
+    aspect:(w+eL+eR)/(h+eT+eB),
+    inflation:Math.max(Math.abs(borderW-gl*wf)/(gl*wf), Math.abs(borderH-gt*hf)/(gt*hf)) };
   renderExtReadout();
 }
 function renderExtReadout(){
@@ -341,7 +346,7 @@ function renderExtReadout(){
   const infl=e.inflation>0.03;
   rd.innerHTML=`${row('top','top')}${row('bottom','bottom')}${row('left','left')}${row('right','right')}
     <div class="tag" style="margin-top:4px">aspect <b style="color:var(--ok)">${e.aspect.toFixed(3)}</b> (exact) · border → ${align.meas.guide.name}
-    ${infl?`<br><span class="warnpx">⚠ marks/scan not on-aspect — borders end ~${Math.round(e.inflation*100)}% over spec (aspect kept exact)</span>`:''}</div>`;
+    ${infl?`<br><span class="warnpx">⚠ scan not on-aspect — borders end ~${Math.round(e.inflation*100)}% off spec (aspect kept exact; check the marks)</span>`:''}</div>`;
 }
 function renderAlignPanel(){
   const p=$('#alpanel'); if(!p) return; const g=align.meas.guide;

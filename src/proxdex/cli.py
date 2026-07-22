@@ -773,13 +773,9 @@ def border(
         note = ""
         if use_inner:
             guide = frames.for_set(card.set_id)
+            inner_t = cast("tuple[float, float, float, float]", inner)
             sol = frames.solve_extension(
-                w,
-                h,
-                cast("tuple[float, float, float, float]", inner),
-                guide,
-                cfg.card_w_mm,
-                cfg.card_h_mm,
+                w, h, inner_t, guide, cfg.card_w_mm, cfg.card_h_mm
             )
             ext = bleed.plan(
                 w,
@@ -789,10 +785,10 @@ def border(
                 left_mm=sol.left,
                 right_mm=sol.right,
             )
-            over = ""
-            if sol.inflation > 0.03:
-                over = f", +{sol.inflation * 100:.0f}% over spec"
-            note = f" [dim]({guide.name}; aspect {sol.result_aspect:.3f}{over})[/]"
+            note = f" [dim]({guide.name})[/]"
+            if sol.over_target:
+                over = ", ".join(sol.over_target)
+                note += f" [yellow](over spec on {over})[/]"
         else:
             ext = bleed.plan(w, cfg, **edges)
         plan = f"+top{ext.top} +bottom{ext.bottom} +left{ext.left} +right{ext.right}px"

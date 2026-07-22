@@ -67,33 +67,14 @@ def for_set(set_id: str) -> FrameGuide:
 
 @dataclass(frozen=True, slots=True)
 class Extend:
-    """Per-edge expansion in mm plus what it achieves."""
+    """Per-edge expansion in mm to reach the era's target border widths."""
 
     top: float
     bottom: float
     left: float
     right: float
-    result_aspect: float  # exactly the card aspect, by construction
-    inflation: float  # how much thicker than spec a border ends (0 = spec exact)
-
-
-def _split(
-    total: float, frac_a: float, frac_b: float, cur_a: float, cur_b: float
-) -> tuple[float, float]:
-    """Divide ``total`` growth between two opposite edges toward the spec
-    proportion (``frac_a:frac_b`` of the final border), never cropping — a
-    negative share is pushed to the other edge so the sum is always ``total``.
-    """
-    border_total = cur_a + cur_b + total
-    a = border_total * frac_a / (frac_a + frac_b)
-    ext_a, ext_b = a - cur_a, (border_total - a) - cur_b
-    if ext_a < 0:
-        ext_b += ext_a
-        ext_a = 0.0
-    if ext_b < 0:
-        ext_a += ext_b
-        ext_b = 0.0
-    return max(ext_a, 0.0), max(ext_b, 0.0)
+    #: edges whose border is already wider than target (can't shrink → left as-is)
+    over_target: tuple[str, ...]
 
 
 def solve_extension(
@@ -104,46 +85,43 @@ def solve_extension(
     card_w_mm: float = 63.0,
     card_h_mm: float = 88.0,
 ) -> Extend:
-    """From the marked inner-border edges (``inner`` = top,right,bottom,left as
-    fractions of the image, i.e. current border thickness per edge) and the era
-    ``guide``, compute the per-edge expansion (mm) that makes the card **exactly**
-    ``card_w_mm:card_h_mm`` while bringing every border to (at least) spec.
+    """Widen each edge to the era's target border, width and height treated
+    **independently**.
 
-    The image edge is assumed to be the card's trim edge. Expansion only — the
-    content is never scaled or cropped; we grow the proportionally-short axis, so
-    the exact aspect is always reachable. When the marks/scan aren't perfectly
-    on-aspect the borders land spec-proportional but slightly thick (``inflation``).
+    The rule: inner-frame-width + left + right = ``card_w_mm``, and inner-frame-
+    height + top + bottom = ``card_h_mm``. So on each axis the inner frame spans
+    (card minus the two target borders) mm, which fixes that axis's px-per-mm
+    from the marked frame alone -- no rescaling, no cross-axis coupling, and no
+    assumption that borders are uniform (each edge has its own target). Every
+    edge then grows by (its target minus its current border). ``inner`` = the
+    current border per edge as image fractions [top, right, bottom, left].
     """
     ft, fr, fb, fl = inner
-    bt, br, bb, bl = ft * h, fr * w, fb * h, fl * w  # current border px per edge
+    cur_t, cur_r, cur_b, cur_l = ft * h, fr * w, fb * h, fl * w  # current px per edge
     gt, gr, gb, gl = guide.inset
-    inner_w, inner_h = w - bl - br, h - bt - bb  # the (fixed) inner frame in px
-    # The final card is card_w_mm:card_h_mm exactly, so it has ONE free variable:
-    # the scale s (px per mm), with w_final = card_w_mm*s, h_final = card_h_mm*s.
-    # aw, ah are how many px the inner frame *should* span at s=1 per axis; each
-    # axis alone wants s_axis = inner_px / a. With the aspect locked we can't hit
-    # both, so take the least-squares s that minimizes total border deviation
-    # (edges of the longer axis carry more weight).
-    aw = (1 - gl - gr) * card_w_mm
-    ah = (1 - gt - gb) * card_h_mm
-    s = (aw * inner_w + ah * inner_h) / (aw * aw + ah * ah)
-    s = max(s, w / card_w_mm, h / card_h_mm)  # never crop: final ≥ current
-    w_final, h_final = card_w_mm * s, card_h_mm * s
-    # grow each edge toward its own target border (deficit); _split re-centres and
-    # never crops, so a single cropped/thin edge takes the growth.
-    ext_l, ext_r = _split(w_final - w, gl, gr, bl, br)
-    ext_t, ext_b = _split(h_final - h, gt, gb, bt, bb)
-    ppm = w / card_w_mm
-    border_w = (bl + br + (w_final - w)) / 2  # resulting per-edge border, px
-    border_h = (bt + bb + (h_final - h)) / 2
+    inner_w, inner_h = w - cur_l - cur_r, h - cur_t - cur_b
+    ppm = w / card_w_mm  # cardbleed's mm→px unit (single scale for all its flags)
+    if inner_w <= 0 or inner_h <= 0 or gl + gr >= 1 or gt + gb >= 1:
+        return Extend(0.0, 0.0, 0.0, 0.0, ())
+    # px-per-mm per axis, from the sum rule (inner spans card minus its borders)
+    sw = inner_w / (card_w_mm * (1 - gl - gr))
+    sh = inner_h / (card_h_mm * (1 - gt - gb))
+    tgt_l, tgt_r = gl * card_w_mm * sw, gr * card_w_mm * sw
+    tgt_t, tgt_b = gt * card_h_mm * sh, gb * card_h_mm * sh
+    over = tuple(
+        name
+        for name, cur, tgt in (
+            ("top", cur_t, tgt_t),
+            ("bottom", cur_b, tgt_b),
+            ("left", cur_l, tgt_l),
+            ("right", cur_r, tgt_r),
+        )
+        if cur > tgt + 0.5
+    )
     return Extend(
-        top=ext_t / ppm,
-        bottom=ext_b / ppm,
-        left=ext_l / ppm,
-        right=ext_r / ppm,
-        result_aspect=(w + ext_l + ext_r) / (h + ext_t + ext_b),
-        inflation=max(
-            abs(border_w - gl * w_final) / (gl * w_final),
-            abs(border_h - gt * h_final) / (gt * h_final),
-        ),
+        top=max(0.0, tgt_t - cur_t) / ppm,
+        bottom=max(0.0, tgt_b - cur_b) / ppm,
+        left=max(0.0, tgt_l - cur_l) / ppm,
+        right=max(0.0, tgt_r - cur_r) / ppm,
+        over_target=over,
     )

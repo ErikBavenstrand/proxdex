@@ -313,40 +313,31 @@ function startDrag(ev){
     document.querySelectorAll('.al-line').forEach(h=>h.classList.remove('drag')); };
   document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
 }
-/* live preview only — mirrors frames.solve_extension in Python, which is
-   authoritative on apply (the CLI does the real calc). Keep the two in sync. */
-function alSplit(total, fA, fB, cA, cB){
-  const tot=cA+cB+total; let a=tot*fA/(fA+fB), eA=a-cA, eB=(tot-a)-cB;
-  if(eA<0){ eB+=eA; eA=0; } if(eB<0){ eA+=eB; eB=0; }
-  return [Math.max(eA,0), Math.max(eB,0)];
-}
+/* live preview only — mirrors frames.solve_extension in Python (authoritative on
+   apply). Width and height are independent: on each axis the inner frame spans
+   (card − its two target borders) mm, which fixes that axis's px/mm; each edge
+   then grows to its own target border. No rescale, no uniform-border assumption. */
 function computeExtend(){
   const m=align.meas, [gt,gr,gb,gl]=m.guide.inset, w=m.w, h=m.h, b=align.blue;
-  const cw=m.card_w_mm, ch=m.card_h_mm;
-  const bl=b.l*w, br=b.r*w, bt=b.t*h, bb=b.b*h;      // current border px per edge
-  const iw=w-bl-br, ih=h-bt-bb;                       // inner frame (fixed)
-  // one free variable (scale s, px/mm) with aspect locked; least-squares fit so
-  // borders land as close to spec as possible; grow each edge by its deficit.
-  const aw=(1-gl-gr)*cw, ah=(1-gt-gb)*ch;
-  let s=(aw*iw+ah*ih)/(aw*aw+ah*ah);
-  s=Math.max(s, w/cw, h/ch);                          // never crop
-  const wf=cw*s, hf=ch*s;
-  const [eL,eR]=alSplit(wf-w, gl, gr, bl, br);
-  const [eT,eB]=alSplit(hf-h, gt, gb, bt, bb);
-  const ppm=w/cw, borderW=(bl+br+(wf-w))/2, borderH=(bt+bb+(hf-h))/2;
-  align.ext={ mm:{left:eL/ppm,right:eR/ppm,top:eT/ppm,bottom:eB/ppm},
-    aspect:(w+eL+eR)/(h+eT+eB),
-    inflation:Math.max(Math.abs(borderW-gl*wf)/(gl*wf), Math.abs(borderH-gt*hf)/(gt*hf)) };
+  const cw=m.card_w_mm, ch=m.card_h_mm, ppm=w/cw;
+  const curL=b.l*w, curR=b.r*w, curT=b.t*h, curB=b.b*h;   // current border px
+  const iw=w-curL-curR, ih=h-curT-curB;
+  if(iw<=0||ih<=0){ align.ext={mm:{top:0,bottom:0,left:0,right:0},over:[]}; renderExtReadout(); return; }
+  const sw=iw/(cw*(1-gl-gr)), sh=ih/(ch*(1-gt-gb));        // px/mm per axis
+  const tL=gl*cw*sw, tR=gr*cw*sw, tT=gt*ch*sh, tB=gb*ch*sh; // target border px
+  const over=[["top",curT,tT],["bottom",curB,tB],["left",curL,tL],["right",curR,tR]]
+    .filter(x=>x[1]>x[2]+0.5).map(x=>x[0]);
+  align.ext={ mm:{top:Math.max(0,tT-curT)/ppm, bottom:Math.max(0,tB-curB)/ppm,
+    left:Math.max(0,tL-curL)/ppm, right:Math.max(0,tR-curR)/ppm}, over };
   renderExtReadout();
 }
 function renderExtReadout(){
   const e=align.ext; if(!e) return;
   const row=(mk,lbl)=>`<div class="edgef"><label>${lbl}</label><b>+${mmr(e.mm[mk])} mm</b></div>`;
   const rd=$('#al_read'); if(!rd) return;
-  const infl=e.inflation>0.03;
   rd.innerHTML=`${row('top','top')}${row('bottom','bottom')}${row('left','left')}${row('right','right')}
-    <div class="tag" style="margin-top:4px">aspect <b style="color:var(--ok)">${e.aspect.toFixed(3)}</b> (exact) · border → ${align.meas.guide.name}
-    ${infl?`<br><span class="warnpx">⚠ scan not on-aspect — borders end ~${Math.round(e.inflation*100)}% off spec (aspect kept exact; check the marks)</span>`:''}</div>`;
+    <div class="tag" style="margin-top:4px">grow each edge to the ${align.meas.guide.name} border
+    ${e.over.length?`<br><span class="warnpx">⚠ border already over spec on ${e.over.join(', ')} (left as-is — can't crop)</span>`:''}</div>`;
 }
 function renderAlignPanel(){
   const p=$('#alpanel'); if(!p) return; const g=align.meas.guide;

@@ -774,12 +774,20 @@ def border(
         if use_inner:
             guide = frames.for_set(card.set_id)
             sol = frames.solve_extension(
-                w, h, cast("tuple[float, float, float, float]", inner), guide,
-                cfg.card_w_mm, cfg.card_h_mm,
+                w,
+                h,
+                cast("tuple[float, float, float, float]", inner),
+                guide,
+                cfg.card_w_mm,
+                cfg.card_h_mm,
             )
             ext = bleed.plan(
-                w, cfg, top_mm=sol.top, bottom_mm=sol.bottom,
-                left_mm=sol.left, right_mm=sol.right,
+                w,
+                cfg,
+                top_mm=sol.top,
+                bottom_mm=sol.bottom,
+                left_mm=sol.left,
+                right_mm=sol.right,
             )
             over = ""
             if sol.inflation > 0.03:

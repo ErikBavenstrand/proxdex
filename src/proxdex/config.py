@@ -28,10 +28,11 @@ class Config:
     #: page render resolution; high so the printer/driver never upsamples
     sheet_dpi: int = 1400
     #: how the trim master maps to the exact card cell: stretch | cover | contain.
-    #: stretch is the default — the border step already sized the card per-axis to
-    #: 63x88mm, so its pixels may not be exactly 63:88; stretching to the cell
-    #: prints the borders and art at true size. cover would crop that away.
-    sheet_fit: str = "stretch"
+    #: cover is the default — the border step (cardbleed) already produces an
+    #: exactly-63:88 master, so cover scales it into the cell with no crop and no
+    #: distortion; it only ever shaves a sub-pixel overflow. Never stretch here:
+    #: that re-introduces the print-time rescale the pipeline exists to avoid.
+    sheet_fit: str = "cover"
     sheet_cols: int = 3
     sheet_rows: int = 3
     sheet_margin_mm: float = 5.0

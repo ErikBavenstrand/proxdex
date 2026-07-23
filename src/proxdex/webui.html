@@ -268,7 +268,7 @@ async function runStep(cmd, opts, force){
    Drag the four lines onto the card's actual inner border edge. From the card's
    era (set id) we know the true border width, so one per-edge extension fixes
    aspect AND border width together — no automatic guessing. Then upscale.    */
-const align = { on:false, meas:null, blue:{t:0,r:0,b:0,l:0}, ext:null, oldAspect:'' };
+const align = { on:false, meas:null, blue:{t:0,r:0,b:0,l:0}, plan:null, stretch:false, oldAspect:'' };
 const mmr = v => (Math.round(v*10)/10).toFixed(1);
 async function startAlign(){
   const c=state.cards[state.idx]; if(!c) return;
@@ -313,45 +313,65 @@ function startDrag(ev){
     document.querySelectorAll('.al-line').forEach(h=>h.classList.remove('drag')); };
   document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
 }
-/* live preview only — mirrors frames.solve_extension in Python (authoritative on
-   apply). Width and height are independent: on each axis the inner frame spans
-   (card − its two target borders) mm, which fixes that axis's px/mm; each edge
-   then grows to its own target border. No rescale, no uniform-border assumption. */
-function computeExtend(){
-  const m=align.meas, [gt,gr,gb,gl]=m.guide.inset, w=m.w, h=m.h, b=align.blue;
-  const cw=m.card_w_mm, ch=m.card_h_mm, ppm=w/cw;
-  const curL=b.l*w, curR=b.r*w, curT=b.t*h, curB=b.b*h;   // current border px
-  const iw=w-curL-curR, ih=h-curT-curB;
-  if(iw<=0||ih<=0){ align.ext={mm:{top:0,bottom:0,left:0,right:0},over:[]}; renderExtReadout(); return; }
-  const sw=iw/(cw*(1-gl-gr)), sh=ih/(ch*(1-gt-gb));        // px/mm per axis
-  const tL=gl*cw*sw, tR=gr*cw*sw, tT=gt*ch*sh, tB=gb*ch*sh; // target border px
-  const over=[["top",curT,tT],["bottom",curB,tB],["left",curL,tL],["right",curR,tR]]
-    .filter(x=>x[1]>x[2]+0.5).map(x=>x[0]);
-  align.ext={ mm:{top:Math.max(0,tT-curT)/ppm, bottom:Math.max(0,tB-curB)/ppm,
-    left:Math.max(0,tL-curL)/ppm, right:Math.max(0,tR-curR)/ppm}, over };
-  renderExtReadout();
+/* live preview only — mirrors cardbleed.solve_fit (authoritative on apply).
+   Reshapes to the exact card aspect with borders as close to the era spec as
+   possible (exactly, with stretch); an already-over-target edge may be shaved. */
+function solveFit(m,b,stretch){
+  const g={top:m.guide.inset[0],right:m.guide.inset[1],bottom:m.guide.inset[2],left:m.guide.inset[3]};
+  const cw=m.card_w_mm, ch=m.card_h_mm, w=m.w, h=m.h;
+  let cur={top:b.t*h,right:b.r*w,bottom:b.b*h,left:b.l*w};   // current border px
+  let iw=w-cur.left-cur.right, ih=h-cur.top-cur.bottom;
+  if(iw<=0||ih<=0) return null;
+  const ca=cw/ch, expInner=ca*(1-g.left-g.right)/(1-g.top-g.bottom);
+  let w2=w, h2=h, sx=1, sy=1;
+  if(stretch){
+    if(iw/ih>expInner) sy=(iw/ih)/expInner; else sx=expInner/(iw/ih);
+    cur={top:cur.top*sy,right:cur.right*sx,bottom:cur.bottom*sy,left:cur.left*sx};
+    iw*=sx; ih*=sy; w2=w*sx; h2=h*sy;
+  }
+  const a=iw/cw, c=ih/ch, p=1-g.left-g.right, q=1-g.top-g.bottom;
+  let u=(a*p+c*q)/(a*a+c*c);
+  u=Math.min(u, 1/Math.max(iw/cw, ih/ch));                  // never shave into the art
+  const k=1/u, tw=cw*k, th=ch*k;
+  const split=(budget,ta,tb,ca_,cb)=>{
+    const loA=-ca_, loB=-cb, surplus=budget-(ta-ca_)-(tb-cb);
+    let ea=(ta-ca_)+surplus/2, eb=(tb-cb)+surplus/2;
+    if(ea<loA){ ea=loA; eb=budget-loA; } if(eb<loB){ eb=loB; ea=budget-loB; }
+    return [ea,eb];
+  };
+  const [eL,eR]=split(tw-w2, g.left*tw, g.right*tw, cur.left, cur.right);
+  const [eT,eB]=split(th-h2, g.top*th, g.bottom*th, cur.top, cur.bottom);
+  const ext={left:eL,right:eR,top:eT,bottom:eB}, bd={};
+  for(const e of ['top','right','bottom','left'])
+    bd[e]=(cur[e]+ext[e])/((e==='left'||e==='right')?tw:th);
+  return {tw:Math.round(tw),th:Math.round(th),borders:bd,
+    cropped:['top','right','bottom','left'].filter(e=>ext[e]<-0.5)};
 }
+function computeExtend(){ align.plan=solveFit(align.meas,align.blue,align.stretch); renderExtReadout(); }
 function renderExtReadout(){
-  const e=align.ext; if(!e) return;
-  const row=(mk,lbl)=>`<div class="edgef"><label>${lbl}</label><b>+${mmr(e.mm[mk])} mm</b></div>`;
-  const rd=$('#al_read'); if(!rd) return;
-  rd.innerHTML=`${row('top','top')}${row('bottom','bottom')}${row('left','left')}${row('right','right')}
-    <div class="tag" style="margin-top:4px">grow each edge to the ${align.meas.guide.name} border
-    ${e.over.length?`<br><span class="warnpx">⚠ border already over spec on ${e.over.join(', ')} (left as-is — can't crop)</span>`:''}</div>`;
+  const p=align.plan, rd=$('#al_read'); if(!rd) return;
+  if(!p){ rd.innerHTML='<div class="tag"><span class="warnpx">marks leave no inner frame</span></div>'; return; }
+  const row=(mk,lbl)=>`<div class="edgef"><label>${lbl}</label><b>${(p.borders[mk]*100).toFixed(2)}%</b></div>`;
+  rd.innerHTML=`${row('top','top')}${row('right','right')}${row('bottom','bottom')}${row('left','left')}
+    <div class="tag" style="margin-top:4px">→ ${p.tw}×${p.th}px at the ${align.meas.guide.name} spec
+    ${p.cropped.length?`<br><span class="warnpx">⚠ shaved over-target ${p.cropped.join(', ')}</span>`:''}</div>`;
 }
 function renderAlignPanel(){
   const p=$('#alpanel'); if(!p) return; const g=align.meas.guide;
   p.innerHTML=`<div style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:8px">
     <div class="tag" style="margin-bottom:6px">drag <b style="color:#00e9ff">T B L R</b> onto the card's inner border edge —
-      the <b>${g.name}</b> spec then sets the extension</div>
+      the <b>${g.name}</b> spec then reshapes to the exact card aspect</div>
     <div id="al_read"></div>
-    <div class="row" style="margin-top:8px"><button class="primary" onclick="applyAlign()">Extend → border</button>
+    <label class="tag" style="display:flex;gap:6px;align-items:center;margin-top:6px">
+      <input type="checkbox" ${align.stretch?'checked':''}
+        onchange="align.stretch=this.checked;computeExtend()"> stretch to hit the borders exactly</label>
+    <div class="row" style="margin-top:8px"><button class="primary" onclick="applyAlign()">Reshape → border</button>
       <button onclick="exitAlign()">cancel</button>
       <button class="ghost" onclick="align.blue={t:0.08,r:0.08,b:0.08,l:0.08};positionLines();computeExtend()">reset</button></div></div>`;
 }
 async function applyAlign(){
-  const b={...align.blue}; exitAlign();   // send the marks; the CLI does the real solve
-  await runStep('border',{inner:{top:b.t,right:b.r,bottom:b.b,left:b.l}},true);
+  const b={...align.blue}, stretch=align.stretch; exitAlign();  // send marks; the CLI does the real fit
+  await runStep('border',{inner:{top:b.t,right:b.r,bottom:b.b,left:b.l},stretch},true);
 }
 function exitAlign(){ if(!align.on) return; align.on=false;
   const v=$('.viewer'); if(v) v.style.aspectRatio=align.oldAspect||'';

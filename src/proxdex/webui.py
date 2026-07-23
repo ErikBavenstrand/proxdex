@@ -245,6 +245,8 @@ def create_app(lib: Library) -> FastAPI:
             if inner:  # marked inner-border edges (fractions) → era-based solve
                 for edge in ("top", "right", "bottom", "left"):
                     args += [f"--inner-{edge}", str(float(inner[edge]))]
+                if opts.get("stretch"):
+                    args.append("--stretch")
             else:
                 for edge in ("top", "bottom", "left", "right"):
                     val = opts.get(edge)

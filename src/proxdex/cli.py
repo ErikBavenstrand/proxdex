@@ -720,8 +720,13 @@ def _library_frame_target(lib: Library) -> tuple[float, float, float] | None:
 @click.option("--inner-right", type=float, default=None, help="Inner frac (right).")
 @click.option("--inner-bottom", type=float, default=None, help="Inner frac (bottom).")
 @click.option("--inner-left", type=float, default=None, help="Inner frac (left).")
+@click.option(
+    "--stretch/--no-stretch",
+    default=False,
+    help="With --inner-*: un-distort the art so borders land exactly on spec.",
+)
 @click.option("--force", is_flag=True, help="Re-run even if a bordered image exists.")
-@click.option("--dry-run", is_flag=True, help="Report the per-edge plan; don't write.")
+@click.option("--dry-run", is_flag=True, help="Report the plan; don't write.")
 @click.pass_context
 def border(
     ctx: click.Context,
@@ -734,19 +739,21 @@ def border(
     inner_right: float | None,
     inner_bottom: float | None,
     inner_left: float | None,
+    stretch: bool,
     force: bool,
     dry_run: bool,
 ) -> None:
-    """Expand a card's edges → stage 2 (bordered), before upscaling.
+    """Reshape a card → stage 2 (bordered), before upscaling.
 
-    Only ever *adds* border (via [cyan]cardbleed[/]) — no auto edge detection.
-    Two ways to say how much:
-
-    • [cyan]--top/--bottom/--left/--right[/] <mm>: grow each edge by that much.
+    Never auto-detects — you say what to do. Two modes:
 
     • [cyan]--inner-top/-right/-bottom/-left[/] <fraction 0-1>: where the card's
-    inner border edge currently sits; from the set's era spec proxdex computes
-    the growth that hits the exact card aspect AND correct border widths.
+    inner border edge currently sits. From the set's era spec [cyan]cardbleed[/]
+    reshapes to the exact card aspect with the correct border widths (add
+    [cyan]--stretch[/] to hit the borders exactly by un-distorting the art).
+
+    • [cyan]--top/--bottom/--left/--right[/] <mm>: just add that much border to
+    each edge — no fit, no distortion.
 
     [cyan]--dry-run[/] reports the plan without writing.
     """
@@ -756,12 +763,7 @@ def border(
     use_inner = any(v is not None for v in inner)
     if use_inner and not all(v is not None for v in inner):
         raise click.UsageError("give all four --inner-top/-right/-bottom/-left or none")
-    edges = {
-        "top_mm": top_mm,
-        "bottom_mm": bottom_mm,
-        "left_mm": left_mm,
-        "right_mm": right_mm,
-    }
+    grow_mm = {"top": top_mm, "right": right_mm, "bottom": bottom_mm, "left": left_mm}
 
     def one(card: Card) -> None:
         dst = card.stage_path(Stage.BORDERED)
@@ -772,37 +774,35 @@ def border(
         if not src.exists():
             raise FileError(f"{card.id}: no original yet (fetch it first)")
         w, h = borders.size(src)
-        note = ""
         if use_inner:
             guide = frames.for_set(card.set_id)
             inner_t = cast("tuple[float, float, float, float]", inner)
-            sol = frames.solve_extension(
-                w, h, inner_t, guide, cfg.card_w_mm, cfg.card_h_mm
+            plan = bleed.fit_plan(w, h, guide, inner_t, cfg, stretch=stretch)
+            tw, th = round(plan.trim_w), round(plan.trim_h)
+            bd = plan.borders
+            tag = f"{guide.name}{', stretch' if stretch else ''}"
+            note = (
+                f"fit → {tw}×{th}px  "
+                f"T{bd['top'] * 100:.2f} R{bd['right'] * 100:.2f} "
+                f"B{bd['bottom'] * 100:.2f} L{bd['left'] * 100:.2f}%  [dim]({tag})[/]"
             )
-            ext = bleed.plan(
-                w,
-                cfg,
-                top_mm=sol.top,
-                bottom_mm=sol.bottom,
-                left_mm=sol.left,
-                right_mm=sol.right,
-            )
-            note = f" [dim]({guide.name})[/]"
-            if sol.over_target:
-                over = ", ".join(sol.over_target)
-                note += f" [yellow](over spec on {over})[/]"
+            if plan.cropped:
+                note += f" [yellow](cropped {', '.join(plan.cropped)})[/]"
+            if dry_run:
+                console.print(f"[cyan]{card.id}[/]: {note}")
+                return
+            bleed.fit(src, dst, guide, inner_t, cfg, stretch=stretch)
         else:
-            ext = bleed.plan(w, cfg, **edges)
-        plan = f"+top{ext.top} +bottom{ext.bottom} +left{ext.left} +right{ext.right}px"
-        if max(ext.top, ext.bottom, ext.left, ext.right) == 0:
-            console.print(f"[dim]· {card.id}: nothing to expand[/]")
-            return
-        if dry_run:
-            console.print(f"[cyan]{card.id}[/]: {plan}{note}")
-            return
-        bleed.run(src, dst, ext, cfg)
+            if max(grow_mm.values()) <= 0:
+                console.print(f"[dim]· {card.id}: nothing to expand[/]")
+                return
+            note = " ".join(f"+{e[0].upper()}{v:g}" for e, v in grow_mm.items()) + "mm"
+            if dry_run:
+                console.print(f"[cyan]{card.id}[/]: {note}")
+                return
+            bleed.grow(src, dst, cfg, **grow_mm)
         rel = dst.relative_to(lib.root)
-        console.print(f"[green]✓[/] {card.id}: {plan}{note} → {rel}")
+        console.print(f"[green]✓[/] {card.id}: {note} → {rel}")
 
     _each(lib.select(ids), one, "bordering")
     if not dry_run:
@@ -913,7 +913,7 @@ class _Repro:
         src = Path(tempfile.mkstemp(suffix=".png", dir=self.tmpdir)[1])
         dst = Path(tempfile.mkstemp(suffix=".png", dir=self.tmpdir)[1])
         im.save(src)
-        bleed.run(src, dst, bleed.uniform(bp), cfg)
+        bleed.cut_bleed(src, dst, cfg, bp)
         return Image.open(dst).convert("RGB")
 
 

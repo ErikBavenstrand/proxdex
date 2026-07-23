@@ -83,7 +83,6 @@ class Config:
     print_brightness: float | None = None
     print_gamma: float | None = None
     # --- external tools ------------------------------------------------------
-    cardbleed_cmd: str = "cardbleed"
     #: upscayl-bin path; "" = auto-detect (bundled macOS app, then PATH)
     upscayl_bin: str = ""
     #: Upscayl models folder; "" = auto-detect

@@ -327,6 +327,32 @@ body.hasbar { padding-bottom: 4.5rem; }
   background: var(--stock-3); border: 1px solid var(--rule); position: relative;
 }
 .frame .cel img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* --- skeletons ------------------------------------------------------------
+   An <img> that has not decoded yet is an empty box, and an empty box against
+   the page reads as a flash. So an image that is still loading is a plate one
+   value above its surround with a slow sheen crossing it: the layout is already
+   correct (every card box carries its 63:88 aspect), so nothing moves when the
+   picture arrives — it simply appears. `prefers-reduced-motion` gets the plate
+   without the sheen. */
+img.skel { color: transparent; background: var(--stock-3); }
+img.skel::after { content: ""; }
+.skel, .skelbox {
+  background-image: linear-gradient(100deg,
+    transparent 20%, rgba(255,255,255,.045) 40%, transparent 60%);
+  background-size: 250% 100%;
+  background-repeat: no-repeat;
+  /* delayed on purpose: an image that arrives from cache within a frame or two
+     should never show a loading state at all */
+  animation: sheen 1.4s ease-in-out .2s infinite;
+}
+@keyframes sheen {
+  from { background-position: 160% 0; }
+  to   { background-position: -60% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skel, .skelbox { animation: none; }
+}
 .frame .cel .no {
   position: absolute; inset: 0; display: grid; place-items: center;
   font-family: var(--font-mono); font-size: .625rem; color: var(--faint);
@@ -912,13 +938,16 @@ function routeFromUrl(){
 function navigate(next, {replace = false} = {}){
   // remember where this page was scrolled to, so Back lands where you left
   history.replaceState({...routeState(), scroll: window.scrollY}, '');
+  // focusing another step of the same card is not a new page — jumping to the
+  // top there throws away the position you were reading at
+  const samePage = next.view === state.view && (next.id ?? null) === (state.id ?? null);
   Object.assign(state, next);
   const url = currentUrl();
   const here = location.pathname + location.search;
   if(replace || url === here) history.replaceState(routeState(), '', url);
   else history.pushState(routeState(), '', url);
   render();
-  window.scrollTo(0, 0);
+  if(!samePage) window.scrollTo(0, 0);
 }
 const routeState = () => ({view:state.view, id:state.id, face:state.face, step:state.step,
                            search:{...state.search}});
@@ -956,13 +985,16 @@ async function refresh(keepDetail){
 }
 
 function render(){
+  if(state.view !== 'card') _built = null;   // the shell is gone; rebuild it next time
   const section = state.view === 'card' ? 'library' : state.view;   // a card lives under Library
   $$('.navlink').forEach(b => b.classList.toggle('active', b.dataset.view === section));
   document.body.classList.toggle('picking', state.sel.size > 0);
   document.body.classList.remove('hasbar');   // each view re-arms its own bar
   const m = $('#main');
-  if(state.view === 'library'){ m.innerHTML = viewLibrary(); loadBatches(); paintBulk(); }
-  else if(state.view === 'card'){ m.innerHTML = ''; renderCard(); }
+  if(state.view === 'library'){
+    m.innerHTML = viewLibrary(); unskelAll(m); loadBatches(); paintBulk();
+  }
+  else if(state.view === 'card'){ renderCard(); }
   else if(state.view === 'search'){
     m.innerHTML = viewSearch();
     if(state.results){          // returning to Search: repaint, don't re-query
@@ -1017,12 +1049,14 @@ function viewLibrary(){
     const picked = state.sel.has(c.id);
     return `
     <a class="slot marks ${picked ? 'picked' : ''}" href="/card/${encodeURIComponent(c.id)}"
+       data-cid="${esc(c.id)}"
        onclick="return openCard('${esc(c.id)}', event)" title="${esc(c.name)} · ${esc(c.id)}">
       <input class="form-check-input pick" type="checkbox" ${picked ? 'checked' : ''}
              aria-label="Select ${esc(c.name)}"
              onclick="event.stopPropagation();togglePick('${esc(c.id)}')">
-      <img class="shot" loading="lazy" alt="${esc(c.name)}"
-           src="${thumbsrc(c, c.front_face)}" onerror="this.style.opacity=.12">
+      <img class="shot skel" loading="lazy" alt="${esc(c.name)}"
+           src="${thumbsrc(c, c.front_face)}" onload="unskel(this)"
+           onerror="unskel(this);this.style.opacity=.12">
       <div class="cardname">${esc(c.name)}</div>
       <div class="slotmeta">
         <span class="id">${esc(c.id)}</span>
@@ -1122,7 +1156,24 @@ function tallyStrip(){
 
 function setFilter(key, value){
   state.lib[key] = value;
-  $('#main').innerHTML = viewLibrary(); loadBatches(); paintBulk();
+  // Typing in the name filter must not rebuild the grid. Recreating every tile's
+  // <img> on each keystroke is exactly the flicker — the browser paints an empty
+  // box before it re-decodes a file it already has. Hide what no longer matches.
+  if(key === 'q' && filterInPlace()){ paintBulk(); return; }
+  $('#main').innerHTML = viewLibrary(); unskelAll($('#main'));
+  loadBatches(); paintBulk();
+}
+/* Show/hide the tiles that are already there. Returns false when the grid isn't
+   the right shape for that — going in or out of the empty state changes what the
+   page *is*, so that case is still a real render. */
+function filterInPlace(){
+  const grid = $('.sheetgrid');
+  const shown = new Set(visible().map(c => c.id));
+  if(!grid || !shown.size) return false;
+  const tiles = $$('.slot');
+  if(tiles.length !== state.cards.length) return false;   // a coarser filter is on
+  for(const el of tiles) el.hidden = !shown.has(el.dataset.cid);
+  return true;
 }
 function clearFilters(){
   state.lib = {...state.lib, q:'', game:'', set:'', st:''};
@@ -1132,8 +1183,7 @@ function togglePick(id){
   if(state.sel.has(id)) state.sel.delete(id); else state.sel.add(id);
   document.body.classList.toggle('picking', state.sel.size > 0);
   $$('.slot').forEach(el => {
-    const cid = decodeURIComponent(el.getAttribute('href').split('/card/')[1]);
-    el.classList.toggle('picked', state.sel.has(cid));
+    el.classList.toggle('picked', state.sel.has(el.dataset.cid));
   });
   paintBulk();
 }
@@ -1296,6 +1346,17 @@ async function okCascade(c, key){
     'Rebuild');
 }
 
+/* What the card shell in the DOM was built for, as `id/face/rev`.
+
+   Focusing another step must not tear the page down and build it again: creating
+   a fresh <img> makes the browser paint an empty box before it decodes even a
+   file it already holds, and that — repeated across the filmstrip — is the
+   flicker. So the shell is built once per card+side and the parts that actually
+   differ (the rail's state, the proof, the step panel) are repainted in place.
+   `rev` is in the token because new pixels are the one case that does need new
+   image elements. */
+let _built = null;
+
 function renderCard(){
   align.on = false;
   const c = card();
@@ -1307,6 +1368,15 @@ function renderCard(){
   if(state.face >= c.faces.length) state.face = 0;
   if(!state.step || SPEC(state.step).key !== state.step) state.step = defaultStep(c);
   prefetchAround(c);
+
+  const token = `${c.id}/${state.face}/${c.rev}`;
+  if(_built === token && $('#stagewrap')){
+    paintFilm(c);
+    repaintProof(c, state.step);
+    renderStepPanel(c, state.step);
+    return;
+  }
+  _built = token;
   const rows = visible();
 
   $('#main').innerHTML = `
@@ -1346,6 +1416,7 @@ function renderCard(){
       <div id="steppanel"></div>
       <div id="carddata" style="grid-column:1/-1"></div>
     </div>`;
+  unskelAll($('#main'));
   renderStepPanel(c, state.step);
   wireViewer(c, state.step);
   loadDetails(c.id);
@@ -1385,22 +1456,63 @@ async function flipPrint(){
   await act('/api/flip', {ids:[c.id]}, `Flipped ${c.id}`);
 }
 
+/* One frame per stage, each addressable so `paintFilm` can restate it without
+   replacing it. The thumbnails are the same URLs the proof uses, so they come
+   out of the browser's cache already decoded. */
+function frameState(c, s, i){
+  const st = stStatus(c, s.stage), ready = actionable(c, s.key);
+  return {
+    st,
+    cls: [st, state.step === s.key ? 'current' : '', ready ? 'ready' : '',
+          (st === 'pending' && !ready && i > 0) ? 'waiting' : ''].filter(Boolean).join(' '),
+    label: st === 'done' ? 'done' : st === 'skipped' ? 'skipped' : ready ? 'ready' : 'waiting',
+    src: st === 'done' ? viewsrc(c.id, s.stage, state.face) : '',
+  };
+}
 function filmstrip(c){
   return PIPE().map((s, i) => {
-    const st = stStatus(c, s.stage), ready = actionable(c, s.key);
-    const cls = [st, state.step === s.key ? 'current' : '',
-                 ready ? 'ready' : '',
-                 (st === 'pending' && !ready && i > 0) ? 'waiting' : ''].filter(Boolean).join(' ');
-    const cel = st === 'done'
-      ? `<img loading="lazy" alt="" src="${viewsrc(c.id, s.stage, state.face)}">`
-      : `<span class="no">${st === 'skipped' ? '⤳' : i + 1}</span>`;
-    const label = st === 'done' ? 'done' : st === 'skipped' ? 'skipped' : ready ? 'ready' : 'waiting';
-    return `<button class="frame ${cls}" onclick="focusStep('${s.key}')"
-      aria-current="${state.step === s.key}">
+    const f = frameState(c, s, i);
+    const cel = f.src
+      ? `<img class="skel" loading="lazy" alt="" src="${f.src}" onload="unskel(this)">`
+      : `<span class="no">${f.st === 'skipped' ? '⤳' : i + 1}</span>`;
+    return `<button class="frame ${f.cls}" id="fr_${esc(s.key)}"
+      onclick="focusStep('${s.key}')" aria-current="${state.step === s.key}">
       <span class="cel">${cel}</span>
-      <span class="who"><b>${esc(s.label)}</b><span>${label}</span></span>
+      <span class="who"><b>${esc(s.label)}</b><span class="lbl">${f.label}</span></span>
       <span class="dot"></span></button>`;
   }).join('');
+}
+/* Restate the rail without rebuilding it: classes and the one-word status are
+   text, and a cell only becomes a different element when it genuinely changes
+   kind (an image appearing where a number was). */
+function paintFilm(c){
+  PIPE().forEach((s, i) => {
+    const el = $('#fr_' + s.key); if(!el) return;
+    const f = frameState(c, s, i);
+    el.className = 'frame ' + f.cls;
+    el.setAttribute('aria-current', String(state.step === s.key));
+    const lbl = el.querySelector('.lbl');
+    if(lbl && lbl.textContent !== f.label) lbl.textContent = f.label;
+    const cel = el.querySelector('.cel');
+    const img = cel.querySelector('img');
+    if(f.src && img){
+      // same element, new pixels — only when the file itself really changed
+      if(img.getAttribute('src') !== f.src){ img.classList.add('skel'); img.src = f.src; }
+    } else if(Boolean(f.src) !== Boolean(img)){
+      cel.innerHTML = f.src
+        ? `<img class="skel" loading="lazy" alt="" src="${f.src}" onload="unskel(this)">`
+        : `<span class="no">${f.st === 'skipped' ? '⤳' : i + 1}</span>`;
+    }
+  });
+  unskelAll($('.film'));
+}
+function unskel(img){ img.classList.remove('skel'); }
+/* An image served from cache is already `complete` when it is inserted, and its
+   load event has nothing left to announce — so its skeleton is cleared here,
+   synchronously, instead of sheening over a picture that is already on screen. */
+function unskelAll(root){
+  for(const img of (root || document).querySelectorAll('img.skel'))
+    if(img.complete && img.naturalWidth) unskel(img);
 }
 
 /* ---- the proof ---------------------------------------------------------- */
@@ -1437,7 +1549,8 @@ function renderViewer(c, key){
         ${inp && !aligning ? compareControl(inp, s.stage) : ''}
       </div>
       <div class="proof"><div class="viewer ${aligning ? 'aligning' : ''}">
-        <img class="stageimg" alt="${esc(s.stage)}" src="${base}">${over}
+        <img class="stageimg skel" alt="${esc(s.stage)}" src="${base}"
+             onload="unskel(this)">${over}
       </div></div>
       ${fullLink(c, s.stage)}`;
   }
@@ -1452,7 +1565,8 @@ function renderViewer(c, key){
         }</span>
       </div>
       <div class="proof"><div class="viewer is-input ${aligning ? 'aligning' : ''}">
-        <img class="stageimg" alt="${esc(inp)}" src="${viewsrc(c.id, inp, state.face)}">
+        <img class="stageimg skel" alt="${esc(inp)}" onload="unskel(this)"
+             src="${viewsrc(c.id, inp, state.face)}">
       </div></div>
       ${fullLink(c, inp)}`;
   }
@@ -1509,6 +1623,7 @@ function setBlend(v){
 function repaintProof(c, key){
   const host = $('#stagewrap'); if(!host) return;
   host.innerHTML = renderViewer(c, key);
+  unskelAll(host);
   wireViewer(c, key);
 }
 

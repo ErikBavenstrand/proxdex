@@ -69,8 +69,10 @@ def write_index(lib: Library) -> Path:
     lines = [
         "# Proxy Card Index",
         "",
-        f"_{len(cards)} cards · stages: 1 original · 2 bordered · 3 upscaled · "
-        "4 edited (trim master); bleed added at print_",
+        (
+            f"_{len(cards)} cards · stages: 1 original · 2 bordered · 3 upscaled · "
+            "4 edited (trim master); bleed added at print_"
+        ),
         "",
         "| Card | Name | Set | Orig | Bord | Upscl | Edit | Batch | Printed |",
         "|------|------|-----|:----:|:----:|:-----:|:----:|-------|:-------:|",

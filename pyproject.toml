@@ -45,8 +45,12 @@ proxdex = "proxdex.cli:main"
 
 [dependency-groups]
 dev = [
-    "ruff>=0.8",
-    "pyright>=1.1.390",
+    # pinned: CI resolves these fresh (no committed lockfile) and lint output is
+    # version-sensitive — an unpinned linter turns a green build red on a release
+    # of *its* own. Bump deliberately, with the new findings fixed in the same
+    # commit.
+    "ruff==0.16.0",
+    "pyright==1.1.407",
     # so lint/typecheck see the optional web-UI module
     "fastapi>=0.110",
     "uvicorn>=0.29",
@@ -69,7 +73,8 @@ ignore = [
     "ANN401",  # a few deliberate Any (ctx.obj, parsed JSON/TOML)
     "EM101", "EM102",  # inline f-strings in raises read fine here
     "TRY003",  # exception messages are specific and local
-    "PLR0913", # click command callbacks legitimately take many options
+    "PLR0913", "PLR0917",  # click callbacks legitimately take many options
+    "CPY001",  # licence lives in LICENSE, not repeated atop every file
     "PLR2004", # image/geometry literals (255, 0.5, ...) are self-explanatory
     "FBT001", "FBT002",  # click injects boolean flags as parameters
     "S603", "S607",  # subprocess: fixed argv, trusted tool names (cardbleed etc.)

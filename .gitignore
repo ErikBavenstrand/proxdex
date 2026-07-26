@@ -6,3 +6,7 @@ build/
 .venv/
 uv.lock
 .DS_Store
+
+# local-only, not part of the package
+CLAUDE.md
+TODO.md

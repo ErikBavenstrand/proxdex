@@ -312,42 +312,19 @@ class Config:
         label="Open the PDF",
         help="Open each sheet as soon as it's written.",
     )
-    # --- grade: normalize (per-card, dynamic) then look (uniform) ------------
-    #: pull every card to a common baseline before the creative recipe
-    grade_normalize: bool = setting(
+    # --- border: how the reshape hits the frame spec -------------------------
+    border_stretch: bool = setting(
         default=True,
-        label="Normalise first",
-        help="Pull every card to a common baseline — frame white balance and "
-        "black/white points — so scans and digital art print alike.",
+        label="Stretch to hit the borders exactly",
+        help="Un-distort the art so the finished borders land on the frame spec "
+        "instead of as close as the source allows. On by default — the spec is "
+        "the point of the step.",
     )
-    #: black/white points for auto-levels, as luminance percentiles
-    grade_black_pct: float = setting(
-        0.5,
-        label="Black point",
-        help="The darkest this percentile of pixels is mapped to black.",
-        unit="%",
-    )
-    grade_white_pct: float = setting(
-        99.5,
-        label="White point",
-        help="The brightest this percentile of pixels is mapped to white.",
-        unit="%",
-    )
-    #: how hard to pull toward the stretched levels (0 = off, 1 = full)
-    grade_level_strength: float = setting(
-        0.6,
-        label="Levels strength",
-        help="How hard to pull toward those points. 0 leaves levels alone, 1 "
-        "applies them fully.",
-    )
-    #: frame white-balance target [r, g, b]; [] = use the library's median frame
-    match_border_target: list[int] = setting(
-        factory=list,
-        label="Frame colour target",
-        help="The RGB the card frame is balanced to. Leave empty to use your own "
-        "library's median frame colour.",
-    )
-    # --- grade: the creative look (applied identically to every card) --------
+    # --- grade: one creative look, applied identically to every card ---------
+    # Grade is a *look*, nothing else. It does not try to guess what a card
+    # "should" look like: card frames are deliberately different colours between
+    # games and eras, so there is no common baseline to pull them to. Matching the
+    # medium is a print-time job, done by a profile at sheet time.
     grade_brightness: float = setting(
         1.03,
         label="Brightness",
@@ -361,30 +338,23 @@ class Config:
     grade_gamma: float = setting(
         1.0, label="Gamma", help="Below 1 darkens the midtones."
     )
-    # --- print / media compensation (applied at sheet time) ------------------
-    #: a built-in :class:`proxdex.media.Preset`, or the name of a medium you
-    #: have measured with `proxdex calibrate` — so this stays an open set.
+    #: how hard to pull the card's own black/white points to full range
+    grade_levels: float = setting(
+        0.0,
+        label="Auto levels",
+        help="Stretch this card's own darkest and brightest pixels to full range, "
+        "blended by this much. 0 is off; 0.5 helps a flat, hazy scan. It reads the "
+        "card's own tones only — it never compares one card to another.",
+    )
+    # --- print: which profile corrects for the medium at sheet time ----------
+    #: the name of a profile in `<root>/profiles/`, or a built-in
+    #: :class:`proxdex.media.Preset` — so this stays an open set.
     print_profile: str = setting(
         "none",
-        label="Medium",
-        help="Which paper you're printing on. A built-in preset is a starting "
-        "point; calibrate the medium and the measured correction takes over.",
-    )
-    #: per-value overrides of the active profile; None = use the profile default
-    print_saturation: float | None = setting(
-        None,
-        label="Saturation override",
-        help="Override just this part of the medium's correction. Empty uses the "
-        "profile's own value.",
-    )
-    print_contrast: float | None = setting(
-        None, label="Contrast override", help="Empty uses the profile's value."
-    )
-    print_brightness: float | None = setting(
-        None, label="Brightness override", help="Empty uses the profile's value."
-    )
-    print_gamma: float | None = setting(
-        None, label="Gamma override", help="Empty uses the profile's value."
+        label="Print profile",
+        help="Which medium the sheet is corrected for. A built-in preset (none, "
+        "paper, foil) is a starting point; a profile you calibrated carries a "
+        "measured correction and your own notes.",
     )
     # --- external tools ------------------------------------------------------
     #: upscayl-bin path; "" = auto-detect (bundled macOS app, then PATH)

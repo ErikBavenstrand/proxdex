@@ -18,9 +18,7 @@ from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
-import numpy as np
 import rich_click as click
-from numpy.typing import NDArray
 from PIL import Image
 from rich.console import Console
 from rich.progress import (
@@ -32,7 +30,18 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from proxdex import bleed, borders, frames, games, media, net, report, sources, steps
+from proxdex import (
+    bleed,
+    borders,
+    frames,
+    games,
+    media,
+    net,
+    profiles,
+    report,
+    sources,
+    steps,
+)
 from proxdex import calibrate as calibrate_mod
 from proxdex import grade as grade_mod
 from proxdex import sheet as sheet_mod
@@ -42,6 +51,7 @@ from proxdex.config import (
     MARKER,
     Config,
     Faces,
+    Orientation,
     PageSize,
     UpscaylModel,
     UpscaylScale,
@@ -76,7 +86,7 @@ click.rich_click.COMMAND_GROUPS = {
             "name": "Produce",
             "commands": ["back", "flip", "sheet", "batches", "printed"],
         },
-        {"name": "Calibrate", "commands": ["calibrate"]},
+        {"name": "Colour", "commands": ["profile", "calibrate"]},
     ]
 }
 
@@ -84,6 +94,8 @@ console = Console(highlight=False)
 err = Console(stderr=True, highlight=False)
 
 T = TypeVar("T")
+#: a click command callback, for the decorators that bundle shared options
+F = TypeVar("F", bound=Callable[..., Any])
 
 #: the stage order, read from the one place it is declared
 _STAGES = steps.STAGES
@@ -111,7 +123,7 @@ _GAME = click.option(
     "--game",
     type=_GAME_CHOICE,
     default=None,
-    help="Which TCG to use (default: [cyan][library] game[/] in proxdex.toml).",
+    help="Which TCG to use (default: [cyan]\\[library] game[/] in proxdex.toml).",
 )
 #: shared `--face`; unset means every face the card has. A two-sided card's back
 #: is its own picture with its own pipeline state, so a step can target one side.
@@ -138,22 +150,25 @@ DEFAULT_TOML = """\
 # default for new lookups. "pokemon" | "mtg"
 game = "pokemon"
 
+[border]
+# Un-distort the art so the finished borders land exactly on the frame spec,
+# instead of as close as the source allows. Hitting the spec is the point of the
+# step, so this is on.
+stretch = true
+
 [grade]
-# 1) normalize: pull each card to a common baseline first (so scans and
-#    digital art match) — white-balance the frame + even out black/white points.
-normalize = true
-black_pct = 0.5             # luminance percentile mapped to black
-white_pct = 99.5            # luminance percentile mapped to white
-level_strength = 0.6        # how hard to pull toward those points (0=off, 1=full)
-# Frame white-balance target. [] = use the library's own median frame colour;
-# or pin it, e.g. [252, 214, 46], so all cards converge on that yellow.
-match_border_target = []
-# 2) look: one identical recipe on top → uniform prints. Printers and matte
-#    paper dull the image, so the defaults lift it slightly.
+# One identical look over every card, so a batch prints as a set. Printers and
+# matte paper dull an image, so the defaults lift it slightly.
 brightness = 1.03
 contrast   = 1.06
 saturation = 1.10
 gamma      = 1.0
+# Stretch a single card's own black and white points to full range, blended by
+# this much (0 = off). Helps a flat, hazy scan; it reads that card only.
+levels     = 0.0
+# Grade does NOT try to match cards to each other by colour — a card frame is
+# yellow on a Pokémon card and black on a Magic one, so there is no shared
+# baseline to pull them to. Matching the *paper* is [print]'s job, at sheet time.
 
 [card]
 w_mm = 63.0
@@ -214,15 +229,13 @@ reg_marks    = "none"        # none | corners
 reg_inset_mm = 10.0
 
 [print]
-# Colour reproduction applied at sheet time (the stored master stays neutral),
-# per medium. A preset here is just training wheels until you `proxdex
-# calibrate` the medium — a measured calibration then supersedes it.
-# "none" | "paper" | "foil".
-profile = "foil"
-# saturation = 1.38
-# contrast   = 1.16
-# brightness = 0.95
-# gamma      = 0.88        # < 1 darkens midtones → more ink density
+# Which medium a sheet is corrected for, at sheet time — the stored masters stay
+# neutral. Either a built-in preset ("none" | "paper" | "foil") or a profile of
+# your own: `proxdex profile new matte-200 --medium paper --notes "..."`, then
+# calibrate it round by round and the measurement takes over from the preset.
+# Everything about a medium — its notes, its recipe, its calibration — lives in
+# <root>/profiles/<name>.json, not here.
+profile = "none"
 
 [tools]
 # Upscayl (the upscale stage). On macOS the bundled binary and models are
@@ -334,18 +347,10 @@ def _cascade(card: Card, stage: Stage, face: int = FRONT) -> None:
         console.print(f"  [dim]↳ removed stale downstream: {names}[/]")
 
 
-def _master(card: Card, face: int = FRONT) -> Path | None:
-    """The furthest-along image to print — the graded master, or the best
-    earlier stage when a later step was skipped."""
-    return card.best(*steps.BEST, face=face)
-
-
-def _sheet_ready(card: Card, face: int = FRONT) -> bool:
-    """A side is ready to impose once grade is settled — done, or skipped so an
-    earlier stage stands as the master."""
-    return (
-        card.has(Stage.EDITED, face) or card.skipped(Stage.EDITED, face)
-    ) and _master(card, face) is not None
+#: what to print, and whether a side is printable at all — declared in `sheet`,
+#: because they are facts about paper rather than about the CLI
+_master = sheet_mod.master
+_sheet_ready = sheet_mod.print_ready
 
 
 def _each(items: Sequence[T], fn: Callable[[T], None], verb: str) -> int:
@@ -1251,11 +1256,14 @@ def config_show(ctx: click.Context, match: str | None) -> None:
     for col in ("Setting", "Value", "Default", "Means"):
         table.add_column(col)
     shown = 0
+    stale: list[str] = []
     for section, key, value in _config_rows(lib):
         path = f"{section}.{key}"
         field_name = Config.field_name(section, key)
         doc = docs.get(field_name or "", {})
         label = doc.get("label", "").lower()
+        if field_name is None:
+            stale.append(path)
         if text and text not in path.lower() and text not in label:
             continue
         shown += 1
@@ -1264,12 +1272,19 @@ def config_show(ctx: click.Context, match: str | None) -> None:
             path,
             f"{_toml_text(value)}{unit}",
             f"[dim]{doc.get('default', '')}[/]",
-            doc.get("label", "[dim]—[/]"),
+            doc.get("label") or _unknown_note(field_name),
         )
     if not shown:
         console.print("[dim]no settings match[/]")
         return
     console.print(table)
+    if stale:
+        # a key proxdex no longer reads does nothing at all, and a file that still
+        # holds it looks like it is configuring something. Say so.
+        err.print(
+            f"[yellow]⚠[/] {len(stale)} key(s) in this file are not proxdex "
+            f"settings and are ignored: [dim]{', '.join(stale)}[/]"
+        )
     console.print(
         f"[dim]{lib.root / MARKER} — change one with "
         "`proxdex config set sheet.dpi=1200`[/]"
@@ -1311,6 +1326,22 @@ def config_set(ctx: click.Context, assignments: tuple[str, ...]) -> None:
         console.print(f"[green]✓[/] \\[{section}] {key} = {_toml_text(clean)}")
     path.write_text(tomlkit.dumps(doc))
     console.print(f"[dim]wrote {path}[/]")
+
+
+def _write_setting(lib: Library, section: str, key: str, value: Any) -> None:
+    """Write one setting into ``proxdex.toml``, keeping the file's comments."""
+    import tomlkit
+
+    path = lib.root / MARKER
+    doc = tomlkit.parse(path.read_text() if path.exists() else "")
+    if section not in doc:
+        doc[section] = tomlkit.table()
+    doc[section][key] = value.value if isinstance(value, Enum) else value
+    path.write_text(tomlkit.dumps(doc))
+
+
+def _unknown_note(field_name: str | None) -> str:
+    return "[dim]—[/]" if field_name else "[yellow]not a proxdex setting[/]"
 
 
 def _config_rows(lib: Library) -> list[tuple[str, str, Any]]:
@@ -1370,7 +1401,7 @@ def upscale(
     Runs on the bordered image if present, else the original — so frame
     expansion happens first. Needs Upscayl installed (its bundled
     [cyan]upscayl-bin[/] is auto-detected on macOS). Mirrors the app's own
-    options; defaults live under [cyan][tools][/].
+    options; defaults live under [cyan]\\[tools][/].
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
@@ -1414,25 +1445,38 @@ def upscale(
 def grade(
     ctx: click.Context,
     ids: tuple[str, ...],
-    normalize: bool | None,
+    brightness: float | None,
+    contrast: float | None,
+    saturation: float | None,
+    gamma: float | None,
+    levels: float | None,
     face: int | None,
     force: bool,
 ) -> None:
-    """Normalize each card to a common baseline, then apply the uniform look.
+    """Apply the look → stage 4 (edited), the trim-size master.
 
-    Normalization white-balances the card frame and evens out black/white
-    points so scanned and digitally-drawn cards start from the same place;
-    then one identical recipe (saturation/contrast) makes the batch print
-    uniformly. Writes stage 4 (edited) — the trim-size master. Tune both under
-    [cyan][grade][/].
+    One identical recipe — brightness, contrast, saturation, gamma — over every
+    card, so a batch prints as a set. [cyan]--levels[/] additionally stretches a
+    single card's own black and white points, which helps a flat scan; it reads
+    that card only.
+
+    Grade does *not* try to match cards to each other by colour: a card frame is
+    yellow on a Pokémon card, black on a Magic one and absent on a full-art
+    print, so there is no shared baseline to pull them to. Matching the **paper**
+    is a print-time job — see [cyan]proxdex profile[/] — and it happens at
+    [cyan]sheet[/] time, outside this master. Defaults live in [cyan]\\[grade][/].
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    do_norm = bool(steps.resolve("grade", cfg, normalize=normalize)["normalize"])
-    # dynamic target: the collection's own median frame colour (unless pinned)
-    frame_target = None
-    if do_norm and not cfg.match_border_target:
-        frame_target = _library_frame_target(lib)
+    look = steps.resolve(
+        "grade",
+        cfg,
+        brightness=brightness,
+        contrast=contrast,
+        saturation=saturation,
+        gamma=gamma,
+        levels=levels,
+    )
 
     def one(card: Card) -> None:
         for f in _faces(card, face):
@@ -1444,7 +1488,13 @@ def grade(
             if src is None:
                 raise FileError(f"{_label(card, f)}: nothing to grade yet")
             out = grade_mod.grade(
-                Image.open(src), cfg, frame_target=frame_target, normalize=do_norm
+                Image.open(src),
+                cfg,
+                brightness=look["brightness"],
+                contrast=look["contrast"],
+                saturation=look["saturation"],
+                gamma_value=look["gamma"],
+                levels=look["levels"],
             )
             out.save(dst)
             card.clear_skip(Stage.EDITED, f)
@@ -1551,19 +1601,6 @@ def flip(ctx: click.Context, ids: tuple[str, ...], face: int | None) -> None:
             "on the front"
         )
     _reindex(lib)
-
-
-def _library_frame_target(lib: Library) -> tuple[float, float, float] | None:
-    """Median frame colour across the whole library — the consensus to aim at."""
-    colors: list[NDArray[np.float32]] = []
-    for card in lib.cards():
-        src = card.best(Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL)
-        if src is not None:
-            colors.append(borders.frame_color(borders.load_rgb(src)))
-    if not colors:
-        return None
-    median = np.median(np.stack(colors), axis=0)
-    return (float(median[0]), float(median[1]), float(median[2]))
 
 
 def _warn_unmeasured(card: Card, guide: FrameGuide) -> None:
@@ -1718,7 +1755,7 @@ def border(
             "add millimetres. Pick one."
         )
     override = frames.parse(frame)
-    do_stretch = bool(stretch)
+    do_stretch = bool(steps.resolve("border", cfg, stretch=stretch)["stretch"])
 
     def one_face(card: Card, f: int) -> None:
         dst = card.stage_path(Stage.BORDERED, f)
@@ -1812,7 +1849,6 @@ def _write_batch(path: Path, data: dict[str, object]) -> None:
     """
     import tomlkit
 
-    cards = data.get("cards", [])
     doc = tomlkit.document()
     doc["name"] = str(data.get("name", ""))
     doc["date"] = str(data.get("date", ""))
@@ -1821,8 +1857,33 @@ def _write_batch(path: Path, data: dict[str, object]) -> None:
     for key in ("printed_date", "paper", "printer", "notes"):
         doc[key] = str(data.get(key, ""))
     doc["pdf"] = str(data.get("pdf", "fronts.pdf"))
-    doc["cards"] = [str(cid) for cid in (cards if isinstance(cards, list) else [])]
+    # how it was printed, so a reprint is reproducible rather than remembered
+    doc["profile"] = str(data.get("profile", ""))
+    for key in ("page", "orientation"):
+        doc[key] = str(data.get(key, ""))
+    doc["dpi"] = _as_int(data.get("dpi"))
+    doc["bleed_mm"] = _as_float(data.get("bleed_mm"))
+    doc["cards"] = _as_strings(data.get("cards"))
+    doc["copies"] = _as_ints(data.get("copies"))
     path.write_text(tomlkit.dumps(doc))
+
+
+def _as_int(value: object) -> int:
+    return int(value) if isinstance(value, (int, float)) else 0
+
+
+def _as_float(value: object) -> float:
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+def _as_strings(value: object) -> list[str]:
+    return [str(v) for v in value] if isinstance(value, (list, tuple)) else []
+
+
+def _as_ints(value: object) -> list[int]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [_as_int(v) for v in cast("Sequence[object]", value)]
 
 
 def _back_path(root: Path, game: GameId) -> Path:
@@ -1859,28 +1920,22 @@ def _reverse_path(card: Card, cfg: Config, lib: Library) -> Path | None:
     return _resolve_back_path(card, cfg, lib)
 
 
-def _trim_mm(card: Card, cfg: Config) -> tuple[float, float]:
-    """The physical size this card prints at.
-
-    Ordinary cards are the configured trim; an oversized card is its own real
-    size, because a planar card imposed into a 63×88 cell is not that card — it
-    is a small, wrong one. Nothing has to be configured for this: the size came
-    from the provider at fetch time and lives in the card's own marker.
-    """
-    if card.oversized:
-        return (games.OVERSIZED_W_MM, games.OVERSIZED_H_MM)
-    return (cfg.card_w_mm, cfg.card_h_mm)
+#: the size a card prints at — declared in `sheet`, with the imposition
+_trim_mm = sheet_mod.trim_mm
 
 
 @dataclass(slots=True)
 class _Repro:
-    """The print-time reproduction: fit any master to trim, colour-correct for
-    the medium, then extend cut bleed outside the trim with cardbleed."""
+    """The print-time reproduction: fit any master to trim, correct it for the
+    medium, then extend cut bleed outside the trim with cardbleed.
+
+    This is where the medium is matched — never in the stored master. A measured
+    correction supersedes the profile's hand-set recipe, because one was printed
+    and scanned and the other was a guess.
+    """
 
     cfg: Config
-    profile: str
-    recipe: media.Recipe
-    cal: calibrate_mod.Stage | None
+    profile: profiles.Profile
     tmpdir: Path
 
     def cell(self, master: Image.Image, trim: tuple[float, float]) -> Image.Image:
@@ -1888,10 +1943,11 @@ class _Repro:
         ppm = cfg.sheet_dpi / 25.4
         trim_w, trim_h = round(trim[0] * ppm), round(trim[1] * ppm)
         im = sheet_mod.fit(master, trim_w, trim_h, cfg.sheet_fit)
-        if self.cal is not None:
-            im = calibrate_mod.apply_to_image(im, self.cal)
-        elif self.profile != "none":
-            im = media.compensate(im, self.recipe)
+        correction = self.profile.correction
+        if correction is not None:
+            im = correction.apply_to_image(im)
+        elif not self.profile.recipe.neutral:
+            im = media.compensate(im, self.profile.recipe)
         if cfg.bleed_mm <= 0:
             return im
         bp = round(cfg.bleed_mm * ppm)
@@ -1973,24 +2029,147 @@ def back(
     )
 
 
+def _parse_copies(ids: Sequence[str]) -> list[tuple[str, int]]:
+    """``ex3-90:4`` → four copies of that card, in the order they were asked for.
+
+    Copies are how proxies are actually printed — a playset is four of the same
+    card — and a repeated id would otherwise be silently deduplicated by
+    ``Library.select``.
+    """
+    out: list[tuple[str, int]] = []
+    for raw in ids:
+        cid, sep, count = raw.partition(":")
+        if not sep:
+            out.append((cid, 1))
+            continue
+        if not count.isdigit() or not 1 <= int(count) <= _MAX_COPIES:
+            raise click.UsageError(
+                f"{raw!r}: copies must be a number from 1 to {_MAX_COPIES}"
+            )
+        out.append((cid, int(count)))
+    return out
+
+
+#: enough for a playset of everything; a typo like `:400` is a mistake, not a plan
+_MAX_COPIES = 99
+
+
+def _plan_note(run: sheet_mod.Run, cfg: Config) -> None:
+    """Say what the pages will be, per size — an unexpected page count is the one
+    thing about a print run that costs real money."""
+    for group in run.groups:
+        console.print(
+            f"  [cyan]▤[/] {group.cards} card(s) at {group.name(cfg)} → "
+            f"{group.pages} page(s) [dim]({group.grid[0]}×{group.grid[1]} "
+            "per page)[/]"
+        )
+
+
+def _overrides(
+    cfg: Config,
+    *,
+    faces: str | None = None,
+    page: str | None = None,
+    orientation: str | None = None,
+    dpi: int | None = None,
+    cols: int | None = None,
+    rows: int | None = None,
+    bleed: float | None = None,
+    guides: bool | None = None,
+) -> None:
+    """Apply this run's overrides to a loaded config, in place.
+
+    A sheet run is a one-off — this paper, this printer, today — so the flags
+    change the run and never the library's settings.
+    """
+    if faces:
+        cfg.sheet_faces = Faces(faces)
+    if page:
+        cfg.sheet_page = PageSize(page)
+    if orientation:
+        cfg.sheet_orientation = Orientation(orientation)
+    if dpi:
+        cfg.sheet_dpi = dpi
+    if cols:
+        cfg.sheet_cols = cols
+    if rows:
+        cfg.sheet_rows = rows
+    if bleed is not None:
+        cfg.bleed_mm = bleed
+    if guides is not None:
+        cfg.sheet_guides = guides
+
+
+_SHEET_OPTIONS = (
+    click.option(
+        "--faces",
+        type=click.Choice([f.value for f in Faces]),
+        default=None,
+        help="What to impose (default from [sheet]).",
+    ),
+    click.option(
+        "--page",
+        type=click.Choice([p.value for p in PageSize]),
+        default=None,
+        help="Page size override.",
+    ),
+    click.option(
+        "--orientation",
+        type=click.Choice([o.value for o in Orientation]),
+        default=None,
+        help="Paper orientation override.",
+    ),
+    click.option(
+        "--dpi",
+        type=click.IntRange(72, 4800),
+        default=None,
+        help="Render resolution override.",
+    ),
+    click.option(
+        "--cols", type=click.IntRange(1, 12), default=None, help="Cards across."
+    ),
+    click.option(
+        "--rows", type=click.IntRange(1, 12), default=None, help="Cards down."
+    ),
+    click.option(
+        "--bleed",
+        type=click.FloatRange(0, 20),
+        default=None,
+        help="Cut bleed in mm, outside the trim.",
+    ),
+    click.option("--guides/--no-guides", default=None, help="Print the cut guides."),
+    click.option(
+        "--profile",
+        default=None,
+        help="Print profile for the medium (default from [cyan]\\[print][/]).",
+    ),
+    click.option(
+        "--copies",
+        type=click.IntRange(1, _MAX_COPIES),
+        default=1,
+        show_default=True,
+        help="Copies of every card. Per card, write [cyan]ID:N[/].",
+    ),
+)
+
+
+def _sheet_options(fn: F) -> F:
+    wrapped: Any = fn
+    for option in reversed(_SHEET_OPTIONS):
+        wrapped = option(wrapped)
+    return cast("F", wrapped)
+
+
 @cli.command()
 @click.argument("name")
-@click.argument("ids", nargs=-1, metavar="[ID...]")
+@click.argument("ids", nargs=-1, metavar="[ID[:COPIES]...]")
+@_sheet_options
+@click.option("--notes", default="", help="Recorded in the batch manifest.")
 @click.option(
-    "--faces",
-    type=click.Choice([f.value for f in Faces]),
-    default=None,
-    help="What to impose (default from [sheet]).",
-)
-@click.option(
-    "--page",
-    type=click.Choice([p.value for p in PageSize]),
-    default=None,
-    help="Page size override.",
-)
-@click.option("--dpi", type=int, default=None, help="Render resolution override.")
-@click.option(
-    "--profile", default=None, help="Medium colour profile (default from [print])."
+    "--dry-run",
+    "dry_run",
+    is_flag=True,
+    help="Report the page plan and write nothing.",
 )
 @click.option("--open", "open_pdf", is_flag=True, help="Open the PDF when done.")
 @click.pass_context
@@ -2000,16 +2179,32 @@ def sheet(
     ids: tuple[str, ...],
     faces: str | None,
     page: str | None,
+    orientation: str | None,
     dpi: int | None,
+    cols: int | None,
+    rows: int | None,
+    bleed: float | None,
+    guides: bool | None,
     profile: str | None,
+    copies: int,
+    notes: str,
+    dry_run: bool,
     open_pdf: bool,
 ) -> None:
     """Impose the trim masters into a print PDF and record the batch.
 
-    Each card is scaled to the exact configured card size at sheet DPI, colour-
-    corrected for the medium, then given cut bleed *outside* the trim via
-    cardbleed — the individual masters stay bleed-free. Cut guides sit at the
-    card edge. Fronts, backs, or duplex (back pages mirrored + offset).
+    Each card is scaled to the exact size it prints at, corrected for the medium
+    by its [cyan]--profile[/], then given cut bleed *outside* the trim via
+    cardbleed — the stored masters stay bleed-free. Cut guides sit at the card
+    edge. Fronts, backs, or duplex (back pages mirrored + offset).
+
+    Copies: [cyan]ID:4[/] prints a playset of that card, [cyan]--copies N[/]
+    applies to every card in the run.
+
+    Every page setting can be overridden for this run only —
+    [cyan]--page/--orientation/--cols/--rows/--bleed/--dpi/--guides[/] — because
+    a print run is this paper on this printer today, not a library preference.
+    [cyan]--dry-run[/] reports the page plan and writes nothing.
 
     A two-sided card contributes the side [cyan]proxdex flip[/] points at, and in
     a duplex sheet its *other* side prints on the reverse instead of the shared
@@ -2018,39 +2213,45 @@ def sheet(
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    if page:
-        cfg.sheet_page = PageSize(page)
-    if faces:
-        cfg.sheet_faces = Faces(faces)
-    if dpi:
-        cfg.sheet_dpi = dpi
-    cards = lib.select(ids) if ids else lib.cards()
-    # each card contributes the side it is flipped to; `proxdex flip` chooses
-    ready = [c for c in cards if _sheet_ready(c, c.front_face)]
-    missing = [c.id for c in cards if not _sheet_ready(c, c.front_face)]
-    if missing:
+    _overrides(
+        cfg,
+        faces=faces,
+        page=page,
+        orientation=orientation,
+        dpi=dpi,
+        cols=cols,
+        rows=rows,
+        bleed=bleed,
+        guides=guides,
+    )
+    wanted = _parse_copies(ids)
+    if wanted:
+        by_id = dict(wanted)
+        selected = lib.select(tuple(by_id))
+        chosen = [(c, by_id.get(c.id, 1) * copies) for c in selected]
+    else:
+        chosen = [(c, copies) for c in lib.cards()]
+    run = sheet_mod.plan(chosen, cfg)
+    if run.missing:
         err.print(
-            f"[yellow]not ready, skipping:[/] {', '.join(missing)} "
+            f"[yellow]not ready, skipping:[/] {', '.join(run.missing)} "
             "[dim](finish grade, or `proxdex skip grade`)[/]"
         )
-    if not ready:
+    if not run.ready:
         raise click.UsageError(
             "no card masters to impose — run upscale/grade, or skip them"
         )
-    # an oversized card prints at its own size, on its own pages — say which and
-    # how many fit, because that is a page count the user did not ask for
-    big = [c for c in ready if c.oversized]
-    if big:
-        cols, rows = sheet_mod.grid_for(
-            cfg, (games.OVERSIZED_W_MM, games.OVERSIZED_H_MM)
-        )
+    ready, counts = run.ready, run.copies
+    _plan_note(run, cfg)
+    # an oversized card prints at its own size, on its own pages — say which,
+    # because it is a page count the user did not ask for
+    if run.oversized:
         console.print(
-            f"[cyan]⬗[/] {len(big)} oversized card(s) — "
-            f"{', '.join(c.id for c in big)} — print at "
-            f"{games.OVERSIZED_W_MM:g}×{games.OVERSIZED_H_MM:g}mm on their own "
-            f"pages [dim]({cols}×{rows} per page)[/]"
+            f"[cyan]⬗[/] {len(run.oversized)} oversized card(s) — "
+            f"{', '.join(c.id for c in run.oversized)} — at "
+            f"{games.OVERSIZED_W_MM:g}×{games.OVERSIZED_H_MM:g}mm, on their own pages"
         )
-    two_sided = [c for c in ready if c.back_face is not None]
+    two_sided = run.two_sided
     if two_sided and cfg.sheet_faces is not Faces.DUPLEX:
         err.print(
             f"[yellow]⚠[/] {len(two_sided)} two-sided card(s) — only the flipped-to "
@@ -2058,14 +2259,19 @@ def sheet(
             "`proxdex flip` swaps which side is the front.[/]"
         )
 
-    prof_name, recipe = media.resolve(cfg, profile)
-    cal = calibrate_mod.load(_cal_dir(lib), prof_name) if prof_name != "none" else None
-    if prof_name != "none" and cal is None and prof_name not in media.PROFILES:
-        err.print(f"[yellow]note[/] '{prof_name}' has no calibration or preset")
+    prof = profiles.active(lib.root, cfg, profile)
+    _profile_note(prof)
+    if dry_run:
+        console.print(
+            f"[dim]dry run — {run.cards} card(s) ({cfg.sheet_faces}) would make "
+            f"{run.pages} page(s) @ {cfg.sheet_dpi}dpi on "
+            f"'{prof.name}'. Nothing written.[/]"
+        )
+        return
 
     tmpdir = Path(tempfile.mkdtemp(prefix="proxdex-sheet-"))
     try:
-        repro = _Repro(cfg, prof_name, recipe, cal, tmpdir)
+        repro = _Repro(cfg, prof, tmpdir)
         trims = [_trim_mm(c, cfg) for c in ready]
         # the back of a card is reproduced at that card's own size, so the cache is
         # keyed by both — one shared back image serves two trims in a mixed batch
@@ -2088,17 +2294,17 @@ def sheet(
                 if key not in cache:
                     cache[key] = repro.cell(Image.open(path).convert("RGB"), trim)
                 backs[i] = cache[key]
-        cells = [
-            sheet_mod.Cell(
-                front=repro.cell(
-                    Image.open(cast("Path", _master(c, c.front_face))).convert("RGB"),
-                    trim,
-                ),
-                back=back,
-                trim=trim,
+        # one cell per copy: a playset is the same reproduction four times, and
+        # reproducing it once is both faster and bit-identical on paper
+        cells: list[sheet_mod.Cell] = []
+        for card, trim, back, count in zip(ready, trims, backs, counts, strict=True):
+            front = repro.cell(
+                Image.open(cast("Path", _master(card, card.front_face))).convert("RGB"),
+                trim,
             )
-            for c, trim, back in zip(ready, trims, backs, strict=True)
-        ]
+            cells += [
+                sheet_mod.Cell(front=front, back=back, trim=trim) for _ in range(count)
+            ]
 
         slug = slugify(name)
         today = date.today().isoformat()
@@ -2115,13 +2321,23 @@ def sheet(
             "date": today,
             "faces": cfg.sheet_faces,
             "cards": [c.id for c in ready],
+            # what was actually imposed, so a reprint is reproducible: the copy
+            # counts, the medium, and the page settings this run used
+            "copies": counts,
+            "profile": prof.name,
+            "page": cfg.sheet_page,
+            "orientation": cfg.sheet_orientation,
+            "dpi": cfg.sheet_dpi,
+            "bleed_mm": cfg.bleed_mm,
+            "notes": notes,
             "pdf": pdf.name,
         },
     )
     _reindex(lib)
+    copy_note = f" from {len(ready)} card(s)" if run.cards != len(ready) else ""
     console.print(
-        f"[green]✓[/] {len(ready)} cards ({cfg.sheet_faces}) → {n_pages} "
-        f"page(s) @ {cfg.sheet_dpi}dpi → {pdf.relative_to(lib.root)}"
+        f"[green]✓[/] {run.cards} card(s){copy_note} ({cfg.sheet_faces}) → "
+        f"{n_pages} page(s) @ {cfg.sheet_dpi}dpi → {pdf.relative_to(lib.root)}"
     )
     console.print(
         f"[dim]print with colour management OFF, then `proxdex printed {slug}`[/]"
@@ -2151,49 +2367,382 @@ def printed(ctx: click.Context, name: str) -> None:
     raise click.UsageError(f"no batch named '{name}'")
 
 
-def _cal_dir(lib: Library) -> Path:
-    return lib.root / "calibration"
-
-
-def _active_profile(cfg: Config, profile: str | None) -> str:
-    return profile or cfg.print_profile or "none"
-
-
-_SCAN = click.option(
-    "--scan",
-    "scan_path",
-    required=True,
-    type=UserPath(exists=True, dir_okay=False, path_type=Path),
-    help="The scanned chart image.",
-)
-_PROFILE = click.option(
-    "--profile", default=None, help="Medium profile (default from [print])."
+# --------------------------------------------------------- print profiles ----
+_PROFILE_ARG = click.argument("name", required=False, metavar="[PROFILE]")
+_MEDIUM = click.option(
+    "--medium",
+    type=click.Choice([p.value for p in media.Preset]),
+    default=None,
+    help="The built-in starting point this profile is based on.",
 )
 
 
-@cli.group()
-def calibrate() -> None:
-    """Colour-calibrate a print medium with a print+scan loop.
+def _profile(lib: Library, name: str | None) -> profiles.Profile:
+    """The named profile, or the active one from [cyan]\\[print] profile[/]."""
+    return profiles.active(lib.root, Config.load(lib.root), name)
 
-    [dim]target[/] emits a chart → print it on the medium (scanner
-    auto-correction OFF) → [dim]fit[/] reads the scan and measures a per-medium
-    correction that [cyan]sheet[/] then applies. [dim]target --corrected[/] +
-    [dim]check[/] verify how true the corrected print is; repeat to converge.
+
+def _stored(lib: Library, name: str | None) -> profiles.Profile:
+    """A profile that is a real file, creating it from a preset if need be.
+
+    Editing or calibrating a *preset* means you want a profile of your own based
+    on it — so make one rather than refusing and making the user say it twice. The
+    exception is ``none``, which means "correct nothing": there is nothing there to
+    measure, and a profile with that name would shadow the idea.
+    """
+    prof = _profile(lib, name)
+    if prof.stored:
+        return prof
+    if prof.medium is media.Preset.NONE:
+        raise click.UsageError(
+            "'none' means no correction at all, so there is nothing to calibrate. "
+            "Name the medium you are actually printing on: "
+            "`proxdex profile new <name> --medium paper|foil`"
+        )
+    created = profiles.create(
+        lib.root,
+        prof.name,
+        medium=prof.medium,
+        notes=f"Started from the built-in {prof.medium.label.lower()} preset.",
+    )
+    console.print(
+        f"[green]✓[/] '{created.name}' is now a profile of yours "
+        f"[dim](was a built-in preset) → "
+        f"{profiles.path_for(lib.root, created.name).name}[/]"
+    )
+    return created
+
+
+def _profile_note(prof: profiles.Profile) -> None:
+    """Say what the sheet is being corrected by, and how well it is known."""
+    residual = prof.residual
+    if residual is not None:
+        console.print(
+            f"[cyan]◐[/] profile [bold]{prof.name}[/] — measured over "
+            f"{len(prof.rounds)} round(s), last print off by mean "
+            f"{residual.mean:.1f} RGB over {residual.measured} reachable patch(es)"
+        )
+    elif prof.inherited is not None:
+        console.print(
+            f"[cyan]◐[/] profile [bold]{prof.name}[/] — carrying a calibration "
+            "measured before 0.5. [dim]Its patches were never stored, so it cannot "
+            "be refined; `proxdex calibrate chart` starts a fresh loop.[/]"
+        )
+    elif not prof.recipe.neutral:
+        console.print(
+            f"[cyan]◐[/] profile [bold]{prof.name}[/] — hand-set recipe, "
+            "[yellow]not measured[/]. [dim]`proxdex calibrate chart` measures it.[/]"
+        )
+    elif prof.name != media.Preset.NONE.value:
+        err.print(
+            f"[yellow]⚠[/] profile '{prof.name}' corrects nothing yet — no "
+            "measurement and a neutral recipe"
+        )
+
+
+@cli.group("profile")
+def profile_cmd() -> None:
+    """Manage print profiles — one per medium you actually print on.
+
+    A profile is a name, [bold]your notes[/], the recipe it started from, and the
+    calibration rounds measured on it. `sheet --profile <name>` prints through
+    one; [cyan]\\[print] profile[/] names the default.
+
+    [dim]  proxdex profile new matte-200 --medium paper --notes "Canon matte, no CM"
+      proxdex profile use matte-200
+      proxdex calibrate chart          → print → scan → calibrate add --scan s.png[/]
     """
 
 
-@calibrate.command("target")
-@_PROFILE
+@profile_cmd.command("list")
+@click.pass_context
+def profile_list(ctx: click.Context) -> None:
+    """Every profile in this library, and the built-in presets."""
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for col in ("", "Profile", "Based on", "Rounds", "Last print off by", "Notes"):
+        table.add_column(col)
+    for prof in profiles.listing(lib.root):
+        residual = prof.residual
+        table.add_row(
+            "→" if prof.name == cfg.print_profile else "",
+            f"[bold]{prof.name}[/]" if prof.stored else f"[dim]{prof.name}[/]",
+            prof.medium.label if prof.stored else "built-in preset",
+            str(len(prof.rounds)) if prof.rounds else "[dim]—[/]",
+            f"mean {residual.mean:.1f} / max {residual.max:.1f}"
+            if residual
+            else ("[dim]inherited[/]" if prof.inherited else "[dim]not measured[/]"),
+            _one_line(prof.notes),
+        )
+    console.print(table)
+    console.print(
+        "[dim]→ is the active profile (\\[print] profile). A dim name is a preset "
+        "you have not saved as a profile yet.[/]"
+    )
+
+
+@profile_cmd.command("show")
+@_PROFILE_ARG
+@click.pass_context
+def profile_show(ctx: click.Context, name: str | None) -> None:
+    """A profile in full: notes, recipe, and every calibration round."""
+    lib = _lib(ctx)
+    prof = _profile(lib, name)
+    console.print(f"[bold]{prof.name}[/]  [dim]{prof.medium.label}[/]")
+    if not prof.stored:
+        console.print(
+            "[dim]a built-in preset — `proxdex profile new` to keep an editable "
+            "copy with your own notes[/]"
+        )
+    if prof.notes:
+        console.print(f"\n{prof.notes}\n")
+    recipe = prof.recipe
+    console.print(
+        "[bold]Recipe[/] [dim](used until a round is measured)[/]  "
+        f"saturation {recipe.saturation:g} · contrast {recipe.contrast:g} · "
+        f"brightness {recipe.brightness:g} · gamma {recipe.gamma:g}"
+    )
+    if prof.inherited is not None:
+        console.print(
+            "\n[cyan]◐[/] carrying a correction measured before 0.5. [dim]Its "
+            "patches were never stored, so it cannot be refined — a fresh loop "
+            "supersedes it.[/]"
+        )
+    if not prof.rounds:
+        console.print(
+            "\n[dim]no calibration rounds yet — `proxdex calibrate chart"
+            f"{'' if name is None else ' ' + prof.name}` prints the first one[/]"
+        )
+        return
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for col in ("Round", "Slot", "Date", "Off by (mean/max RGB)", "Reached", "Note"):
+        table.add_column(col)
+    for rnd in prof.rounds:
+        e = rnd.error
+        table.add_row(
+            str(rnd.n),
+            rnd.slot.text,
+            rnd.date,
+            f"{e.mean:.1f} / {e.max:.1f}",
+            f"{e.measured}/{e.total}",
+            _one_line(rnd.note),
+        )
+    console.print("\n[bold]Calibration[/]")
+    console.print(table)
+    trend = " → ".join(f"{r.error.mean:.1f}" for r in prof.rounds)
+    console.print(f"[dim]mean error by round: {trend} (lower is truer)[/]")
+    last = prof.rounds[-1].error
+    if last.clipped:
+        console.print(
+            f"[dim]{last.clipped} of {last.total} patches are outside what this "
+            "medium can print at all — paper is not 255 and ink is not 0 — so the "
+            "error is measured over the rest. That floor is the paper's, not the "
+            "calibration's.[/]"
+        )
+    free = len(prof.free_slots)
+    console.print(
+        f"[dim]next chart goes in slot {prof.next_slot.text} of "
+        f"{prof.grid[0]}×{prof.grid[1]}; {free} slot(s) left on the sheet[/]"
+        if free
+        else "[dim]the sheet is full — the next chart starts a new one at slot 1,1[/]"
+    )
+
+
+@profile_cmd.command("new")
+@click.argument("name")
+@_MEDIUM
+@click.option("--notes", default="", help="What is special about this medium.")
+@click.option("--use", is_flag=True, help="Also make it the active profile.")
+@click.pass_context
+def profile_new(
+    ctx: click.Context, name: str, medium: str | None, notes: str, use: bool
+) -> None:
+    """Create a profile.
+
+    Write down what you did — the paper, the printer setting, whether colour
+    management was off. In six months the notes are the only way to reproduce it.
+    """
+    lib = _lib(ctx)
+    kind = media.Preset(medium) if medium else media.Preset.NONE
+    prof = profiles.create(lib.root, name, medium=kind, notes=notes)
+    console.print(
+        f"[green]✓[/] profile [bold]{prof.name}[/] created from "
+        f"{kind.label.lower()} → {profiles.path_for(lib.root, prof.name).name}"
+    )
+    if use:
+        _write_setting(lib, "print", "profile", prof.name)
+        console.print(f"[green]✓[/] \\[print] profile = {prof.name}")
+    console.print(
+        f"[dim]calibrate it: `proxdex calibrate chart {prof.name}` → print → scan "
+        f"→ `proxdex calibrate add {prof.name} --scan <file>`[/]"
+    )
+
+
+@profile_cmd.command("set")
+@_PROFILE_ARG
+@_MEDIUM
+@click.option("--notes", default=None, help="Replace the notes.")
+@click.option("--note", "append", default=None, help="Add a line to the notes.")
+@click.option("--saturation", type=float, default=None, help="Recipe saturation.")
+@click.option("--contrast", type=float, default=None, help="Recipe contrast.")
+@click.option("--brightness", type=float, default=None, help="Recipe brightness.")
+@click.option("--gamma", type=float, default=None, help="Recipe gamma.")
 @click.option(
-    "--corrected",
-    is_flag=True,
-    help="Bake the saved correction into the chart (print this to verify).",
+    "--grid",
+    default=None,
+    metavar="COLSxROWS",
+    help="How many charts one sheet holds (default 2x3).",
+)
+@click.pass_context
+def profile_set(
+    ctx: click.Context,
+    name: str | None,
+    medium: str | None,
+    notes: str | None,
+    append: str | None,
+    saturation: float | None,
+    contrast: float | None,
+    brightness: float | None,
+    gamma: float | None,
+    grid: str | None,
+) -> None:
+    """Edit a profile's notes, its starting recipe, or its sheet grid."""
+    lib = _lib(ctx)
+    prof = _stored(lib, name)
+    if medium:
+        prof.medium = media.Preset(medium)
+    if notes is not None:
+        prof.notes = notes.strip()
+    if append:
+        prof.notes = f"{prof.notes}\n{append.strip()}".strip()
+    prof.recipe = media.Recipe(
+        saturation=_pick(saturation, prof.recipe.saturation),
+        contrast=_pick(contrast, prof.recipe.contrast),
+        brightness=_pick(brightness, prof.recipe.brightness),
+        gamma=_pick(gamma, prof.recipe.gamma),
+    )
+    if grid:
+        prof.grid = _parse_grid(grid)
+    profiles.save(lib.root, prof)
+    console.print(f"[green]✓[/] {prof.name} updated")
+    if prof.rounds and any(
+        v is not None for v in (saturation, contrast, brightness, gamma)
+    ):
+        console.print(
+            "[dim]note: the recipe is only used until a round is measured, and "
+            f"{prof.name} has {len(prof.rounds)} — the measurement wins.[/]"
+        )
+
+
+@profile_cmd.command("rename")
+@click.argument("old")
+@click.argument("new")
+@click.pass_context
+def profile_rename(ctx: click.Context, old: str, new: str) -> None:
+    """Rename a profile, keeping its notes and its calibration."""
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    prof = profiles.rename(lib.root, old, new)
+    console.print(f"[green]✓[/] {old} → [bold]{prof.name}[/]")
+    if cfg.print_profile == profiles.slug(old):
+        _write_setting(lib, "print", "profile", prof.name)
+        console.print(f"[green]✓[/] \\[print] profile = {prof.name}")
+
+
+@profile_cmd.command("rm")
+@click.argument("name")
+@click.option("-y", "--yes", is_flag=True, help="Delete without confirming.")
+@click.pass_context
+def profile_rm(ctx: click.Context, name: str, yes: bool) -> None:
+    """Delete a profile — its notes and every measured round with it."""
+    lib = _lib(ctx)
+    prof = _stored(lib, name)
+    rounds = len(prof.rounds)
+    if not yes:
+        if not sys.stdin.isatty():
+            raise click.UsageError("refusing to delete without --yes")
+        detail = f" and {rounds} calibration round(s)" if rounds else ""
+        click.confirm(f"Delete profile '{prof.name}'{detail}?", abort=True)
+    profiles.delete(lib.root, prof.name)
+    console.print(f"[green]✓[/] deleted profile {prof.name}")
+    # never leave [print] pointing at a profile that is gone — the next sheet run
+    # would fail on a name nobody typed
+    if Config.load(lib.root).print_profile == prof.name:
+        _write_setting(lib, "print", "profile", media.Preset.NONE.value)
+        console.print(
+            f"[dim]\\[print] profile was {prof.name}; reset to "
+            f"{media.Preset.NONE.value}[/]"
+        )
+
+
+@profile_cmd.command("use")
+@click.argument("name")
+@click.pass_context
+def profile_use(ctx: click.Context, name: str) -> None:
+    """Make a profile the default for `sheet` ([cyan]\\[print] profile[/])."""
+    lib = _lib(ctx)
+    prof = profiles.resolve(lib.root, name)
+    _write_setting(lib, "print", "profile", prof.name)
+    console.print(f"[green]✓[/] \\[print] profile = [bold]{prof.name}[/]")
+    _profile_note(prof)
+
+
+def _pick(value: float | None, current: float) -> float:
+    return current if value is None else value
+
+
+def _parse_grid(text: str) -> tuple[int, int]:
+    parts = [p for p in re.split(r"[x,×]", text.lower()) if p.strip()]
+    if len(parts) != 2 or not all(p.strip().isdigit() for p in parts):
+        raise click.UsageError(f"{text!r}: expected COLSxROWS, e.g. 2x3")
+    cols, rows = (int(p) for p in parts)
+    if not (1 <= cols <= 6 and 1 <= rows <= 6):
+        raise click.UsageError("grid must be between 1x1 and 6x6")
+    return cols, rows
+
+
+def _one_line(text: str) -> str:
+    first = text.strip().splitlines()[0] if text.strip() else ""
+    return first if len(first) <= 48 else first[:47] + "…"
+
+
+# ----------------------------------------------------------- calibration -----
+@cli.group()
+def calibrate() -> None:
+    """Measure a print profile against paper, one round at a time.
+
+    [dim]chart[/] renders a page with the chart in one slot of the sheet — print
+    it on the medium, scan it with auto-correction OFF, and [dim]add[/] records
+    what came back. The correction refits over [bold]every[/] round, so feeding
+    the same sheet through again and printing the next slot makes it truer rather
+    than replacing what you measured last time.
+
+    [dim]  proxdex calibrate chart                → print it on the medium
+      proxdex calibrate add --scan scan.png  → record what came back
+      proxdex profile show                   → watch the error fall
+      (feed the same sheet back in and repeat — six rounds fit an A4)[/]
+    """
+
+
+@calibrate.command("chart")
+@_PROFILE_ARG
+@click.option(
+    "--slot",
+    default=None,
+    metavar="COL,ROW",
+    help="Which slot of the sheet to print in (default: the next free one).",
 )
 @click.option(
-    "--pdf",
-    "as_pdf",
+    "--raw",
     is_flag=True,
-    help="Output a PDF via the same renderer as print sheets (path parity).",
+    help="Print the plain target, uncorrected — what round 1 does anyway.",
+)
+@click.option(
+    "--png",
+    "as_png",
+    is_flag=True,
+    help="Write a PNG of the page instead of a print-ready PDF.",
 )
 @click.option(
     "-o",
@@ -2201,105 +2750,212 @@ def calibrate() -> None:
     "out",
     type=UserPath(path_type=Path),
     default=None,
-    help="Output path (default: <lib>/calibration/<profile>_chart.png).",
+    help="Output path (default: [cyan]<lib>/profiles/<name>_round<n>.pdf[/]).",
 )
 @click.pass_context
-def cal_target(
+def cal_chart(
     ctx: click.Context,
-    profile: str | None,
-    corrected: bool,
-    as_pdf: bool,
+    name: str | None,
+    slot: str | None,
+    raw: bool,
+    as_png: bool,
     out: Path | None,
 ) -> None:
-    """Write a printable calibration chart.
+    """Render the next round's chart, ready to print.
 
-    Use [cyan]--pdf[/] so the chart travels the exact same path to paper as
-    your card sheets — otherwise the correction is measured on a different
-    print path than it's applied to.
+    The chart is corrected by everything measured so far, which is the point: the
+    next print lands near the target, so the next measurement is taken where your
+    cards actually live.
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    prof = _active_profile(cfg, profile)
-    stage = calibrate_mod.load(_cal_dir(lib), prof) if corrected else None
-    if corrected and stage is None:
-        raise click.UsageError(f"no calibration for '{prof}' yet — run `fit` first")
-    suffix = "_chart_corrected" if corrected else "_chart"
-    ext = "pdf" if as_pdf else "png"
-    dst = out or _cal_dir(lib) / f"{prof}{suffix}.{ext}"
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    chart = calibrate_mod.render_chart(stage)
-    if as_pdf:
-        sheet_mod.single_page_pdf(chart, dst, cfg)
-    else:
-        chart.save(dst)
-    console.print(
-        f"[green]wrote[/] {dst}\n[dim]print it on '{prof}' with scanner "
-        "auto-correction OFF, then `proxdex calibrate fit --scan <scan>`[/]"
-    )
-
-
-@calibrate.command("fit")
-@_PROFILE
-@_SCAN
-@click.pass_context
-def cal_fit(ctx: click.Context, profile: str | None, scan_path: Path) -> None:
-    """Measure a correction for the medium from a scanned chart."""
-    lib = _lib(ctx)
-    cfg = Config.load(lib.root)
-    prof = _active_profile(cfg, profile)
-    target = np.array(calibrate_mod.chart_patches(), np.float32)
-    measured = calibrate_mod.read_scan(scan_path)
-    err = calibrate_mod.error(measured, target)
-    stage = calibrate_mod.fit(measured, target)
-    dst = calibrate_mod.save(_cal_dir(lib), prof, stage, err)
-    console.print(
-        f"[green]calibrated[/] '{prof}': raw print was off by "
-        f"mean {err['mean']:.1f} / max {err['max']:.1f} RGB"
-    )
-    console.print(
-        f"[dim]saved {dst.relative_to(lib.root)} · `sheet` now applies it. "
-        "verify: `calibrate target --corrected` → print → `calibrate check`[/]"
-    )
-
-
-@calibrate.command("check")
-@_PROFILE
-@_SCAN
-@click.pass_context
-def cal_check(ctx: click.Context, profile: str | None, scan_path: Path) -> None:
-    """Report residual error from a scan of the *corrected* chart."""
-    lib = _lib(ctx)
-    cfg = Config.load(lib.root)
-    prof = _active_profile(cfg, profile)
-    target = np.array(calibrate_mod.chart_patches(), np.float32)
-    err = calibrate_mod.error(calibrate_mod.read_scan(scan_path), target)
-    console.print(
-        f"'{prof}' residual after correction: "
-        f"mean {err['mean']:.1f} / max {err['max']:.1f} RGB [dim](lower is truer)[/]"
-    )
-
-
-@calibrate.command("show")
-@click.pass_context
-def cal_show(ctx: click.Context) -> None:
-    """List the measured calibrations in this library."""
-    lib = _lib(ctx)
-    files = sorted(_cal_dir(lib).glob("*.json"))
-    if not files:
-        console.print("[dim]no calibrations yet — run `calibrate fit`[/]")
-        return
-    table = Table(box=None, pad_edge=False, header_style="bold")
-    for col in ("Profile", "Model", "Raw err (mean/max)"):
-        table.add_column(col)
-    for f in files:
-        data = json.loads(f.read_text())
-        e = data.get("uncorrected_error", {})
-        table.add_row(
-            data.get("profile", f.stem),
-            data.get("model", "?"),
-            f"{e.get('mean', 0):.1f} / {e.get('max', 0):.1f}",
+    prof = _stored(lib, name)
+    where = profiles.Slot.parse(slot, prof.grid) if slot else prof.next_slot
+    if where in prof.used_slots:
+        err.print(
+            f"[yellow]⚠[/] slot {where.text} already holds round "
+            f"{next(r.n for r in prof.rounds if r.slot == where)} — printing there "
+            "again lands ink on ink. Feed a blank sheet, or pick another slot."
         )
-    console.print(table)
+    if prof.sheet_full and slot is None:
+        console.print(
+            "[cyan]▤[/] the sheet is full — this chart starts a new one at "
+            f"slot {where.text}"
+        )
+    correction = None if raw else prof.correction
+    label = prof.chart_label(where)
+    page = calibrate_mod.chart_page(
+        cfg, correction, slot=where, grid=prof.grid, label=label
+    )
+    dst = out or profiles.profiles_dir(lib.root) / (
+        f"{prof.name}_round{len(prof.rounds) + 1}.{'png' if as_png else 'pdf'}"
+    )
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if as_png:
+        page.save(dst)
+    else:
+        sheet_mod.write_page_pdf(page, dst, cfg)
+    prof.pending = where
+    profiles.save(lib.root, prof)
+    console.print(
+        f"[green]wrote[/] {dst} [dim]— round {len(prof.rounds) + 1}, "
+        f"slot {where.text} of {prof.grid[0]}×{prof.grid[1]}"
+        f"{', uncorrected' if correction is None else ', corrected so far'}[/]"
+    )
+    console.print(
+        "[dim]print it on this medium with colour management OFF, scan the whole "
+        f"page with auto-correction OFF, then `proxdex calibrate add {prof.name} "
+        "--scan <file>`[/]"
+    )
+
+
+@calibrate.command("add")
+@_PROFILE_ARG
+@click.option(
+    "--scan",
+    "scan_path",
+    required=True,
+    type=UserPath(exists=True, dir_okay=False, path_type=Path),
+    help="The scanned page.",
+)
+@click.option(
+    "--slot",
+    default=None,
+    metavar="COL,ROW",
+    help="Which slot this chart is in (default: the one the last chart used).",
+)
+@click.option(
+    "--whole",
+    is_flag=True,
+    help="The image is one chart already, cropped — don't look for a slot.",
+)
+@click.option("--note", default="", help="What was different about this round.")
+@click.pass_context
+def cal_add(
+    ctx: click.Context,
+    name: str | None,
+    scan_path: Path,
+    slot: str | None,
+    whole: bool,
+    note: str,
+) -> None:
+    """Read a scanned chart and record it as the next calibration round."""
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    prof = _stored(lib, name)
+    where = (
+        profiles.Slot.parse(slot, prof.grid)
+        if slot
+        else (prof.pending or prof.next_slot)
+    )
+    # what this print was asked to be: the chart was rendered through whatever was
+    # known then, which is exactly the correction fitted over the rounds recorded
+    # so far — the round being added is not in that fit yet
+    sent = calibrate_mod.sent_patches(prof.correction)
+    scanned = calibrate_mod.read_scan(
+        scan_path, cfg, slot=None if whole else where, grid=prof.grid
+    )
+    before = prof.residual
+    rnd = prof.add_round(scanned, sent, where, scan=scan_path.name, note=note.strip())
+    profiles.save(lib.root, prof)
+    e = rnd.error
+    trend = ""
+    if before is not None:
+        delta = before.mean - e.mean
+        arrow = "[green]↓[/]" if delta > 0 else "[yellow]↑[/]"
+        trend = f"  {arrow} {abs(delta):.1f} from round {rnd.n - 1}"
+    console.print(
+        f"[green]✓[/] round {rnd.n} recorded (slot {where.text}): this print was "
+        f"off by mean {e.mean:.1f} / max {e.max:.1f} RGB over {e.measured} "
+        f"reachable patch(es){trend}"
+    )
+    if e.clipped:
+        console.print(
+            f"[dim]{e.clipped} patch(es) are outside this medium's gamut and are "
+            "not counted — no calibration can reach them.[/]"
+        )
+    console.print(
+        f"[dim]correction refitted over {len(prof.rounds)} round(s) — `sheet "
+        f"--profile {prof.name}` uses it. Another round: `proxdex calibrate chart "
+        f"{prof.name}` (slot {prof.next_slot.text})[/]"
+    )
+    _suspect_round(prof, rnd)
+
+
+#: how much worse than the best round so far still counts as ordinary variation.
+#: Past it, the likely cause is the scan — wrong slot, upside down, or
+#: auto-corrected — and a bad round genuinely damages the fit, so it is named
+#: loudly rather than folded in quietly.
+_CAL_SUSPECT_RATIO = 2.0
+_CAL_SUSPECT_FLOOR = 5.0
+
+
+def _suspect_round(prof: profiles.Profile, rnd: profiles.Round) -> None:
+    """Say so when a round looks like a bad scan rather than a bad printer."""
+    others = [r for r in prof.rounds if r.n != rnd.n]
+    if not others:
+        return
+    best = min(others, key=lambda r: r.error.mean)
+    limit = max(
+        best.error.mean * _CAL_SUSPECT_RATIO, best.error.mean + _CAL_SUSPECT_FLOOR
+    )
+    if rnd.error.mean <= limit:
+        return
+    err.print(
+        f"[yellow]⚠[/] round {rnd.n} is much worse than round {best.n} "
+        f"({rnd.error.mean:.1f} vs {best.error.mean:.1f}) — check the scan is the "
+        "right slot, the right way up and unretouched. [dim]`proxdex calibrate drop "
+        f"{prof.name} --round {rnd.n}` refits without it.[/]"
+    )
+
+
+@calibrate.command("drop")
+@_PROFILE_ARG
+@click.option("--round", "which", type=int, required=True, help="Round number.")
+@click.pass_context
+def cal_drop(ctx: click.Context, name: str | None, which: int) -> None:
+    """Remove one round — a misfeed, a crooked scan — and refit without it."""
+    lib = _lib(ctx)
+    prof = _stored(lib, name)
+    rnd = prof.drop_round(which)
+    profiles.save(lib.root, prof)
+    console.print(
+        f"[green]✓[/] dropped round {which} (slot {rnd.slot.text}); "
+        f"{len(prof.rounds)} round(s) left, correction refitted"
+    )
+
+
+@calibrate.command("proof")
+@_PROFILE_ARG
+@click.option(
+    "-o",
+    "--out",
+    "out",
+    type=UserPath(path_type=Path),
+    default=None,
+    help="Where to write the swatch sheet.",
+)
+@click.pass_context
+def cal_proof(ctx: click.Context, name: str | None, out: Path | None) -> None:
+    """Write a PNG comparing what you asked for with what the paper gave back.
+
+    Two rows per patch — target above, most recent scan below. Numbers say a
+    print is off; this says *how*, which is what tells you whether to keep going.
+    """
+    lib = _lib(ctx)
+    prof = _stored(lib, name)
+    if not prof.rounds:
+        raise click.UsageError(f"'{prof.name}' has no rounds to proof yet")
+    last = prof.rounds[-1]
+    default = profiles.profiles_dir(lib.root) / f"{prof.name}_round{last.n}_proof.png"
+    dst = out or default
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    calibrate_mod.proof_sheet(last.scanned).save(dst)
+    e = last.error
+    console.print(
+        f"[green]wrote[/] {dst} [dim]— round {last.n}, off by mean {e.mean:.1f} / "
+        f"max {e.max:.1f} RGB[/]"
+    )
 
 
 def _card_id_from(stem: str) -> str | None:

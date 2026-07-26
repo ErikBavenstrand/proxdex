@@ -21,14 +21,15 @@ from __future__ import annotations
 import contextlib
 import os
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import img2pdf
 from PIL import Image, ImageDraw
 
+from proxdex import games, steps
 from proxdex.config import (
     Config,
     DuplexFlip,
@@ -40,6 +41,7 @@ from proxdex.config import (
     PageSize,
     RegMarks,
 )
+from proxdex.library import FRONT, Card, Stage
 
 # our high-DPI pages are large by design; we generate them, so lift PIL's guard
 Image.MAX_IMAGE_PIXELS = None
@@ -60,12 +62,18 @@ def _hex(color: str) -> tuple[int, int, int]:
 
 
 def _page_size_px(cfg: Config) -> tuple[int, int]:
-    w_mm, h_mm = _page_mm(cfg)
+    w_mm, h_mm = page_mm(cfg)
     ppm = _ppm(cfg)
     return round(w_mm * ppm), round(h_mm * ppm)
 
 
-def _blank_page(cfg: Config) -> Image.Image:
+def blank_page(cfg: Config) -> Image.Image:
+    """An empty print page at the configured size and resolution.
+
+    Public because the calibration chart is printed through the same renderer as
+    a card sheet — measuring a correction on a different path to paper than it is
+    applied on would measure the wrong thing.
+    """
     return Image.new("RGB", _page_size_px(cfg), (255, 255, 255))
 
 
@@ -109,7 +117,7 @@ class Geo:
         return self.cols * self.rows
 
 
-def _page_mm(cfg: Config) -> Trim:
+def page_mm(cfg: Config) -> Trim:
     w_mm, h_mm = PAGES[cfg.sheet_page]
     if cfg.sheet_orientation is Orientation.LANDSCAPE:
         w_mm, h_mm = h_mm, w_mm
@@ -125,7 +133,7 @@ def grid_for(cfg: Config, trim: Trim) -> tuple[int, int]:
     """
     if trim == (cfg.card_w_mm, cfg.card_h_mm):
         return cfg.sheet_cols, cfg.sheet_rows
-    page_w, page_h = _page_mm(cfg)
+    page_w, page_h = page_mm(cfg)
     cell_w = trim[0] + 2 * cfg.bleed_mm
     cell_h = trim[1] + 2 * cfg.bleed_mm
     usable_w = page_w - 2 * cfg.sheet_margin_mm + cfg.sheet_spacing_mm
@@ -140,6 +148,139 @@ def grid_for(cfg: Config, trim: Trim) -> tuple[int, int]:
 #: slack when counting how many cells fit, so a card that fills the page exactly
 #: is not excluded by float error
 _EPS_MM = 1e-6
+
+
+def master(card: Card, face: int = FRONT) -> Path | None:
+    """The furthest-along image to print — the graded master, or the best earlier
+    stage when a later step was skipped."""
+    return card.best(*steps.BEST, face=face)
+
+
+def print_ready(card: Card, face: int = FRONT) -> bool:
+    """A side is ready to impose once grade is *settled* — done, or skipped so an
+    earlier stage stands as the master."""
+    settled = card.has(Stage.EDITED, face) or card.skipped(Stage.EDITED, face)
+    return settled and master(card, face) is not None
+
+
+def trim_mm(card: Card, cfg: Config) -> Trim:
+    """The physical size this card prints at.
+
+    Ordinary cards are the configured trim; an oversized card is its own real
+    size, because a planar card imposed into a 63×88 cell is not that card — it is
+    a small, wrong one. Nothing has to be configured for this: the size came from
+    the provider at fetch time and lives in the card's own marker.
+    """
+    if card.oversized:
+        return (games.OVERSIZED_W_MM, games.OVERSIZED_H_MM)
+    return (cfg.card_w_mm, cfg.card_h_mm)
+
+
+@dataclass(frozen=True, slots=True)
+class Group:
+    """One trim size's share of a print run: how many cards, and how many pages."""
+
+    trim: Trim
+    cards: int
+    grid: tuple[int, int]
+    pages: int
+
+    def standard(self, cfg: Config) -> bool:
+        return self.trim == (cfg.card_w_mm, cfg.card_h_mm)
+
+    def name(self, cfg: Config) -> str:
+        if self.standard(cfg):
+            return "standard"
+        return f"{self.trim[0]:g}×{self.trim[1]:g}mm"
+
+    def json(self, cfg: Config) -> dict[str, Any]:
+        return {
+            "trim": list(self.trim),
+            "name": self.name(cfg),
+            "standard": self.standard(cfg),
+            "cards": self.cards,
+            "grid": list(self.grid),
+            "pages": self.pages,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class Run:
+    """A planned print run: what is in it, what is not, and what it costs in paper.
+
+    Worked out before a single pixel is rendered, so `sheet --dry-run` and the
+    UI's sheet builder can both promise the page count you actually get — they ask
+    this, not their own arithmetic.
+    """
+
+    ready: tuple[Card, ...]
+    copies: tuple[int, ...]
+    missing: tuple[str, ...]
+    groups: tuple[Group, ...]
+
+    @property
+    def cards(self) -> int:
+        return sum(self.copies)
+
+    @property
+    def pages(self) -> int:
+        return sum(g.pages for g in self.groups)
+
+    @property
+    def oversized(self) -> tuple[Card, ...]:
+        return tuple(c for c in self.ready if c.oversized)
+
+    @property
+    def two_sided(self) -> tuple[Card, ...]:
+        return tuple(c for c in self.ready if c.back_face is not None)
+
+    def json(self, cfg: Config) -> dict[str, Any]:
+        return {
+            "cards": self.cards,
+            "pages": self.pages,
+            "ready": [c.id for c in self.ready],
+            "copies": list(self.copies),
+            "missing": list(self.missing),
+            "groups": [g.json(cfg) for g in self.groups],
+            "oversized": [c.id for c in self.oversized],
+            "two_sided": [c.id for c in self.two_sided],
+            "faces": cfg.sheet_faces.value,
+            "dpi": cfg.sheet_dpi,
+        }
+
+
+def plan(cards: Sequence[tuple[Card, int]], cfg: Config) -> Run:
+    """Group a run by trim size and count its pages, imposing nothing.
+
+    ``cards`` is (card, copies) pairs. A card whose grade is not settled is left
+    out and named in ``missing`` rather than silently dropped.
+    """
+    ready: list[Card] = []
+    copies: list[int] = []
+    missing: list[str] = []
+    for card, count in cards:
+        if print_ready(card, card.front_face):
+            ready.append(card)
+            copies.append(count)
+        else:
+            missing.append(card.id)
+    per_trim: dict[Trim, int] = {}
+    for card, count in zip(ready, copies, strict=True):
+        trim = trim_mm(card, cfg)
+        per_trim[trim] = per_trim.get(trim, 0) + count
+    # duplex prints a back page behind every front page
+    sides = 2 if cfg.sheet_faces is Faces.DUPLEX else 1
+    groups: list[Group] = []
+    for trim, count in per_trim.items():
+        grid = grid_for(cfg, trim)
+        sheets = -(-count // (grid[0] * grid[1]))  # ceil
+        groups.append(Group(trim=trim, cards=count, grid=grid, pages=sheets * sides))
+    return Run(
+        ready=tuple(ready),
+        copies=tuple(copies),
+        missing=tuple(missing),
+        groups=tuple(groups),
+    )
 
 
 def _geometry(cfg: Config, trim: Trim) -> Geo:
@@ -268,7 +409,7 @@ def _reg_marks(draw: ImageDraw.ImageDraw, cfg: Config, g: Geo) -> None:
 def _render(
     images: list[Image.Image | None], cfg: Config, g: Geo, *, is_back: bool
 ) -> Image.Image:
-    page = _blank_page(cfg)
+    page = blank_page(cfg)
     draw = ImageDraw.Draw(page)
     ppm = g.ppm
     ox = round(
@@ -364,16 +505,11 @@ def impose_to_pdf(cells: list[Cell], cfg: Config, dst: Path) -> int:
     return _pages_to_pdf(_iter_pages(cells, cfg), dst, cfg)
 
 
-def single_page_pdf(image: Image.Image, dst: Path, cfg: Config) -> None:
-    """Center one image on a blank page and write a lossless PDF (charts).
+def write_page_pdf(page: Image.Image, dst: Path, cfg: Config) -> None:
+    """Write one already-composed page as a lossless PDF (the calibration chart).
 
-    Uses the same page renderer as card sheets, so a printed chart travels the
-    identical path to paper as real cards.
+    Same writer as card sheets, so a printed chart travels the identical path to
+    paper as real cards — otherwise the correction would be measured on one print
+    path and applied on another.
     """
-    page = _blank_page(cfg)
-    pw, ph = page.size
-    margin = round(cfg.sheet_margin_mm * _ppm(cfg))
-    im = image.convert("RGB").copy()
-    im.thumbnail((pw - 2 * margin, ph - 2 * margin))
-    page.paste(im, ((pw - im.width) // 2, (ph - im.height) // 2))
-    _pages_to_pdf(iter([page]), dst, cfg)
+    _pages_to_pdf(iter([page.convert("RGB")]), dst, cfg)

@@ -639,6 +639,59 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
 
 
 /* --- sheet dialog: pick the side of every two-sided card ----------------- */
+/* ---------- sheet builder ------------------------------------------------- */
+.sheetgrid { display: grid; gap: var(--s4); grid-template-columns: minmax(0,1fr); }
+@media (min-width: 1200px) { .sheetgrid { grid-template-columns: minmax(0,1fr) 23rem; }
+  .sheetgrid > div:last-child { position: sticky; top: 4.5rem; align-self: start; } }
+/* a copies stepper: − N + as one control, so the count reads as a quantity */
+.stepn { display: inline-flex; align-items: stretch; border: 1px solid var(--rule);
+  border-radius: .375rem; overflow: hidden; background: var(--stock-2); }
+.stepn button { background: none; border: 0; color: var(--dim); width: 1.5rem;
+  font-size: .875rem; line-height: 1; }
+.stepn button:hover { color: var(--type); background: var(--stock-3); }
+.stepn input { width: 2.25rem; text-align: center; background: none; border: 0;
+  color: var(--type); font-size: .75rem; padding: .25rem 0; }
+.stepn input:focus-visible { outline: 2px solid var(--mark); outline-offset: -2px; }
+/* the card pool: small, dense, and unmistakably clickable */
+.pool { display: grid; gap: var(--s2); grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+  max-height: 22rem; overflow: auto; }
+.poolcard { display: flex; flex-direction: column; gap: 2px; padding: var(--s1);
+  background: var(--stock-2); border: 1px solid var(--rule); border-radius: .375rem;
+  text-align: left; }
+.poolcard:hover { border-color: var(--mark); }
+.poolcard.notready { opacity: .55; }
+.poolcard img { width: 100%; aspect-ratio: 63/88; object-fit: cover; border-radius: 2px;
+  background: var(--stock-3); }
+.poolcard .nm { font-size: .6875rem; color: var(--type); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.poolcard .mono { font-size: .5625rem; color: var(--faint); }
+
+/* ---------- calibration -------------------------------------------------- */
+.calgrid { display: grid; gap: var(--s4); grid-template-columns: minmax(0,1fr); }
+@media (min-width: 768px) { .calgrid { grid-template-columns: 12rem minmax(0,1fr); } }
+/* the sheet, as it really is: which slots hold a round and where the next goes */
+.slotmap { display: grid; gap: 3px; max-width: 11rem; }
+.slot { aspect-ratio: 1200/1350; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 2px;
+  border: 1px dashed var(--rule); border-radius: 3px; background: var(--stock-2); }
+.slot b { font-size: .875rem; color: var(--faint); line-height: 1; }
+.slot .mono { font-size: .5625rem; color: var(--faint); }
+.slot.used { border-style: solid; border-color: var(--rule-2); background: var(--stock-3); }
+.slot.used b { color: var(--type); }
+/* cyan is measurement in this UI, and the next slot is where one will be taken */
+.slot.next { border-color: var(--reg); border-style: solid; }
+.slot.next b { color: var(--reg); }
+/* the convergence trail — the whole point of iterating, so it is a picture */
+.trend { display: flex; align-items: flex-end; gap: var(--s2); height: 4.5rem; }
+.tbar { flex: 0 0 2.5rem; display: flex; flex-direction: column; align-items: center;
+  justify-content: flex-end; height: 100%; gap: 2px; }
+.tbar i { display: block; width: 100%; background: var(--mark); border-radius: 2px 2px 0 0; }
+.tbar .mono { font-size: .5625rem; color: var(--faint); }
+.profline { border: 1px solid var(--rule); border-radius: .375rem; padding: var(--s2);
+  display: flex; flex-direction: column; gap: var(--s1); }
+.recipe { display: grid; gap: var(--s2); grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); }
+img.proof { width: 100%; max-width: 32rem; border: 1px solid var(--rule); border-radius: .25rem; }
+
 .picklist { max-height: 15rem; overflow: auto; border: 1px solid var(--rule); border-radius: .375rem; }
 .pickrow {
   display: flex; align-items: center; gap: var(--s2); padding: .375rem var(--s2);
@@ -671,12 +724,14 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
     <nav class="d-flex gap-1" id="nav">
       <button class="navlink active" data-view="library">Library</button>
       <button class="navlink" data-view="search">Search</button>
+      <button class="navlink" data-view="sheet">Sheet</button>
+      <button class="navlink" data-view="print">Print</button>
       <button class="navlink" data-view="settings">Settings</button>
     </nav>
     <div class="ms-auto d-flex align-items-center gap-2">
       <span id="apihealth" class="chip warn d-none"
             title="A card API is answering slowly or failing; proxdex retries and serves cached metadata."></span>
-      <button class="btn btn-sm btn-primary" onclick="sheetDialog()">Make sheet</button>
+      <button class="btn btn-sm btn-primary" onclick="go('sheet')">Make sheet</button>
       <button class="btn btn-sm btn-outline-secondary" title="Rebuild INDEX.md"
               onclick="act('/api/index',{},'Index rebuilt')">Index</button>
       <button class="btn btn-sm btn-outline-secondary" title="Reload from disk"
@@ -712,6 +767,22 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
   </div>
 </div>
 
+<div class="modal fade" id="namedlg" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-sm">
+    <div class="modal-content">
+      <div class="modal-body vstack gap-2">
+        <label class="eyebrow mb-0" for="nameval" id="namelabel"></label>
+        <input class="form-control form-control-sm mono" id="nameval">
+        <p class="hint mb-0" id="namehint"></p>
+      </div>
+      <div class="modal-footer border-0 pt-0">
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-sm btn-primary" id="nameok">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal fade" id="keysdlg" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered modal-lg">
     <div class="modal-content">
@@ -723,40 +794,6 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
         <button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body" id="keysbody"></div>
-    </div>
-  </div>
-</div>
-
-<div class="modal fade" id="sheetdlg" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content">
-      <div class="modal-header border-0 pb-1">
-        <div>
-          <div class="eyebrow">Impose</div>
-          <h5 class="modal-title mb-0">Make print sheet</h5>
-        </div>
-        <button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body vstack gap-3">
-        <div id="sd_scope"></div>
-        <p class="hint mb-0" id="sd_blurb"></p>
-        <div id="sd_sizes"></div>
-        <div class="setting"><label for="sd_name">batch name</label>
-          <input class="form-control form-control-sm" id="sd_name" value="deck" /></div>
-        <div class="setting"><label for="sd_faces">what to print</label>
-          <select class="form-select form-select-sm" id="sd_faces" onchange="paintPicks()"></select></div>
-        <div class="setting"><label for="sd_page">page</label>
-          <select class="form-select form-select-sm" id="sd_page"></select></div>
-        <div class="setting"><label for="sd_dpi">dpi</label>
-          <input class="form-control form-control-sm" id="sd_dpi" type="number" placeholder="config default" /></div>
-        <div class="setting"><label for="sd_profile">medium</label>
-          <select class="form-select form-select-sm" id="sd_profile"></select></div>
-        <div id="sd_sides"></div>
-      </div>
-      <div class="modal-footer border-0 pt-0">
-        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-        <button class="btn btn-sm btn-primary" onclick="makeSheet()">Make sheet</button>
-      </div>
     </div>
   </div>
 </div>
@@ -784,6 +821,12 @@ const state = {
   // input along `split`, 'fade' cross-dissolves at `blend`. Mutually exclusive,
   // and sticky across cards — it is a way of looking, not a property of a card.
   compare:'off', split:50, blend:50,
+  // the sheet builder: which cards and how many of each, plus this run's page
+  // settings. `picks` empty means "every ready card", exactly as the CLI's
+  // `sheet <name>` with no ids does.
+  sheet:{name:'deck', picks:new Map(), filter:'', opts:null, plan:null, planning:false},
+  // the print screen: which profile is open, and what the server said about it
+  profile:null, profileList:null, profileDetail:null, proofOf:null,
 };
 const card = () => state.cards.find(c => c.id === state.id) || null;
 /* What a card is, when it is not an ordinary one-sided 63×88 print. The names
@@ -866,6 +909,31 @@ function ask(text, okLabel='Continue'){
   });
 }
 
+/* Same for a name: the browser's prompt() looks nothing like the rest of this
+   console, and a medium's name is worth typing carefully. */
+let _name;
+function askName(label, value = '', hint = ''){
+  _name ||= new bootstrap.Modal($('#namedlg'));
+  $('#namelabel').textContent = label;
+  $('#namehint').textContent = hint;
+  const input = $('#nameval');
+  input.value = value;
+  return new Promise(resolve => {
+    const done = v => {
+      $('#nameok').onclick = null; input.onkeydown = null;
+      $('#namedlg').removeEventListener('hidden.bs.modal', onHide);
+      resolve(v);
+    };
+    const onHide = () => done(null);
+    const submit = () => { const v = input.value.trim(); _name.hide(); done(v || null); };
+    $('#nameok').onclick = submit;
+    input.onkeydown = ev => { if(ev.key === 'Enter'){ ev.preventDefault(); submit(); } };
+    $('#namedlg').addEventListener('hidden.bs.modal', onHide, {once:true});
+    _name.show();
+    setTimeout(() => input.focus(), 200);
+  });
+}
+
 /* Image URLs carry the card's rev (its newest stage mtime) and the side, so the
    browser can cache them forever and a changed file simply becomes a different
    URL. */
@@ -914,6 +982,9 @@ function currentUrl(){
     return '/search' + (p.toString() ? '?' + p : '');
   }
   if(state.view === 'settings') return '/settings';
+  if(state.view === 'sheet') return '/sheet';
+  if(state.view === 'print')
+    return '/print' + (state.profile ? `?p=${encodeURIComponent(state.profile)}` : '');
   return '/library';
 }
 function routeFromUrl(){
@@ -931,6 +1002,9 @@ function routeFromUrl(){
     }};
   }
   if(parts[0] === 'settings') return {view:'settings', id:null, step:null};
+  if(parts[0] === 'sheet') return {view:'sheet', id:null, step:null};
+  if(parts[0] === 'print')
+    return {view:'print', id:null, step:null, profile: q.get('p') || null};
   return {view:'library', id:null, step:null};
 }
 /* replace (not push) when only the URL detail changed — typing in the search
@@ -950,7 +1024,7 @@ function navigate(next, {replace = false} = {}){
   if(!samePage) window.scrollTo(0, 0);
 }
 const routeState = () => ({view:state.view, id:state.id, face:state.face, step:state.step,
-                           search:{...state.search}});
+                           profile:state.profile, search:{...state.search}});
 /* Update the address bar in place — used while typing a search, where a
    re-render would fight the form and a push would bury the last page. */
 function syncUrl(){ history.replaceState(routeState(), '', currentUrl()); }
@@ -1002,6 +1076,8 @@ function render(){
       showHint(state.results.length ? '' : 'No matches. Try fewer words, or switch game.');
     } else if(state.search.q.trim()) doSearch();   // a /search?q=… link
   }
+  else if(state.view === 'sheet') renderSheet();
+  else if(state.view === 'print') renderPrint();
   else if(state.view === 'settings') renderSettings();
 }
 
@@ -1206,8 +1282,17 @@ function paintBulk(){
       <span class="eyebrow ms-2">Skip</span>
       ${runnable.map(s => `<button class="btn btn-sm btn-outline-secondary"
         onclick="bulkPipe('skip','${s.key}')">${esc(s.label)}</button>`).join('')}
-      <button class="btn btn-sm btn-outline-danger ms-2" onclick="bulkDelete()">Delete</button>
+      <button class="btn btn-sm btn-outline-secondary ms-2" onclick="sheetFromSelection()"
+        title="Open the sheet builder with these cards picked">Make sheet</button>
+      <button class="btn btn-sm btn-outline-danger" onclick="bulkDelete()">Delete</button>
     </span></div>`;
+}
+/* A selection on the contact sheet is the obvious thing to impose — carry it
+   into the builder rather than making the choice twice. */
+function sheetFromSelection(){
+  for(const id of state.sel)
+    if(!state.sheet.picks.has(id)) state.sheet.picks.set(id, 1);
+  navigate({view:'sheet', id:null, step:null});
 }
 function pickAll(){ visible().forEach(c => state.sel.add(c.id)); render(); paintBulk(); }
 function clearPicks(){ state.sel.clear(); render(); }
@@ -1813,8 +1898,12 @@ function optField(o){
       o.choices.map(v => `<option ${String(v) === String(o.default) ? 'selected' : ''}
         >${esc(String(v))}</option>`).join('')}</select>`;
   } else {
-    ctl = `<input class="form-control form-control-sm mono" type="number" step="any" id="${id}"
-      value="${esc(o.default ?? '')}" oninput="onSetting()">`;
+    // the range and increment come from the option's own schema — the API refuses
+    // anything outside it, so the control must not offer it
+    const bound = (name, v) => v === null || v === undefined ? '' : ` ${name}="${v}"`;
+    ctl = `<input class="form-control form-control-sm mono" type="number" id="${id}"
+      value="${esc(o.default ?? '')}"${bound('min', o.low)}${bound('max', o.high)}${
+      bound('step', o.step_by) || ' step="any"'} oninput="onSetting()">`;
   }
   return `<div class="opt">
     <div class="setting"><label for="${id}">${esc(o.label)}</label>${ctl}</div>
@@ -2439,7 +2528,7 @@ async function renderSettings(){
   }
   const names = Object.keys(state.cfg.sections);
   // the leading-underscore sections are proxdex's own screens (card backs, frame
-  // specs, calibration), not tables in the file — they are valid too
+  // specs), not tables in the file — they are valid too
   const known = n => n && (n.startsWith('_') || names.includes(n));
   if(!known(settingsUi.section)) settingsUi.section = names[0] || null;
 
@@ -2455,7 +2544,6 @@ async function renderSettings(){
         <hr class="rule" style="margin:.5rem 0">
         <button class="${settingsUi.section === '_backs' ? 'on' : ''}" onclick="pickSection('_backs')">card backs</button>
         <button class="${settingsUi.section === '_frames' ? 'on' : ''}" onclick="pickSection('_frames')">frame specs</button>
-        <button class="${settingsUi.section === '_cal' ? 'on' : ''}" onclick="pickSection('_cal')">calibration</button>
       </div>
       <div id="secbody"></div>
     </div>
@@ -2468,7 +2556,6 @@ function paintSection(){
   const host = $('#secbody'); if(!host) return;
   if(settingsUi.section === '_backs'){ host.innerHTML = backsPanel(); return; }
   if(settingsUi.section === '_frames'){ host.innerHTML = framesPanel(); return; }
-  if(settingsUi.section === '_cal'){ host.innerHTML = '<div class="panel p-3" id="calwrap"><p class="hint mb-0">Loading…</p></div>'; loadCal(); return; }
   const sec = settingsUi.section, kv = state.cfg.sections[sec] || {};
   host.innerHTML = `<div class="panel p-3">
     ${Object.entries(kv).map(([k, v]) => fieldFor(sec, k, v)).join('')
@@ -2503,10 +2590,15 @@ function fieldFor(sec, key, val){
     ctl = `<input class="form-control form-control-sm mono" id="${id}" value="${esc(val)}"
       oninput="markDirty('${esc(path)}')">`;
   }
+  // a key proxdex no longer reads still sits in the file and looks like it is
+  // configuring something; say plainly that it does nothing
+  const known = !!doc.label;
   return `<div class="field${dirty}" data-path="${esc(path)}">
     <div>
-      <div class="lbl">${esc(doc.label || key)}</div>
-      ${doc.help ? `<p class="why">${esc(doc.help)}</p>` : ''}
+      <div class="lbl">${esc(doc.label || key)}${known ? ''
+        : ' <span class="chip warn">not a proxdex setting</span>'}</div>
+      ${known ? (doc.help ? `<p class="why">${esc(doc.help)}</p>` : '')
+        : '<p class="why">This key is ignored — nothing reads it. Safe to delete.</p>'}
       <div class="key">${esc(sec)}.${esc(key)}${
         doc.default ? ` · default ${esc(doc.default)}` : ''}</div>
     </div>
@@ -2640,157 +2732,617 @@ async function uploadBack(inp){
   $('#busy').classList.remove('on');
   toast(j.ok ? 'Card back set' : 'Failed\n' + tail(j.log || JSON.stringify(j)));
 }
-async function loadCal(){
-  const cals = await get('/api/calibrate');
-  const host = $('#calwrap'); if(!host) return;
-  host.innerHTML = `
-    <div class="eyebrow mb-2">Calibration</div>
-    <p class="hint">Print a chart on the medium, scan it with auto-correction off,
-      then fit — <code>sheet</code> applies the measured correction from then on.</p>
-    <div class="row g-2 align-items-end">
-      <div class="col-12 col-md-3">
-        <label class="eyebrow d-block mb-1" for="cal_prof">medium</label>
-        <select class="form-select form-select-sm" id="cal_prof">
-        ${state.meta.profiles.map(p => `<option>${esc(p)}</option>`).join('')}</select></div>
-      <div class="col-6 col-md-2 d-grid"><button class="btn btn-sm btn-outline-secondary"
-        onclick="dlChart(false)">Get chart</button></div>
-      <div class="col-6 col-md-2 d-grid"><button class="btn btn-sm btn-outline-secondary"
-        onclick="dlChart(true)">Corrected chart</button></div>
-      <div class="col-6 col-md-2">
-        <label class="eyebrow d-block mb-1" for="cal_scan">fit from scan</label>
-        <input class="form-control form-control-sm" type="file" id="cal_scan"
-          accept="image/*" onchange="calFit(this,false)"></div>
-      <div class="col-6 col-md-2">
-        <label class="eyebrow d-block mb-1" for="cal_scan2">check corrected</label>
-        <input class="form-control form-control-sm" type="file" id="cal_scan2"
-          accept="image/*" onchange="calFit(this,true)"></div>
+/* ---------- the sheet builder --------------------------------------------
+   A print run is a decision with a cost in paper, so this is a screen and not a
+   dialog: pick the cards and how many of each, set this run's page settings, and
+   read the page plan the server works out from the *same* function that imposes
+   the PDF (`sheet.plan`) before anything is written.
+
+   Nothing here edits the library's settings. Every control is an override for
+   this run, because a run is this paper on this printer today. */
+const SHEET_FIELDS = [
+  {key:'faces',  label:'What to print',  kind:'choice', from:'faces',
+   help:'Fronts, backs, or duplex — both sides interleaved for one pass.'},
+  {key:'page',   label:'Paper',          kind:'choice', from:'pages'},
+  {key:'orientation', label:'Orientation', kind:'choice', from:'orientations'},
+  {key:'cols',   label:'Columns',        kind:'int', lo:1, hi:12},
+  {key:'rows',   label:'Rows',           kind:'int', lo:1, hi:12},
+  {key:'bleed',  label:'Cut bleed',      kind:'num', lo:0, hi:20, step:0.5, unit:'mm',
+   help:'Added outside the trim, so a slightly off cut still lands on artwork.'},
+  {key:'dpi',    label:'Resolution',     kind:'int', lo:72, hi:4800, unit:'dpi'},
+  {key:'guides', label:'Cut guides',     kind:'bool'},
+];
+
+function sheetOpts(){
+  // open on the library's own defaults, served by /api/meta — the builder never
+  // invents a default of its own
+  state.sheet.opts ||= {...(state.meta.sheet || {})};
+  return state.sheet.opts;
+}
+const sheetPicked = () => [...state.sheet.picks.entries()]
+  .map(([id, copies]) => ({id, copies}));
+const sheetTotal = () => sheetPicked().reduce((n, p) => n + p.copies, 0);
+
+function renderSheet(){
+  const o = sheetOpts();
+  $('#main').innerHTML = `
+    <div class="d-flex align-items-baseline gap-2 mb-3 flex-wrap">
+      <div><div class="eyebrow">Impose</div><h5 class="mb-0">Print sheet</h5></div>
+      <span class="hint ms-auto mb-0">Cards are scaled to trim, corrected for the
+        medium, then given cut bleed outside the trim.</span>
     </div>
-    ${cals.length ? `<div class="eyebrow mt-3 mb-1">Measured error, mean / max</div>
-      <dl class="readout mb-0" style="max-width:22rem">${cals.map(c => `<dt>${esc(c.profile)}</dt>
-        <dd>${(c.error.mean ?? 0).toFixed(1)} / ${(c.error.max ?? 0).toFixed(1)} RGB</dd>`).join('')}</dl>`
-      : '<p class="hint mt-3 mb-0">No mediums calibrated yet.</p>'}`;
-}
-function dlChart(corrected){
-  const p = $('#cal_prof').value;
-  window.open(`/api/calibrate/chart?profile=${encodeURIComponent(p)}&corrected=${corrected}`, '_blank');
-}
-async function calFit(inp, check){
-  if(!inp.files[0]) return;
-  const fd = new FormData();
-  fd.append('file', inp.files[0]); fd.append('profile', $('#cal_prof').value); fd.append('check', check);
-  $('#busy').classList.add('on');
-  const r = await fetch('/api/calibrate/fit', {method:'POST', body:fd});
-  const j = await r.json();
-  $('#busy').classList.remove('on');
-  toast(j.ok ? tail(j.log) : 'Failed\n' + (j.log || JSON.stringify(j)), 9000);
-  loadCal();
-}
-
-/* ---------- sheet dialog -------------------------------------------------
-   Two-sided cards are the one thing you have to decide before imposing: which
-   side goes on the paper. They are listed here with a flip control, so the
-   choice is made where the consequence is. */
-let _sheet;
-function sheetDialog(){
-  const opt = arr => arr.map(x => `<option>${esc(x)}</option>`).join('');
-  $('#sd_faces').innerHTML = opt(state.meta.faces);
-  $('#sd_page').innerHTML = opt(state.meta.pages);
-  $('#sd_profile').innerHTML = '<option value="">Config default</option>' + opt(state.meta.profiles);
-  // a selection on the contact sheet is the obvious thing to impose, but never
-  // silently: the scope is a stated choice, defaulting to it when one exists
-  sheetUi.selected = state.sel.size > 0;
-  paintScope();
-  paintPicks();
-  (_sheet ||= new bootstrap.Modal($('#sheetdlg'))).show();
-}
-/* Which cards go in. `proxdex sheet <name> <ids...>` takes the same list. */
-const sheetUi = {selected:false};
-function sheetIds(){ return sheetUi.selected ? [...state.sel] : []; }
-function paintScope(){
-  const host = $('#sd_scope'), blurb = $('#sd_blurb');
-  if(!host) return;
-  const n = state.sel.size;
-  host.innerHTML = n ? `
-    <div class="eyebrow mb-1">Which cards</div>
-    <div class="seg" role="group" aria-label="Which cards">
-      <button class="${sheetUi.selected ? 'on' : ''}" onclick="setSheetScope(true)">
-        ${n} selected</button>
-      <button class="${sheetUi.selected ? '' : 'on'}" onclick="setSheetScope(false)">
-        Whole library</button>
-    </div>` : '';
-  paintSizes();
-  if(blurb) blurb.textContent = (sheetUi.selected && n
-    ? `Imposing the ${n} selected card${n === 1 ? '' : 's'}. `
-    : 'Imposing every ready card. ')
-    + 'A card is ready once its grade is settled; it is then scaled to trim, '
-    + 'colour-corrected for the medium, and given cut bleed outside the trim.';
-}
-function setSheetScope(on){ sheetUi.selected = on; paintScope(); paintPicks(); }
-
-/* Every card is imposed at its own real size, so a batch with an oversized card
-   in it produces two sets of pages with two different grids. That is a page count
-   nobody asked for, so it is stated here rather than discovered in the PDF. */
-function paintSizes(){
-  const host = $('#sd_sizes'); if(!host) return;
-  const scope = sheetIds();
-  const cards = state.cards.filter(c =>
-    sheetReady(c) && (!scope.length || scope.includes(c.id)));
-  const groups = [
-    {trim: trimOf('standard'),  cards: cards.filter(c => !c.oversized)},
-    {trim: trimOf('oversized'), cards: cards.filter(c => c.oversized)},
-  ].filter(g => g.cards.length && g.trim);
-  // one size is the ordinary case and needs no explaining
-  if(groups.length < 2){ host.innerHTML = ''; return; }
-  host.innerHTML = `
-    <div class="eyebrow mb-1">Two card sizes</div>
-    <div class="rels">${groups.map(g => `
-      <div class="rel">
-        <span class="chip">${esc(trimMm(g.trim))}mm</span>
-        <span class="nm">${g.cards.length} card${g.cards.length === 1 ? '' : 's'}</span>
-        <span class="mono faint">${esc(trimGrid(g.trim))}</span>
-      </div>`).join('')}</div>
-    <p class="hint mb-0 mt-1">Each size is imposed at its own size, on its own
-      pages — an oversized card is never shrunk to fit the standard grid.</p>`;
+    <div class="sheetgrid">
+      <div class="vstack gap-3">
+        <div class="panel p-3">
+          <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+            <div class="eyebrow">Cards</div>
+            <span class="mono faint ms-auto" style="font-size:.6875rem" id="sb_count"></span>
+          </div>
+          <div id="sb_picks"></div>
+          <hr class="rule my-3">
+          <div class="d-flex gap-2 align-items-center flex-wrap mb-2">
+            <input class="form-control form-control-sm" style="max-width:16rem"
+                   id="sb_filter" placeholder="Filter by name, id or set"
+                   value="${esc(state.sheet.filter)}" oninput="sheetFilter(this.value)">
+            <button class="btn btn-sm btn-ghost" onclick="sheetAddAll()">Add every ready card</button>
+            ${state.sel.size ? `<button class="btn btn-sm btn-ghost"
+              onclick="sheetAddSelection()">Add the ${state.sel.size} selected</button>` : ''}
+          </div>
+          <div id="sb_pool"></div>
+        </div>
+      </div>
+      <div class="vstack gap-3">
+        <div class="panel p-3">
+          <div class="eyebrow mb-2">This run</div>
+          <div class="setting"><label for="sb_name">batch name</label>
+            <input class="form-control form-control-sm" id="sb_name"
+                   value="${esc(state.sheet.name)}" oninput="state.sheet.name=this.value"></div>
+          <div class="setting"><label for="sb_profile">print profile</label>
+            <select class="form-select form-select-sm" id="sb_profile" onchange="sheetSet('profile', this.value)">
+              <option value="">${esc(state.meta.active_profile || 'none')} — the library default</option>
+              ${(state.meta.profiles || []).map(n =>
+                `<option ${o.profile === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+            </select></div>
+          ${SHEET_FIELDS.map(f => sheetField(f, o)).join('')}
+          <div class="setting"><label for="sb_notes">notes</label>
+            <input class="form-control form-control-sm" id="sb_notes" value="${esc(o.notes || '')}"
+                   placeholder="Recorded in the manifest" oninput="sheetSet('notes', this.value)"></div>
+        </div>
+        <div class="panel p-3" id="sb_plan"></div>
+        <div class="panel p-3">
+          <div class="eyebrow mb-2">Batches</div>
+          <div id="batches"><p class="hint mb-0">Loading…</p></div>
+        </div>
+      </div>
+    </div>`;
+  loadBatches();
+  paintSheetPicks();
+  planSheet();
 }
 
-function paintPicks(){
-  const host = $('#sd_sides'); if(!host) return;
-  const scope = sheetIds();
-  const inScope = c => !scope.length || scope.includes(c.id);
-  const dfc = state.cards.filter(c => twoSided(c) && sheetReady(c) && inScope(c));
-  if(!dfc.length){ host.innerHTML = ''; return; }
-  const duplex = $('#sd_faces').value === 'duplex';
-  host.innerHTML = `
-    <div class="eyebrow mb-1">Two-sided cards</div>
-    <p class="hint">${duplex
-      ? 'The chosen side prints on the front; the other prints on the reverse.'
-      : 'Only the chosen side is in this sheet. Switch to duplex to print both.'}</p>
-    <div class="picklist">${dfc.map(c => `
-      <div class="pickrow">
+function sheetField(f, o){
+  const id = `sb_${f.key}`;
+  const value = o[f.key];
+  let ctl;
+  if(f.kind === 'choice'){
+    ctl = `<select class="form-select form-select-sm" id="${id}"
+      onchange="sheetSet('${f.key}', this.value)">${(state.meta[f.from] || []).map(v =>
+      `<option ${String(v) === String(value) ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`;
+  } else if(f.kind === 'bool'){
+    ctl = `<div class="form-check form-switch mb-0"><input class="form-check-input" type="checkbox"
+      id="${id}" ${value ? 'checked' : ''} onchange="sheetSet('${f.key}', this.checked)"></div>`;
+  } else {
+    ctl = `<input class="form-control form-control-sm mono" type="number" id="${id}"
+      min="${f.lo}" max="${f.hi}" step="${f.step || 1}" value="${value ?? ''}"
+      oninput="sheetSet('${f.key}', this.value === '' ? null : +this.value)">`;
+  }
+  return `<div class="setting"><label for="${id}">${esc(f.label)}${
+    f.unit ? ` <span class="faint mono">${esc(f.unit)}</span>` : ''}</label>${ctl}</div>`;
+}
+
+function sheetSet(key, value){
+  sheetOpts()[key] = value;
+  paintSheetPicks();   // the faces choice changes what the two-sided note says
+  planSheet();
+}
+function sheetFilter(text){
+  state.sheet.filter = text;
+  paintSheetPool();
+}
+function sheetAddAll(){
+  for(const c of state.cards) if(sheetReady(c) && !state.sheet.picks.has(c.id))
+    state.sheet.picks.set(c.id, 1);
+  paintSheetPicks(); planSheet();
+}
+function sheetAddSelection(){
+  for(const id of state.sel) if(!state.sheet.picks.has(id)) state.sheet.picks.set(id, 1);
+  paintSheetPicks(); planSheet();
+}
+function sheetAdd(id){
+  state.sheet.picks.set(id, (state.sheet.picks.get(id) || 0) + 1);
+  paintSheetPicks(); planSheet();
+}
+function sheetCopies(id, n){
+  const copies = clamp(Math.round(+n || 1), 1, 99);
+  state.sheet.picks.set(id, copies);
+  paintSheetPicks(); planSheet();
+}
+function sheetBump(id, by){
+  const now = state.sheet.picks.get(id) || 1;
+  if(now + by < 1) return sheetDrop(id);
+  return sheetCopies(id, now + by);
+}
+function sheetDrop(id){
+  state.sheet.picks.delete(id);
+  paintSheetPicks(); planSheet();
+}
+function sheetClear(){
+  state.sheet.picks.clear();
+  paintSheetPicks(); planSheet();
+}
+
+/* The pick list and the pool are repainted in place, never rebuilt around the
+   thumbnails: recreating an <img> repaints an empty box even from cache. */
+function paintSheetPicks(){
+  const host = $('#sb_picks'); if(!host) return;
+  const picks = sheetPicked();
+  const count = $('#sb_count');
+  if(count) count.textContent = picks.length
+    ? `${sheetTotal()} card${sheetTotal() === 1 ? '' : 's'} from ${picks.length} pick${picks.length === 1 ? '' : 's'}`
+    : 'every ready card';
+  if(!picks.length){
+    host.innerHTML = `<p class="hint mb-0">Nothing picked, so this run imposes
+      <b>every card whose grade is settled</b> — the same as <code class="mono">proxdex
+      sheet ${esc(state.sheet.name || 'deck')}</code> with no ids. Pick cards below to
+      narrow it, or to print more than one of something.</p>`;
+    paintSheetPool();
+    return;
+  }
+  host.innerHTML = `<div class="picklist">${picks.map(p => {
+      const c = state.cards.find(x => x.id === p.id);
+      if(!c) return '';
+      return `<div class="pickrow">
         <img alt="" src="${thumbsrc(c, c.front_face)}">
         <span class="nm">${esc(c.name)}</span>
-        <span class="mono faint" style="font-size:.625rem">${esc(c.faces[c.front_face].name)}</span>
-        <button class="btn btn-sm btn-ghost" onclick="flipInDialog('${esc(c.id)}')">Swap ⇄</button>
-      </div>`).join('')}</div>`;
+        <span class="mono faint" style="font-size:.625rem">${esc(c.id)}</span>
+        ${sheetReady(c) ? '' : '<span class="chip warn" title="Grade is not settled — it will be left out">not ready</span>'}
+        ${c.oversized ? '<span class="chip">oversized</span>' : ''}
+        <span class="stepn ms-auto">
+          <button onclick="sheetBump('${esc(p.id)}', -1)" aria-label="One fewer">−</button>
+          <input class="mono" value="${p.copies}" inputmode="numeric"
+                 onchange="sheetCopies('${esc(p.id)}', this.value)" aria-label="Copies">
+          <button onclick="sheetBump('${esc(p.id)}', 1)" aria-label="One more">+</button>
+        </span>
+        <button class="btn btn-sm btn-ghost" onclick="sheetDrop('${esc(p.id)}')">Remove</button>
+      </div>`;
+    }).join('')}</div>
+    <div class="mt-2"><button class="btn btn-sm btn-ghost" onclick="sheetClear()">Clear picks</button></div>`;
+  paintSheetPool();
 }
-async function flipInDialog(id){
-  $('#busy').classList.add('on');
-  await fetch('/api/flip', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ids:[id]})});
-  state.cards = await get('/api/cards');
-  $('#busy').classList.remove('on');
-  paintPicks();
+
+function paintSheetPool(){
+  const host = $('#sb_pool'); if(!host) return;
+  const q = state.sheet.filter.trim().toLowerCase();
+  const pool = state.cards.filter(c =>
+    !state.sheet.picks.has(c.id) &&
+    (!q || `${c.name} ${c.id} ${c.set}`.toLowerCase().includes(q)));
+  if(!pool.length){
+    host.innerHTML = `<p class="hint mb-0">${q ? 'No cards match.' : 'Every card is picked.'}</p>`;
+    return;
+  }
+  host.innerHTML = `<div class="pool">${pool.slice(0, 60).map(c => `
+    <button class="poolcard ${sheetReady(c) ? '' : 'notready'}" onclick="sheetAdd('${esc(c.id)}')"
+            title="${sheetReady(c) ? 'Add to the run' : 'Grade is not settled yet — it would be left out'}">
+      <img alt="" loading="lazy" src="${thumbsrc(c, c.front_face)}">
+      <span class="nm">${esc(c.name)}</span>
+      <span class="mono">${esc(c.id)}</span>
+    </button>`).join('')}</div>
+    ${pool.length > 60 ? `<p class="hint mb-0 mt-2">${pool.length - 60} more — filter to narrow it.</p>` : ''}`;
+}
+
+/* The plan comes from the server, from the same code that imposes the PDF, so
+   the page count promised here is the page count you get. */
+let _planTimer;
+function planSheet(){
+  clearTimeout(_planTimer);
+  state.sheet.planning = true;
+  paintPlan();
+  _planTimer = setTimeout(async () => {
+    try{
+      const r = await fetch('/api/sheet/plan', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(sheetPayload()),
+      });
+      state.sheet.plan = r.ok ? await r.json() : null;
+    } catch(e){ state.sheet.plan = null; }
+    state.sheet.planning = false;
+    paintPlan();
+  }, 180);
+}
+function sheetPayload(){
+  const o = sheetOpts();
+  return {
+    name: state.sheet.name || 'deck',
+    cards: sheetPicked(),
+    faces: o.faces, page: o.page, orientation: o.orientation,
+    dpi: o.dpi ?? null, cols: o.cols ?? null, rows: o.rows ?? null,
+    bleed: o.bleed ?? null, guides: o.guides ?? null,
+    profile: o.profile || null, notes: o.notes || '',
+  };
+}
+function paintPlan(){
+  const host = $('#sb_plan'); if(!host) return;
+  const plan = state.sheet.plan;
+  const busy = state.sheet.planning ? '<span class="chip">working…</span>' : '';
+  if(!plan || !plan.groups){
+    host.innerHTML = `<div class="eyebrow mb-2">Pages ${busy}</div>
+      <p class="hint mb-0">Nothing to impose yet — a card is ready once its grade is
+        settled (run it, or skip it so an earlier stage stands as the master).</p>`;
+    return;
+  }
+  const prof = plan.profile || {};
+  const res = prof.residual;
+  host.innerHTML = `
+    <div class="d-flex align-items-baseline gap-2 mb-2">
+      <div class="eyebrow">Pages</div>${busy}
+      <span class="ms-auto"><b class="mono" style="font-size:1.25rem">${plan.pages}</b>
+        <span class="faint mono" style="font-size:.6875rem">page${plan.pages === 1 ? '' : 's'}</span></span>
+    </div>
+    <div class="rels mb-2">${plan.groups.map(g => `
+      <div class="rel">
+        <span class="chip">${esc(g.name)}</span>
+        <span class="nm">${g.cards} card${g.cards === 1 ? '' : 's'}</span>
+        <span class="mono faint">${g.grid[0]}×${g.grid[1]} per page → ${g.pages}</span>
+      </div>`).join('')}</div>
+    ${plan.groups.length > 1 ? `<p class="hint">Two card sizes, so two sets of pages —
+      an oversized card is imposed at its own size rather than shrunk to fit.</p>` : ''}
+    ${plan.missing.length ? `<p class="hint" style="color:var(--hold)">Leaving out
+      ${plan.missing.length} card(s) whose grade is not settled:
+      <span class="mono">${plan.missing.slice(0, 8).map(esc).join(' ')}</span>${
+      plan.missing.length > 8 ? ' …' : ''}</p>` : ''}
+    ${plan.two_sided.length && plan.faces !== 'duplex' ? `<p class="hint" style="color:var(--hold)">
+      ${plan.two_sided.length} two-sided card(s): only the side each is flipped to is in
+      this sheet. Duplex prints the reverse too.</p>` : ''}
+    <div class="profline mb-2">
+      <div class="d-flex align-items-center gap-2">
+        <span class="chip ${res ? 'good' : 'warn'}">${esc(prof.name || 'none')}</span>
+        <a class="ms-auto mono" style="font-size:.6875rem"
+           href="/print?p=${encodeURIComponent(prof.name || '')}"
+           onclick="return goLink(event, 'print', '${esc(prof.name || '')}')">calibrate →</a>
+      </div>
+      <p class="hint mb-0">${res
+        ? `Measured over ${prof.rounds} round(s); the last print landed a mean of
+           ${res.mean.toFixed(1)} RGB from the target.`
+        : (prof.inherited ? 'Carrying a calibration measured before 0.5 — a fresh loop can do better.'
+          : (prof.name === 'none' ? 'No medium correction: the cards print exactly as stored.'
+            : 'A hand-set recipe, not a measurement. Calibrating it is a print and a scan away.'))}</p>
+    </div>
+    <div class="d-grid"><button class="btn btn-sm btn-primary"
+      onclick="makeSheet()" ${plan.pages ? '' : 'disabled'}>Impose ${plan.cards} card${
+      plan.cards === 1 ? '' : 's'} → ${plan.pages} page${plan.pages === 1 ? '' : 's'}</button></div>
+    <p class="hint mb-0 mt-2">Print with colour management off, or the profile is
+      corrected twice.</p>`;
+}
+/* Let a link inside a panel behave like a link (⌘-click, new tab) and still
+   route client-side when it is an ordinary click. */
+function goLink(ev, view, profile){
+  if(ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button) return true;
+  ev.preventDefault();
+  navigate({view, id:null, step:null, profile: profile || null});
+  return false;
 }
 async function makeSheet(){
-  _sheet.hide();
-  await act('/api/sheet', {
-    name: $('#sd_name').value || 'deck',
-    ids: sheetIds(),
-    faces: $('#sd_faces').value,
-    page: $('#sd_page').value,
-    dpi: $('#sd_dpi').value ? +$('#sd_dpi').value : null,
-    profile: $('#sd_profile').value || null,
-  }, 'Sheet written');
+  const ok = await act('/api/sheet', sheetPayload(), 'Sheet written');
+  if(ok) loadBatches();
+}
+
+/* ---------- the print screen: profiles and calibration -------------------
+   A profile is a medium you own — paper, printer setting, whether colour
+   management was off — so it has a name and notes, and it is measured by printing
+   a chart and scanning it. Several rounds fit on one sheet, each in its own slot,
+   and every round makes the correction truer: the numbers below are the evidence
+   for that, not a claim about it. */
+async function renderPrint(){
+  if(!state.profileList){
+    $('#main').innerHTML = '<p class="hint">Loading…</p>';
+    state.profileList = await get('/api/profiles');
+  }
+  const list = state.profileList;
+  const names = list.profiles.map(p => p.name);
+  if(!state.profile || !names.includes(state.profile))
+    state.profile = list.active && names.includes(list.active) ? list.active : names[0];
+  $('#main').innerHTML = `
+    <div class="d-flex align-items-baseline gap-2 mb-3 flex-wrap">
+      <div><div class="eyebrow">Colour</div><h5 class="mb-0">Print profiles</h5></div>
+      <span class="hint ms-auto mb-0">One per medium you print on. A sheet is
+        corrected by the active profile — the stored cards stay neutral.</span>
+    </div>
+    <div class="setgrid">
+      <div class="secnav" id="profnav">${list.profiles.map(p => `
+        <button class="${p.name === state.profile ? 'on' : ''}" onclick="pickProfile('${esc(p.name)}')">
+          ${esc(p.name)}
+          <span class="cnt">${p.rounds ? `${p.rounds}r` : (p.stored ? '—' : 'preset')}</span>
+        </button>`).join('')}
+        <hr class="rule" style="margin:.5rem 0">
+        <button onclick="newProfile()">+ new profile</button>
+      </div>
+      <div id="profbody"><p class="hint">Loading…</p></div>
+    </div>`;
+  await paintProfile();
+}
+function pickProfile(name){
+  state.profileDetail = null; state.proofOf = null;
+  navigate({view:'print', id:null, step:null, profile:name}, {replace:true});
+}
+const profileSlug = name => String(name).trim().toLowerCase()
+  .replace(/[^a-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
+async function newProfile(){
+  const name = await askName('Name this medium',
+    '', 'Letters, digits, dashes — e.g. matte-200, foil-clear, glossy-photo.');
+  if(!name) return;
+  const slug = profileSlug(name);
+  if(!slug) return toast('That name has nothing usable in it.');
+  const ok = await act(`/api/profile/${encodeURIComponent(slug)}`, {medium:'paper'}, 'Profile created');
+  if(!ok) return;
+  state.profileList = null; state.profileDetail = null;
+  navigate({view:'print', id:null, step:null, profile:slug}, {replace:true});
+}
+
+async function paintProfile(){
+  const host = $('#profbody'); if(!host) return;
+  if(!state.profile){ host.innerHTML = '<p class="hint">No profiles yet.</p>'; return; }
+  if(!state.profileDetail || state.profileDetail.name !== state.profile){
+    try{ state.profileDetail = await get(`/api/profile/${encodeURIComponent(state.profile)}`); }
+    catch(e){ host.innerHTML = `<p class="hint">${esc(String(e))}</p>`; return; }
+  }
+  const p = state.profileDetail;
+  const active = state.profileList.active === p.name;
+  const res = p.residual;
+  host.innerHTML = `
+    <div class="panel p-3 mb-3">
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <h5 class="mb-0">${esc(p.name)}</h5>
+        <span class="chip">${esc(p.medium_label)}</span>
+        ${active ? '<span class="chip good">active</span>' : ''}
+        ${p.preset && !p.stored ? '<span class="chip">built-in preset</span>' : ''}
+        <span class="ms-auto d-flex gap-2">
+          ${active ? '' : `<button class="btn btn-sm btn-outline-secondary"
+            onclick="useProfile('${esc(p.name)}')">Use for sheets</button>`}
+          ${p.stored ? `<button class="btn btn-sm btn-ghost" onclick="renameProfile()">Rename</button>
+            <button class="btn btn-sm btn-ghost" onclick="deleteProfile()">Delete</button>` : ''}
+        </span>
+      </div>
+      ${p.stored ? '' : `<p class="hint mb-0 mt-2">A preset is a starting point, not a
+        measurement — make it a profile of your own to add notes and calibrate it.
+        ${p.medium === 'none' ? 'Except this one: “none” means correct nothing, so there is nothing to measure.'
+          : `<button class="btn btn-sm btn-ghost" onclick="copyPreset()">Make ${esc(p.name)} a profile</button>`}</p>`}
+    </div>
+
+    ${p.stored ? `<div class="panel p-3 mb-3">
+      <div class="eyebrow mb-1">Notes</div>
+      <p class="hint">The paper, the printer setting, whether colour management was
+        off. In six months this is the only way to reproduce the print.</p>
+      <textarea class="form-control form-control-sm" id="pf_notes" rows="4"
+        placeholder="Canon TS8350 · matte 200 g · plain-paper setting · colour management OFF"
+        >${esc(p.notes)}</textarea>
+      <div class="d-flex gap-2 mt-2">
+        <button class="btn btn-sm btn-primary" onclick="saveNotes()">Save notes</button>
+      </div>
+    </div>` : ''}
+
+    <div class="panel p-3 mb-3">
+      <div class="eyebrow mb-1">Starting recipe</div>
+      <p class="hint">Four multipliers applied at print time. ${p.calibrated
+        ? 'This profile is <b>measured</b>, and the measurement supersedes these — they are kept only as the record of where it started.'
+        : 'Guesswork until you calibrate: it is the best a number typed by hand can do.'}</p>
+      <div class="recipe">${(state.profileList.recipe_keys || []).map(k => `
+        <div class="setting"><label for="pf_${k}">${esc(k)}</label>
+          <input class="form-control form-control-sm mono" type="number" id="pf_${k}"
+                 min="0" max="3" step="0.01" value="${p.recipe[k]}"
+                 ${p.stored ? '' : 'disabled'}></div>`).join('')}</div>
+      ${p.stored ? `<div class="mt-2"><button class="btn btn-sm btn-outline-secondary"
+        onclick="saveRecipe()">Save recipe</button></div>` : ''}
+    </div>
+
+    ${p.stored ? calibrationPanel(p) : ''}`;
+}
+
+/* The calibration loop, as a screen: where the next chart goes, what every round
+   measured, and how the error fell. */
+function calibrationPanel(p){
+  const rounds = p.rounds_detail || [];
+  const worst = Math.max(1, ...rounds.map(r => r.error.mean));
+  const used = new Map(rounds.map(r => [`${r.slot[0]},${r.slot[1]}`, r]));
+  const [cols, rows] = p.grid;
+  const cells = [];
+  for(let row = 0; row < rows; row++) for(let col = 0; col < cols; col++){
+    const r = used.get(`${col},${row}`);
+    const next = !r && p.next_slot[0] === col && p.next_slot[1] === row;
+    cells.push(`<div class="slot ${r ? 'used' : ''} ${next ? 'next' : ''}"
+      title="${r ? `round ${r.n}, off by mean ${r.error.mean.toFixed(1)} RGB`
+                 : (next ? 'the next chart prints here' : 'blank')}">
+      <b>${r ? r.n : (next ? '→' : '')}</b>
+      <span class="mono">${col + 1},${row + 1}</span></div>`);
+  }
+  const res = p.residual;
+  return `
+    <div class="panel p-3 mb-3">
+      <div class="d-flex align-items-baseline gap-2 mb-1">
+        <div class="eyebrow">Calibration</div>
+        ${res ? `<span class="ms-auto mono">off by mean
+          <b style="color:var(--mark)">${res.mean.toFixed(1)}</b> / max ${res.max.toFixed(1)} RGB</span>` : ''}
+      </div>
+      <p class="hint">Print the chart on this medium, scan it with auto-correction
+        off, and add it. Every round is kept and the correction is refitted over all
+        of them, so feeding the <b>same sheet</b> back in and printing the next slot
+        makes it truer instead of starting over.</p>
+
+      <div class="calgrid">
+        <div>
+          <div class="eyebrow mb-1">The sheet</div>
+          <div class="slotmap" style="grid-template-columns:repeat(${cols}, 1fr)">${cells.join('')}</div>
+          <p class="hint mb-0 mt-1">${p.sheet_full
+            ? 'Full — the next chart starts a fresh sheet at 1,1.'
+            : `${p.free_slots.length} slot(s) left. Next: <span class="mono">${p.next_slot[0] + 1},${p.next_slot[1] + 1}</span>.`}</p>
+        </div>
+        <div class="vstack gap-2">
+          <div class="eyebrow">Next round</div>
+          <button class="btn btn-sm btn-primary" onclick="getChart()">Get chart for round ${rounds.length + 1}</button>
+          <label class="eyebrow mb-0" for="pf_scan">then add the scan</label>
+          <input class="form-control form-control-sm" type="file" id="pf_scan" accept="image/*">
+          <div class="d-flex gap-2 align-items-center">
+            <select class="form-select form-select-sm" id="pf_slot" style="max-width:11rem">
+              ${allSlots(p).map(s => `<option value="${s}" ${s === expectedSlot(p) ? 'selected' : ''}>slot ${s}${
+                s === expectedSlot(p) ? (p.pending ? ' — the one you printed' : ' — next') : ''}</option>`).join('')}
+              <option value="">the image is one chart already</option>
+            </select>
+            <input class="form-control form-control-sm" id="pf_note" placeholder="note (optional)">
+          </div>
+          <button class="btn btn-sm btn-outline-secondary" onclick="addRound()">Add round</button>
+        </div>
+      </div>
+
+      ${rounds.length ? `
+        <hr class="rule my-3">
+        <div class="eyebrow mb-1">How the error fell</div>
+        <div class="trend">${rounds.map(r => `
+          <div class="tbar" title="round ${r.n}: mean ${r.error.mean.toFixed(1)} RGB">
+            <i style="height:${Math.max(4, r.error.mean / worst * 100)}%"></i>
+            <span class="mono">${r.error.mean.toFixed(1)}</span>
+          </div>`).join('')}</div>
+        <div class="tblwrap mt-2"><table class="tbl">
+          <thead><tr><th>Round</th><th>Slot</th><th>Date</th><th>Mean / max RGB</th>
+            <th>Reached</th><th>Note</th><th></th></tr></thead>
+          <tbody>${rounds.map(r => `<tr>
+            <td class="mono">${r.n}</td>
+            <td class="mono">${esc(r.slot_text)}</td>
+            <td class="faint">${esc(r.date)}</td>
+            <td class="mono">${r.error.mean.toFixed(1)} / ${r.error.max.toFixed(1)}</td>
+            <td class="mono faint">${r.error.measured}/${r.error.measured + r.error.clipped}</td>
+            <td class="faint">${esc(r.note)}</td>
+            <td class="text-end">
+              <button class="btn btn-sm btn-ghost" onclick="showProof(${r.n})">${
+                state.proofOf === r.n ? 'Hide' : 'Proof'}</button>
+              <button class="btn btn-sm btn-ghost" onclick="dropRound(${r.n})">Drop</button>
+            </td></tr>`).join('')}</tbody></table></div>
+        ${state.proofOf ? `
+          <div class="eyebrow mt-3 mb-1">Round ${state.proofOf}: asked for, and what came back</div>
+          <img class="proof" alt="Target patches above, scanned patches below"
+               src="/api/calibrate/proof/${encodeURIComponent(p.name)}/${state.proofOf}">
+          <p class="hint mb-0 mt-1">Top of each pair is the target, bottom is the
+            scan. This is where a cast or a crushed shadow shows itself.</p>` : ''}
+        ${res && res.clipped ? `<p class="hint mb-0 mt-2">${res.clipped} of
+          ${res.measured + res.clipped} patches are outside what this medium can print
+          at all — paper is not 255 and ink is not 0 — so the error is measured over
+          the rest. That floor is the paper's, not the calibration's.</p>` : ''}`
+        : '<p class="hint mb-0 mt-2">No rounds yet. The first chart prints the raw target, which measures how far off the medium is.</p>'}
+    </div>`;
+}
+/* Which slot the scan is expected to be: the one the last chart was rendered for
+   if a chart is still outstanding, else the next blank one. Chosen for you,
+   because getting it wrong reads the wrong square of paper. */
+function expectedSlot(p){
+  const s = p.pending || p.next_slot;
+  return `${s[0] + 1},${s[1] + 1}`;
+}
+function allSlots(p){
+  const out = [];
+  for(let row = 0; row < p.grid[1]; row++)
+    for(let col = 0; col < p.grid[0]; col++) out.push(`${col + 1},${row + 1}`);
+  return out;
+}
+
+async function useProfile(name){
+  if(await act(`/api/profile/${encodeURIComponent(name)}/use`, {}, `Sheets now use ${name}`))
+    reloadProfiles();
+}
+/* Keeping the preset's own name is what the CLI does when you calibrate a
+   preset, and a stored profile shadows the built-in of the same name. */
+async function copyPreset(){
+  const p = state.profileDetail;
+  const slug = p.name;
+  if(await act(`/api/profile/${encodeURIComponent(slug)}`,
+               {medium:p.medium, notes:`Started from the built-in ${p.medium_label.toLowerCase()} preset.`},
+               'Profile created')){
+    state.profileList = null; state.profileDetail = null;
+    navigate({view:'print', id:null, step:null, profile:slug}, {replace:true});
+  }
+}
+async function renameProfile(){
+  const name = await askName('Rename this profile', state.profileDetail.name,
+    'Its notes and every measured round come with it.');
+  if(!name || name === state.profileDetail.name) return;
+  const slug = profileSlug(name);
+  if(!slug) return toast('That name has nothing usable in it.');
+  if(await act(`/api/profile/${encodeURIComponent(state.profileDetail.name)}/rename`,
+               {name:slug}, 'Renamed')){
+    state.profileList = null; state.profileDetail = null;
+    navigate({view:'print', id:null, step:null, profile:slug}, {replace:true});
+  }
+}
+async function deleteProfile(){
+  const p = state.profileDetail;
+  const detail = p.rounds ? ` and its ${p.rounds} calibration round(s)` : '';
+  if(!await ask(`Delete the profile “${p.name}”${detail}? This cannot be undone.`, 'Delete')) return;
+  if(await act(`/api/profile/${encodeURIComponent(p.name)}`, {_method:'DELETE'}, 'Profile deleted')){
+    state.profileList = null; state.profileDetail = null; state.profile = null;
+    render();
+  }
+}
+async function saveNotes(){
+  if(await act(`/api/profile/${encodeURIComponent(state.profile)}`,
+               {_method:'PATCH', notes: $('#pf_notes').value}, 'Notes saved'))
+    reloadProfiles();
+}
+async function saveRecipe(){
+  const body = {_method:'PATCH'};
+  for(const k of state.profileList.recipe_keys){
+    const el = $(`#pf_${k}`);
+    if(el) body[k] = +el.value;
+  }
+  if(await act(`/api/profile/${encodeURIComponent(state.profile)}`, body, 'Recipe saved'))
+    reloadProfiles();
+}
+function getChart(){
+  const p = state.profileDetail;
+  const slot = p.next_slot ? `${p.next_slot[0] + 1},${p.next_slot[1] + 1}` : '';
+  window.open(`/api/calibrate/chart/${encodeURIComponent(p.name)}?slot=${encodeURIComponent(slot)}`, '_blank');
+  // the chart records which slot it was rendered for, so the scan needs no answer
+  setTimeout(reloadProfiles, 600);
+}
+async function addRound(){
+  const inp = $('#pf_scan');
+  if(!inp || !inp.files[0]) return toast('Choose the scanned page first.');
+  const slot = $('#pf_slot').value;
+  const fd = new FormData();
+  fd.append('file', inp.files[0]);
+  if(slot) fd.append('slot', slot); else fd.append('whole', 'true');
+  fd.append('note', $('#pf_note').value || '');
+  $('#busy').classList.add('on');
+  let j = {ok:false, log:''};
+  try{
+    const r = await fetch(`/api/calibrate/add/${encodeURIComponent(state.profile)}`,
+                          {method:'POST', body:fd});
+    j = await r.json();
+  } catch(e){ j = {ok:false, log:String(e)}; }
+  $('#busy').classList.remove('on');
+  toast(j.ok ? tail(j.log) : 'Failed\n' + tail(j.log || JSON.stringify(j)), j.ok ? 9000 : 14000);
+  reloadProfiles();
+}
+async function dropRound(n){
+  if(!await ask(`Drop round ${n} and refit without it?`, 'Drop')) return;
+  if(await act(`/api/calibrate/drop/${encodeURIComponent(state.profile)}/${n}`, {},
+               `Round ${n} dropped`))
+    reloadProfiles();
+}
+function showProof(n){
+  state.proofOf = state.proofOf === n ? null : n;
+  paintProfile();
+}
+async function reloadProfiles(){
+  state.profileList = await get('/api/profiles');
+  state.profileDetail = null;
+  if(state.view === 'print') await renderPrint();
 }
 
 /* ---------- keyboard ------------------------------------------------------
@@ -2800,6 +3352,8 @@ const KEYS = [
   {keys:['?'],              where:'anywhere', what:'Show this sheet'},
   {keys:['G','then','L'],   where:'anywhere', what:'Go to the library'},
   {keys:['G','then','S'],   where:'anywhere', what:'Go to search'},
+  {keys:['G','then','H'],   where:'anywhere', what:'Go to the sheet builder'},
+  {keys:['G','then','P'],   where:'anywhere', what:'Go to print profiles'},
   {keys:['G','then',','],   where:'anywhere', what:'Go to settings'},
   {keys:['Esc'],            where:'card',     what:'Back to the library'},
   {keys:['←','→'],          where:'card',     what:'Previous / next card'},
@@ -2832,7 +3386,7 @@ document.addEventListener('keydown', e => {
   if(e.key === '?'){ e.preventDefault(); showKeys(); return; }
   if(e.key === 'g' || e.key === 'G'){ _goto = Date.now(); return; }
   if(Date.now() - _goto < 1200){
-    const dest = {l:'library', s:'search', ',':'settings'}[e.key.toLowerCase()];
+    const dest = {l:'library', s:'search', h:'sheet', p:'print', ',':'settings'}[e.key.toLowerCase()];
     _goto = 0;
     if(dest){ e.preventDefault(); go(dest); return; }
   }

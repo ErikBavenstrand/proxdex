@@ -52,6 +52,13 @@ class StepOption:
     #: an option with no default is simply omitted when unset (border's frame
     #: falls back to the card's own era, which only the CLI can resolve)
     optional: bool = False
+    #: for NUMBER, the range it is meaningful over. The UI bounds its control
+    #: with it and the API *rejects* anything outside — a silently clamped value
+    #: would be a step that ran with settings nobody chose.
+    low: float | None = None
+    high: float | None = None
+    #: the control's increment; only cosmetic
+    step_by: float | None = None
 
     @property
     def choices(self) -> tuple[str, ...]:
@@ -71,18 +78,26 @@ class StepOption:
         boundary, so only well-typed values travel inwards.
         """
         if self.kind is OptKind.BOOL:
-            if isinstance(value, bool):
-                return value
-            text = str(value).strip().lower()
-            return text in {"1", "true", "yes", "on"} if text else None
+            return _boolean(value)
         if self.kind is OptKind.CHOICE and self.enum is not None:
             return _member(self.enum, value)
         if self.kind is OptKind.NUMBER:
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return None
+            return self._number(value)
         return None
+
+    def _number(self, value: Any) -> float | None:
+        """A number inside this option's declared range, or None.
+
+        Out of range is *invalid*, not clamped: a silently corrected value is a
+        step that ran with settings nobody chose.
+        """
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        below = self.low is not None and number < self.low
+        above = self.high is not None and number > self.high
+        return None if below or above else number
 
     def argv(self, value: Any) -> list[str]:
         """The CLI spelling of this setting — a flag pair, or a flag + value."""
@@ -104,6 +119,9 @@ class StepOption:
             "choices": list(self.choices),
             "default": self.default(cfg),
             "optional": self.optional,
+            "low": self.low,
+            "high": self.high,
+            "step_by": self.step_by,
         }
 
 
@@ -188,8 +206,10 @@ BORDER = StepSpec(
             key="stretch",
             label="Stretch to hit the borders exactly",
             help="Un-distorts the art so the borders land on spec instead of "
-            "as close as the source allows.",
+            "as close as the source allows. On by default — hitting the spec is "
+            "the point of the step.",
             kind=OptKind.BOOL,
+            config_field="border_stretch",
         ),
     ),
 )
@@ -230,21 +250,70 @@ UPSCALE = StepSpec(
     ),
 )
 
+
+# Grade's settings *are* the look — every knob, with this library's values as the
+# defaults, so the panel shows what will happen rather than one opaque switch.
+# Nothing here compares one card to another; matching the paper is the print
+# profile's job, at sheet time.
+def _look(key: str, label: str, help_text: str, field_name: str) -> StepOption:
+    return StepOption(
+        key=key,
+        label=label,
+        help=help_text,
+        kind=OptKind.NUMBER,
+        config_field=field_name,
+        low=0.0,
+        high=3.0,
+        step_by=0.01,
+    )
+
+
 GRADE = StepSpec(
     key="grade",
     stage=Stage.EDITED,
     label="Grade",
-    blurb="Colour-normalise to a uniform batch look — this is the trim master.",
+    blurb="Apply the look — this is the trim master. Paper is corrected at print.",
     step=Step.GRADE,
     skippable=True,
+    run_label="Apply the look",
     options=(
+        _look(
+            "brightness",
+            "Brightness",
+            "Paper and ink dull an image, so a little lift usually helps. "
+            "1.0 changes nothing.",
+            "grade_brightness",
+        ),
+        _look(
+            "contrast",
+            "Contrast",
+            "1.0 changes nothing.",
+            "grade_contrast",
+        ),
+        _look(
+            "saturation",
+            "Saturation",
+            "1.0 changes nothing. Push this at print time instead if it is the "
+            "medium washing out, not the card.",
+            "grade_saturation",
+        ),
+        _look(
+            "gamma",
+            "Gamma",
+            "Below 1 darkens the midtones and lays down more ink.",
+            "grade_gamma",
+        ),
         StepOption(
-            key="normalize",
-            label="Normalise first",
-            help="Pull the card to the library's baseline — frame white balance "
-            "and black/white points — before the shared look.",
-            kind=OptKind.BOOL,
-            config_field="grade_normalize",
+            key="levels",
+            label="Auto levels",
+            help="Stretch this card's own darkest and brightest pixels to full "
+            "range, blended by this much. 0 is off; it helps a flat, hazy scan. "
+            "It reads this card only — never other cards.",
+            kind=OptKind.NUMBER,
+            config_field="grade_levels",
+            low=0.0,
+            high=1.0,
+            step_by=0.05,
         ),
     ),
 )
@@ -270,6 +339,14 @@ def steps() -> tuple[StepSpec, ...]:
 
 def json_pipeline(cfg: Config) -> list[dict[str, Any]]:
     return [s.json(cfg) for s in PIPELINE]
+
+
+def _boolean(value: Any) -> bool | None:
+    """A flag from untrusted input; an empty string means "not given"."""
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "on"} if text else None
 
 
 def _member(enum_cls: type[Enum], value: Any) -> Enum | None:
@@ -304,7 +381,7 @@ def click_options(key: str) -> Callable[[F], F]:
         wrapped: Any = fn
         for opt in reversed(spec.options):
             default_note = (
-                f"  [dim](default: \\[{_section(opt.config_field)}])[/]"
+                f"  [dim](default: {_section(opt.config_field)})[/]"
                 if opt.config_field
                 else ""
             )
@@ -316,7 +393,13 @@ def click_options(key: str) -> Callable[[F], F]:
                 kind = click.Choice(list(opt.choices))
             else:
                 flag = f"--{opt.key}"
-                kind = float
+                # the same bounds the API enforces, so a number out of range is
+                # refused on both surfaces rather than on one
+                kind = (
+                    click.FloatRange(opt.low, opt.high)
+                    if opt.low is not None or opt.high is not None
+                    else float
+                )
             wrapped = click.option(
                 flag,
                 opt.key,
@@ -356,9 +439,11 @@ def _section(field_name: str) -> str:
     Only cosmetic: it tells the reader which table in ``proxdex.toml`` holds the
     default without hard-coding a second copy of the section names.
     """
-    return {
-        "upscayl_model": "tools] upscayl_model",
-        "upscayl_scale": "tools] upscayl_scale",
-        "upscayl_double": "tools] upscayl_double",
-        "grade_normalize": "grade] normalize",
-    }.get(field_name, field_name)
+    prefix, _, key = field_name.partition("_")
+    section, name = {
+        "upscayl": ("tools", field_name),
+        "border": ("border", key),
+        "grade": ("grade", key),
+    }.get(prefix, ("", field_name))
+    # the literal bracket has to be escaped, or rich reads `[grade]` as a style
+    return f"\\[{section}] {name}" if section else name

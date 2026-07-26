@@ -37,9 +37,20 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
 
-from proxdex import borders, frames, games, media, net, report, sources, steps
+from proxdex import (
+    borders,
+    calibrate,
+    frames,
+    games,
+    media,
+    net,
+    profiles,
+    report,
+    sources,
+    steps,
+)
 from proxdex import sheet as sheet_mod
-from proxdex.config import Config, Faces, PageSize
+from proxdex.config import Config, Faces, Orientation, PageSize
 from proxdex.errors import ConfigError, ProxdexError
 from proxdex.games import GameId
 from proxdex.library import FRONT, STAGE_BY_LABEL, Card, Library, Step
@@ -56,11 +67,14 @@ _VIEW_BOX = (1400, 1960)
 _JPEG_CACHE: dict[tuple[str, int, int, int], bytes] = {}
 _JPEG_CACHE_MAX = 64
 #: the client routes are real URLs, so a deep link has to reach the SPA shell
-_SPA_ROUTES = ("library", "card", "search", "settings")
+_SPA_ROUTES = ("library", "card", "search", "settings", "sheet", "print")
 # card ids are <set>-<number>, and MTG collector numbers can carry their own
 # hyphen ("ymid-A-123"). No dots or slashes: these reach the CLI as argv.
 _ID_OK = re.compile(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+){1,2}$")
 
+
+#: a playset is four; `--copies 400` is a typo, not a plan (matches the CLI)
+_MAX_COPIES = 99
 
 #: a card is printed on two sides at most, and both CLI and API number them
 #: from 1 — so a side is `Annotated[int, Field(ge=1, le=_MAX_FACE)]` everywhere
@@ -69,6 +83,9 @@ _MAX_FACE = 2
 #: one card id, validated by pattern rather than by a hand-written check: these
 #: reach the CLI as argv, so nothing but `<set>-<number>` may pass
 CardId = Annotated[str, Field(pattern=_ID_OK.pattern)]
+#: a profile name — it reaches the CLI as argv and becomes a filename, so it is
+#: pattern-checked here rather than sanitized later
+ProfileName = Annotated[str, PathParam(pattern=r"^[a-z0-9][a-z0-9._-]{0,47}$")]
 Side = Annotated[int, Field(ge=1, le=_MAX_FACE)]
 #: a value a step setting may hold. Deliberately not `Any`: the settings schema
 #: only ever declares booleans, numbers and closed sets of strings.
@@ -130,15 +147,96 @@ class FlipBody(Body):
     face: Side | None = None
 
 
+class SheetCard(Body):
+    """One card in a print run, and how many copies of it to print."""
+
+    id: CardId
+    copies: Annotated[int, Field(ge=1, le=_MAX_COPIES)] = 1
+
+    @property
+    def argv(self) -> str:
+        """``ex3-90:4`` — the CLI's own spelling for copies."""
+        return f"{self.id}:{self.copies}" if self.copies > 1 else self.id
+
+
 class SheetBody(Body):
+    """A print run. Every page setting is a per-run override, never a config edit.
+
+    The same knobs `proxdex sheet` takes, because a run is this paper on this
+    printer today — the sheet builder chooses them, the library keeps its own
+    defaults.
+    """
+
     name: str = Field(default="deck", min_length=1, max_length=64)
-    #: which cards to impose. Empty means every card that is ready, exactly as
-    #: `proxdex sheet <name>` with no ids does.
-    ids: list[CardId] = Field(default_factory=list, max_length=512)
+    #: which cards to impose, with copies. Empty means every card that is ready,
+    #: exactly as `proxdex sheet <name>` with no ids does.
+    cards: list[SheetCard] = Field(default_factory=list, max_length=512)
     faces: Faces | None = None
     page: PageSize | None = None
-    dpi: int | None = Field(default=None, ge=72, le=4800)
+    orientation: Orientation | None = None
+    dpi: Annotated[int, Field(ge=72, le=4800)] | None = None
+    cols: Annotated[int, Field(ge=1, le=12)] | None = None
+    rows: Annotated[int, Field(ge=1, le=12)] | None = None
+    bleed: Annotated[float, Field(ge=0, le=20)] | None = None
+    guides: bool | None = None
     profile: str | None = Field(default=None, max_length=64)
+    notes: str = Field(default="", max_length=2000)
+
+    def argv(self) -> list[str]:
+        """This run as CLI arguments — the one place the flags are spelled."""
+        args = [c.argv for c in self.cards]
+        args += ["--faces", (self.faces or Faces.FRONTS).value]
+        if self.profile:
+            args += ["--profile", self.profile]
+        if self.page is not None:
+            args += ["--page", self.page.value]
+        if self.orientation is not None:
+            args += ["--orientation", self.orientation.value]
+        if self.dpi is not None:
+            args += ["--dpi", str(self.dpi)]
+        if self.cols is not None:
+            args += ["--cols", str(self.cols)]
+        if self.rows is not None:
+            args += ["--rows", str(self.rows)]
+        if self.bleed is not None:
+            args += ["--bleed", f"{self.bleed:g}"]
+        if self.guides is not None:
+            args.append("--guides" if self.guides else "--no-guides")
+        if self.notes:
+            args += ["--notes", self.notes]
+        return args
+
+
+class ProfileBody(Body):
+    """Create or edit a print profile. Every field is optional on an edit."""
+
+    medium: media.Preset | None = None
+    notes: str | None = Field(default=None, max_length=8000)
+    saturation: Annotated[float, Field(ge=0, le=3)] | None = None
+    contrast: Annotated[float, Field(ge=0, le=3)] | None = None
+    brightness: Annotated[float, Field(ge=0, le=3)] | None = None
+    gamma: Annotated[float, Field(ge=0, le=3)] | None = None
+    #: how many charts one calibration sheet holds
+    cols: Annotated[int, Field(ge=1, le=6)] | None = None
+    rows: Annotated[int, Field(ge=1, le=6)] | None = None
+
+    def argv(self) -> list[str]:
+        args: list[str] = []
+        if self.medium is not None:
+            args += ["--medium", self.medium.value]
+        if self.notes is not None:
+            args += ["--notes", self.notes]
+        for key in media.RECIPE_KEYS:
+            value = getattr(self, key)
+            if value is not None:
+                args += [f"--{key}", f"{value:g}"]
+        if self.cols is not None and self.rows is not None:
+            args += ["--grid", f"{self.cols}x{self.rows}"]
+        return args
+
+
+class RenameBody(Body):
+    name: str = Field(min_length=1, max_length=48)
 
 
 class BackBody(Body):
@@ -227,7 +325,6 @@ def create_app(lib: Library) -> FastAPI:
     # the shell and the JSON payloads compress well; images are already coded
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     cfg_path = lib.root / "proxdex.toml"
-    cal_dir = lib.root / "calibration"
 
     def run_cli(args: list[str]) -> dict[str, Any]:
         proc = subprocess.run(
@@ -310,7 +407,6 @@ def create_app(lib: Library) -> FastAPI:
 
     @app.get("/api/meta")
     def api_meta() -> dict[str, Any]:
-        calibrated = sorted(p.stem for p in cal_dir.glob("*.json"))
         cfg = Config.load(lib.root)
         return {
             # the whole pipeline — order, labels, skippability and every step's
@@ -318,9 +414,23 @@ def create_app(lib: Library) -> FastAPI:
             # stepper and its control panels from this and spells nothing itself,
             # so a new step appears in the UI as soon as it exists in Python.
             "pipeline": steps.json_pipeline(cfg),
-            "profiles": [p.value for p in media.PROFILES] + calibrated,
+            "profiles": profiles.names(lib.root),
+            "active_profile": cfg.print_profile,
             "faces": [f.value for f in Faces],
             "pages": [p.value for p in PageSize],
+            "orientations": [o.value for o in Orientation],
+            # what a sheet run defaults to, so the builder opens on this
+            # library's own settings instead of inventing its own
+            "sheet": {
+                "faces": cfg.sheet_faces.value,
+                "page": cfg.sheet_page.value,
+                "orientation": cfg.sheet_orientation.value,
+                "dpi": cfg.sheet_dpi,
+                "cols": cfg.sheet_cols,
+                "rows": cfg.sheet_rows,
+                "bleed": cfg.bleed_mm,
+                "guides": cfg.sheet_guides,
+            },
             "stages": [s.label for s in _STAGES],
             "steps": [s.value for s in Step],
             "games": [
@@ -714,15 +824,32 @@ def create_app(lib: Library) -> FastAPI:
     # ---- produce -----------------------------------------------------------
     @app.post("/api/sheet")
     def api_sheet(body: SheetBody) -> dict[str, Any]:
-        args = ["sheet", body.name, *body.ids]
-        args += ["--faces", (body.faces or Faces.FRONTS).value]
-        if body.profile:
-            args += ["--profile", body.profile]
-        if body.page is not None:
-            args += ["--page", body.page.value]
-        if body.dpi is not None:
-            args += ["--dpi", str(body.dpi)]
-        return run_cli(args)
+        return run_cli(["sheet", body.name, *body.argv()])
+
+    @app.post("/api/sheet/plan")
+    def api_sheet_plan(body: SheetBody) -> Any:
+        """What this run would print — pages per size, and what is not ready.
+
+        A query, so it is answered here rather than by shelling out; the answer
+        comes from `sheet.plan`, the same function the real run uses, so the page
+        count the builder promises is the page count you get.
+        """
+        cfg = Config.load(lib.root)
+        _apply_overrides(cfg, body)
+        if body.cards:
+            wanted = {c.id: c.copies for c in body.cards}
+            chosen = [
+                (card, wanted.get(card.id, 1)) for card in lib.select(tuple(wanted))
+            ]
+        else:
+            chosen = [(card, 1) for card in lib.cards()]
+        try:
+            prof = profiles.active(lib.root, cfg, body.profile)
+        except ProxdexError as exc:
+            return _bad(str(exc))
+        out = sheet_mod.plan(chosen, cfg).json(cfg)
+        out["profile"] = prof.summary()
+        return out
 
     @app.post("/api/printed/{name}")
     def api_printed(name: Annotated[str, PathParam(max_length=64)]) -> dict[str, Any]:
@@ -779,46 +906,119 @@ def create_app(lib: Library) -> FastAPI:
             return Response(status_code=404)
         return FileResponse(path, media_type="application/pdf")
 
-    # ---- calibrate ---------------------------------------------------------
-    @app.get("/api/calibrate")
-    def api_calibrate_list() -> list[dict[str, Any]]:
-        import json
+    # ---- print profiles ----------------------------------------------------
+    # Reads are computed here (a profile is a file in the library, like a card);
+    # every write goes through the CLI, so there is one implementation of what a
+    # calibration round means.
+    @app.get("/api/profiles")
+    def api_profiles() -> dict[str, Any]:
+        cfg = Config.load(lib.root)
+        return {
+            "active": cfg.print_profile,
+            "media": [
+                {"id": p.value, "label": p.label, "recipe": p.recipe.json()}
+                for p in media.Preset
+            ],
+            "recipe_keys": list(media.RECIPE_KEYS),
+            "profiles": [p.summary() for p in profiles.listing(lib.root)],
+        }
 
-        out: list[dict[str, Any]] = []
-        for f in sorted(cal_dir.glob("*.json")):
-            data = json.loads(f.read_text())
-            out.append(
-                {
-                    "profile": data.get("profile", f.stem),
-                    "error": data.get("uncorrected_error", {}),
-                }
-            )
-        return out
+    @app.get("/api/profile/{name}")
+    def api_profile(name: ProfileName) -> Any:
+        """One profile in full — notes, recipe, and every round's patch pairs."""
+        try:
+            return profiles.resolve(lib.root, name).detail()
+        except ProxdexError as exc:
+            return _bad(str(exc))
 
-    @app.get("/api/calibrate/chart")
-    def api_cal_chart(profile: str, corrected: bool = False) -> Response:
-        args = ["calibrate", "target", "--profile", profile, "--pdf"]
-        if corrected:
-            args.append("--corrected")
-        res = run_cli(args)
-        suffix = "_chart_corrected" if corrected else "_chart"
-        pdf = cal_dir / f"{profile}{suffix}.pdf"
-        if not res["ok"] or not pdf.is_file():
-            return JSONResponse({"ok": False, "log": res["log"]}, status_code=400)
-        return FileResponse(pdf, media_type="application/pdf")
+    @app.post("/api/profile/{name}")
+    def api_profile_new(name: ProfileName, body: ProfileBody) -> dict[str, Any]:
+        return run_cli(["profile", "new", name, *body.argv()])
 
-    @app.post("/api/calibrate/fit")
-    def api_cal_fit(
+    @app.patch("/api/profile/{name}")
+    def api_profile_set(name: ProfileName, body: ProfileBody) -> dict[str, Any]:
+        args = body.argv()
+        if not args:
+            return {"ok": True, "log": "nothing to change"}
+        return run_cli(["profile", "set", name, *args])
+
+    @app.delete("/api/profile/{name}")
+    def api_profile_rm(name: ProfileName) -> dict[str, Any]:
+        return run_cli(["profile", "rm", name, "--yes"])
+
+    @app.post("/api/profile/{name}/rename")
+    def api_profile_rename(name: ProfileName, body: RenameBody) -> dict[str, Any]:
+        return run_cli(["profile", "rename", name, body.name])
+
+    @app.post("/api/profile/{name}/use")
+    def api_profile_use(name: ProfileName) -> dict[str, Any]:
+        return run_cli(["profile", "use", name])
+
+    # ---- calibration rounds -------------------------------------------------
+    @app.get("/api/calibrate/chart/{name}")
+    def api_cal_chart(name: ProfileName, slot: str | None = None) -> Response:
+        """The next round's chart, as a print-ready PDF."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / f"{name}-chart.pdf"
+            args = ["calibrate", "chart", name, "-o", str(pdf)]
+            if slot:
+                args += ["--slot", slot]
+            res = run_cli(args)
+            if not res["ok"] or not pdf.is_file():
+                return JSONResponse({"ok": False, "log": res["log"]}, status_code=400)
+            # read it before the temp dir goes: FileResponse streams later
+            body = pdf.read_bytes()
+        return Response(
+            body,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="{name}-chart.pdf"',
+                "Cache-Control": "no-store",
+            },
+        )
+
+    @app.get("/api/calibrate/proof/{name}/{round_n}")
+    def api_cal_proof(name: ProfileName, round_n: int) -> Response:
+        """Target above, scanned below — what the paper did, patch by patch."""
+        try:
+            prof = profiles.resolve(lib.root, name)
+        except ProxdexError as exc:
+            return _bad(str(exc))
+        rnd = prof.round(round_n)
+        if rnd is None:
+            return Response(status_code=404)
+        buf = io.BytesIO()
+        calibrate.proof_sheet(rnd.scanned).save(buf, "PNG")
+        return Response(
+            buf.getvalue(),
+            media_type="image/png",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    @app.post("/api/calibrate/add/{name}")
+    def api_cal_add(
+        name: ProfileName,
         file: Annotated[UploadFile, File()],
-        profile: Annotated[str, Form()],
-        check: Annotated[bool, Form()] = False,
+        slot: Annotated[str | None, Form(pattern=r"^[1-6],[1-6]$")] = None,
+        whole: Annotated[bool, Form()] = False,
+        note: Annotated[str, Form(max_length=2000)] = "",
     ) -> dict[str, Any]:
         tmp = _spool(file)
-        sub = "check" if check else "fit"
         try:
-            return run_cli(["calibrate", sub, "--profile", profile, "--scan", str(tmp)])
+            args = ["calibrate", "add", name, "--scan", str(tmp)]
+            if whole:
+                args.append("--whole")
+            elif slot:
+                args += ["--slot", slot]
+            if note:
+                args += ["--note", note]
+            return run_cli(args)
         finally:
             tmp.unlink(missing_ok=True)
+
+    @app.post("/api/calibrate/drop/{name}/{round_n}")
+    def api_cal_drop(name: ProfileName, round_n: int) -> dict[str, Any]:
+        return run_cli(["calibrate", "drop", name, "--round", str(round_n)])
 
     # ---- SPA fallback (registered last, so it shadows nothing) --------------
     @app.get("/{route}", response_class=HTMLResponse)
@@ -864,6 +1064,30 @@ def _field_options() -> dict[str, list[str]]:
         elif get_origin(hint) is Literal:
             out[name] = [str(a) for a in get_args(hint)]
     return out
+
+
+def _apply_overrides(cfg: Config, body: SheetBody) -> None:
+    """This run's overrides on a loaded config — planning only, never written.
+
+    The real run gets them by argv (`SheetBody.argv`), so the plan and the print
+    are configured the same way and cannot drift.
+    """
+    if body.faces is not None:
+        cfg.sheet_faces = body.faces
+    if body.page is not None:
+        cfg.sheet_page = body.page
+    if body.orientation is not None:
+        cfg.sheet_orientation = body.orientation
+    if body.dpi is not None:
+        cfg.sheet_dpi = body.dpi
+    if body.cols is not None:
+        cfg.sheet_cols = body.cols
+    if body.rows is not None:
+        cfg.sheet_rows = body.rows
+    if body.bleed is not None:
+        cfg.bleed_mm = body.bleed
+    if body.guides is not None:
+        cfg.sheet_guides = body.guides
 
 
 def _side(face: int | None) -> list[str]:

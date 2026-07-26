@@ -33,7 +33,7 @@ stages, one file per stage:
 | 1 | `original` | downloaded from the game's image source   | `search` / `fetch` |
 | 2 | `bordered` | thin frame expanded to trim (optional)    | `border` |
 | 3 | `upscaled` | Upscayl — *after* the border fix          | `upscale` / `import` |
-| 4 | `edited`   | normalize + uniform look — the **master** | `grade` |
+| 4 | `edited`   | one uniform look — the **master**         | `grade` |
 
 **Every step is one you run or skip — nothing is automatic.** Steps 2–4 each
 carry their own state: `pending` → `done` (you ran it) or `skipped` (you
@@ -145,10 +145,14 @@ in `grade` (after upscaling, WYSIWYG); frame expansion goes *before* upscale in
 │           ├── .skip-bordered_f2    # per-side state, like everything else
 │           ├── isd-51_1_original.png       # side 1 keeps the plain names
 │           └── isd-51_1_original_f2.png    # side 2 carries the _f2 suffix
+├── profiles/
+│   └── matte-200.json               # one print medium: your notes, its recipe,
+│                                    # and every calibration round measured on it
 └── print-batches/
     └── 2026-07-18_dark-deck/
         ├── fronts.pdf
-        └── batch.toml               # cards, printed?, paper/printer, notes
+        └── batch.toml               # cards + copies, the profile and page
+                                     # settings used, printed?, notes
 ```
 
 ## Install
@@ -195,9 +199,9 @@ proxdex fetch ex3-90 ex6-105   # or download directly by id
 proxdex border ex3-90 --inner-top .04 --inner-right .05 \
                       --inner-bottom .04 --inner-left .05   # reshape to spec
 proxdex upscale ex3-90         # Upscayl
-proxdex grade ex3-90           # normalize + uniform look → the master
+proxdex grade ex3-90           # the uniform look → the trim master
 
-proxdex sheet dark-deck        # colour-correct + bleed + impose → print PDF + batch
+proxdex sheet dark-deck        # correct for the medium + bleed + impose → PDF + batch
 #   ...print the PDF (colour management OFF), then:
 proxdex printed dark-deck      # mark the batch printed
 
@@ -337,12 +341,17 @@ proxdex ui                 # → http://127.0.0.1:8756
 
 ### Print sheet
 
-`proxdex sheet <name> [ids...]` colour-corrects each master, extends cut bleed
+`proxdex sheet <name> [ID[:COPIES]...]` corrects each master for the medium,
+extends cut bleed
 outside the trim (cardbleed), imposes onto pages, and writes
 `print-batches/<date>_<name>/<faces>.pdf` plus a manifest. proxdex renders the
 PDF itself, so the print path is fully determined — **print with your printer's
 colour management OFF** so a calibration holds.
 
+- **Copies and per-run overrides.** `ID:4` prints a playset, `--copies N` applies
+  to the whole run, and `--faces/--page/--orientation/--cols/--rows/--bleed/--dpi/
+  --guides/--profile` change this run without touching the library's settings.
+  `--dry-run` reports the page plan and writes nothing.
 - **Any input size → exact card size.** Whatever resolution a card is, it's
   scaled to **its own** physical size at sheet DPI — the configured dimensions
   (`[card]`, default 63×88mm) for an ordinary card, 89×127mm for an oversized one.
@@ -495,87 +504,123 @@ proxdex border neo-136 --frame borderless --auto
 
 ## Uniform prints
 
-A mixed collection — crisp digital art next to warm, flat scans — won't print
-uniformly if you just apply the same multipliers to everything, because each
-card starts from a different place. So `grade` works in two steps:
-
-1. **normalize (per card, dynamic)** — white-balances the shared card frame to
-   one target colour and evens out black/white points, so every card lands on
-   the same baseline regardless of how it was made. The target defaults to the
-   library's *own median frame colour*, so the collection converges on its own
-   consensus; pin it if you prefer.
-2. **look (uniform)** — one identical recipe on top. Because the baseline is now
-   shared, your intended saturation lands the same way on every card.
+`grade` applies **one look** — brightness, contrast, saturation, gamma — to every
+card, so a mixed batch prints as a set. Defaults live under `[grade]` and every
+one of them is also a per-run flag:
 
 ```toml
 [grade]
-normalize = true          # step 1
-match_border_target = []  # [] = library median; or pin e.g. [252, 214, 46]
-saturation = 1.10         # step 2 — the intended look
+brightness = 1.03   # printers + matte paper dull the image
 contrast   = 1.06
-brightness = 1.03         # printers + matte paper dull the image
+saturation = 1.10
+gamma      = 1.0
+levels     = 0.0    # optional: stretch ONE card's own black/white points
 ```
-
-Calibrate the look with a test strip: print one sheet, compare to screen, nudge
-the numbers, reprint. Run `proxdex grade --no-normalize` to apply only the
-recipe (skip step 1).
-
-## Printing media (washed-out foil)
-
-Some media shift colour — transparent plastic foil especially, where the ink is
-semi-transparent so prints come out **lighter and less saturated** than the
-screen. `sheet` applies a **media profile** at print time to cancel that, while
-your `edited` master stays neutral (switch media → just re-run `sheet` with a
-different `--profile`, no regrade):
-
-```toml
-[print]
-profile = "foil"    # "none" | "paper" | "foil"
-```
-
-`foil` boosts saturation and ink density (`saturation 1.38, contrast 1.16,
-brightness 0.95, gamma 0.88`). These are a solid automatic starting point;
-**calibrate once** with a test print and override any value:
-
-```toml
-[print]
-profile    = "foil"
-saturation = 1.45   # push harder if prints still look washed out
-gamma      = 0.85
-```
-
-Override per run with `proxdex sheet <name> --profile foil`.
-
-## Calibrating to your printer (closed loop)
-
-If you have a scanner, proxdex can *measure* a per-medium correction instead of
-guessing at a preset — print a chart, scan it, and it fits the colour transform
-that makes prints true to the original. Each medium is its own profile (e.g.
-`paper` on white, `foil-holo` for foil on a holographic backing), so they can
-carry different corrections.
 
 ```bash
-proxdex calibrate target --profile foil-holo --pdf  # emit a patch chart (as a PDF)
-#   → print it on that medium, scan it (auto-correction OFF), then:
-proxdex calibrate fit --profile foil-holo --scan chart_scan.png
-#   → measures a degree-2 polynomial correction; `sheet` now applies it.
-
-# verify / iterate:
-proxdex calibrate target --profile foil-holo --corrected --pdf   # chart with fix baked in
-proxdex calibrate check --scan corrected_scan.png
-#   → prints the residual error; reprint & re-fit until it plateaus.
+proxdex grade ex3-90                       # the library's look
+proxdex grade ex3-90 --saturation 1.2      # this run only
+proxdex grade base1-4 --levels 0.4         # a flat, hazy scan
 ```
 
-`--pdf` sends the chart through the *same* renderer as your card sheets, so the
-correction is measured on the exact path it's applied to. Then `proxdex sheet`
-applies the measured correction — it supersedes the manual `foil` preset for
-that profile.
+`--levels` reads that card and changes only that card: it pulls its own darkest
+and brightest pixels toward full range, blended by the amount you give.
 
-**Honest limits:** the scanner is the measuring device, so this makes prints
-true *as your scanner sees them* — excellent for proxies, but not colorimetric
-(that needs a reference target or a spectrophotometer). Some saturated colours
-are simply outside a medium's gamut and can't be fully reached. And you **must
-turn off the scanner's auto colour/contrast**, or it fights the loop.
+**Grade does not try to match cards to each other by colour.** An earlier version
+did — it read the colour of each card's frame and white-balanced every frame to
+one shared target. That is wrong at the premise: a card frame is yellow on a
+Pokémon card, black on a Magic one, and absent on a full-art print, so there is
+no common baseline to pull them to. With a mixed library the shared target came
+out olive, and a neutral grey inside a yellow-bordered card graded to **deep
+blue** while the same grey in a black-bordered card blew out to white. Both were
+measured; both are gone.
+
+Matching the *medium* is a real problem, but a print-time one — the paper and ink
+are the same for every card on the sheet. That is what a print profile is for.
+
+## Print profiles (one per medium you own)
+
+A profile is everything proxdex needs to know about "matte 200 g on the XP-15000
+with colour management off": a name, **your notes**, the recipe it started from,
+and the calibration rounds measured on it. They live in
+`<root>/profiles/<name>.json`; `[print] profile` names the default.
+
+```bash
+proxdex profile list
+proxdex profile new matte-200 --medium paper \
+        --notes "Canon TS8350 · matte 200 g · plain-paper setting · CM OFF" --use
+proxdex profile show matte-200        # notes, recipe, every round, the trend
+proxdex profile set matte-200 --note "switched to the rear tray"
+proxdex profile rename matte-200 matte-200-rear
+proxdex profile rm old-glossy
+```
+
+Write the notes down. Six months later they are the only way to reproduce a
+print. Until a profile is calibrated it carries a hand-set **recipe** — the
+built-in `none` / `paper` / `foil` presets are just starting points for one
+(`foil` boosts saturation and ink density, because transparent foil washes out) —
+and a measurement supersedes the recipe entirely.
+
+## Calibrating a medium (a loop, on one sheet of paper)
+
+With a scanner, proxdex *measures* the correction instead of guessing it. The
+loop is designed to be walked several times on **one sheet**: each round prints
+the chart into a different slot of a 2×3 grid, so six rounds fit an A4 page.
+
+```bash
+proxdex calibrate chart                      # → profiles/<name>_round1.pdf, slot 1,1
+#   print it on the medium (colour management OFF)
+#   scan the whole page (scanner auto-correction OFF), then:
+proxdex calibrate add --scan scan.png        # records the round, refits, reports
+#   feed the SAME sheet back in and repeat — the next chart goes in slot 2,1
+proxdex profile show                         # watch the error fall
+proxdex calibrate proof                      # target vs scan, patch by patch
+proxdex calibrate drop --round 3             # a misfeed or a crooked scan
+```
+
+Every round is **kept**, and the correction is refitted over all of them at once,
+so each round makes it truer rather than replacing what you measured last time.
+Round 1 prints the raw target, which measures how far off the medium is; every
+round after prints the target *through* what is known so far, which samples the
+space where your cards actually live. A measured run converges fast — a simulated
+press went `21.5 → 5.0 → 4.0 → 3.7 → 3.3 → 2.9` mean RGB over six rounds.
+
+The chart travels the same renderer as a card sheet, so the correction is
+measured on the exact path it is applied to. `proxdex sheet` then applies it, and
+the stored masters stay neutral — switching media is a different `--profile`, not
+a re-grade.
+
+**Honest limits.** The scanner is the measuring device, so this makes prints true
+*as your scanner sees them* — excellent for proxies, not colorimetric. Some
+target colours are simply outside a medium's gamut: paper is not 255 and ink is
+not 0, so those patches can never be hit, and proxdex says how many rather than
+folding them into an average that could never reach zero. And you **must** turn
+off the scanner's auto colour/contrast, or it fights the loop.
+
+## Building a print sheet
+
+`proxdex sheet <name> [ID[:COPIES]...]` imposes the masters. Copies are how
+proxies are actually printed, and every page setting can be overridden for this
+run only — a print run is this paper on this printer today, not a library
+preference.
+
+```bash
+proxdex sheet playset ex3-90:4 base1-4:2      # a playset, and a pair
+proxdex sheet deck --copies 4                 # four of everything ready
+proxdex sheet deck --dry-run                  # the page plan, writing nothing
+proxdex sheet deck --orientation landscape --cols 4 --rows 2 --bleed 3
+proxdex sheet deck --profile foil-clear --notes "third attempt, rear tray"
+```
+
+`--dry-run` reports the pages per card size before anything is rendered, from the
+same code that imposes the PDF. The batch manifest records the copies, the
+profile and the page settings, so a reprint is reproducible rather than
+remembered.
+
+The web UI has the same thing as a screen (`Sheet`): pick cards, set copies, and
+the page plan updates as you go. `Print` manages profiles and walks the
+calibration loop — the slot map shows which part of the sheet is used, and the
+round table shows the error falling.
 
 ## License
 

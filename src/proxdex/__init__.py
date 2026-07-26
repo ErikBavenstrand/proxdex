@@ -6,7 +6,9 @@ has reached, and records what has actually been printed. It uses ``cardbleed``
 (border/bleed) and Upscayl (upscaling), and imposes the print sheet itself.
 
 Each card's stored file is the actual trim-size card — no bleed. Cut bleed and
-medium colour-correction are applied at print (sheet) time, outside the trim.
+medium colour-correction are applied at print (sheet) time, outside the trim: the
+medium is the same for every card on the sheet, so it is measured once per medium
+as a *print profile* rather than baked into any card.
 
 Pipeline stages (per card):
 
@@ -16,7 +18,7 @@ Pipeline stages (per card):
  1   original    source scan, downloaded from scrydex
  2   bordered    thin frame expanded to trim proportions (optional)
  3   upscaled    Upscayl output, after any border fix
- 4   edited      graded (uniform look) — the trim-size master
+ 4   edited      graded (one uniform look) — the trim-size master
 ===  ==========  ==================================================
 
 A card has one or two printable *faces* (MTG's transform cards). Face 0 is the
@@ -32,6 +34,7 @@ Layout on disk::
 
     <root>/cards/<setid>-<slug>/<id>_<name>/<id>_<n>_<stage>[_f2].png
     <root>/back-<game>.png   (optional shared card back, per game)
+    <root>/profiles/<name>.json     (a print medium: notes + calibration rounds)
     <root>/print-batches/<date>_<name>/{<faces>.pdf, batch.toml}
     <root>/INDEX.md          (generated)
     <root>/proxdex.toml      (config + library marker)

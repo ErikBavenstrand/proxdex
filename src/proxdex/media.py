@@ -12,11 +12,25 @@ value under ``[print]`` in ``proxdex.toml``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 import numpy as np
 from PIL import Image, ImageEnhance
 
-from .config import Config
+from proxdex.config import Config
+
+
+class Preset(StrEnum):
+    """The built-in media presets.
+
+    The set of *profiles* is open — `proxdex calibrate` adds a measured one
+    under any name you like, and that supersedes a preset — so config holds a
+    profile name as ``str``. These are the ones that ship.
+    """
+
+    NONE = "none"
+    PAPER = "paper"
+    FOIL = "foil"
 
 
 @dataclass(slots=True, frozen=True)
@@ -27,18 +41,26 @@ class Recipe:
     gamma: float = 1.0  # < 1 darkens midtones → more ink density
 
 
-PROFILES: dict[str, Recipe] = {
-    "none": Recipe(),
-    "paper": Recipe(saturation=1.02, contrast=1.02),
+PROFILES: dict[Preset, Recipe] = {
+    Preset.NONE: Recipe(),
+    Preset.PAPER: Recipe(saturation=1.02, contrast=1.02),
     # transparent plastic foil washes out hard → boost saturation + density
-    "foil": Recipe(saturation=1.38, contrast=1.16, brightness=0.95, gamma=0.88),
+    Preset.FOIL: Recipe(saturation=1.38, contrast=1.16, brightness=0.95, gamma=0.88),
 }
+
+
+def preset(name: str) -> Preset | None:
+    """The built-in preset ``name`` refers to, or None for a measured profile."""
+    try:
+        return Preset(name.strip().lower())
+    except ValueError:
+        return None
 
 
 def resolve(cfg: Config, profile: str | None = None) -> tuple[str, Recipe]:
     """Active profile name + recipe (built-in defaults, [print] overrides win)."""
-    name = (profile or cfg.print_profile or "none").lower()
-    base = PROFILES.get(name, PROFILES["none"])
+    name = (profile or cfg.print_profile or Preset.NONE).lower()
+    base = PROFILES[preset(name) or Preset.NONE]
     recipe = Recipe(
         saturation=_pick(cfg.print_saturation, base.saturation),
         contrast=_pick(cfg.print_contrast, base.contrast),

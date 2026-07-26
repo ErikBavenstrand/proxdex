@@ -3,9 +3,10 @@
 The command construction mirrors the Upscayl app exactly (see
 ``upscayl/electron/utils/get-arguments.ts``):
 
-* the seven default models are the app's ``MODELS`` ids;
+* the models and scales are closed sets — :class:`proxdex.config.UpscaylModel`
+  and :class:`proxdex.config.UpscaylScale`, the app's own ``-n``/``-s`` literals;
 * ``-s`` is passed only when the requested scale differs from the model's
-  native scale (all defaults are 4x), matching the app's ``includeScale``;
+  native scale (all built-ins are 4x), matching the app's ``includeScale``;
 * "double upscayl" runs the binary twice with the same model/scale, the
   second pass reading the first's output in place.
 
@@ -19,19 +20,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .config import Config
-from .errors import FileError
-
-#: the app's seven built-in models, in its own order (the `-n` literals)
-MODELS: tuple[str, ...] = (
-    "upscayl-standard-4x",
-    "upscayl-lite-4x",
-    "high-fidelity-4x",
-    "remacri-4x",
-    "ultramix-balanced-4x",
-    "ultrasharp-4x",
-    "digital-art-4x",
-)
+from proxdex.config import Config, UpscaylModel, UpscaylScale
+from proxdex.errors import FileError
 
 _BIN_CANDIDATES = (
     "/Applications/Upscayl.app/Contents/Resources/bin/upscayl-bin",
@@ -43,16 +33,6 @@ _MODEL_CANDIDATES = (
     str(Path.home() / "Applications/Upscayl.app/Contents/Resources/models"),
     "/opt/Upscayl/resources/models",
 )
-
-
-def model_scale(model: str) -> int:
-    """The model's native scale, read from its name (app's getModelScale)."""
-    name = model.lower()
-    if "x2" in name or "2x" in name:
-        return 2
-    if "x3" in name or "3x" in name:
-        return 3
-    return 4
 
 
 def resolve_bin(cfg: Config) -> str:
@@ -82,17 +62,18 @@ def resolve_models(cfg: Config) -> str:
     )
 
 
-def available_models(cfg: Config) -> list[str]:
-    models = Path(resolve_models(cfg))
-    return sorted(p.stem for p in models.glob("*.param"))
-
-
-def _pass(exe: str, inp: Path, out: Path, models: str, model: str, scale: int) -> None:
-    include_scale = model_scale(model) != scale
+def _pass(
+    exe: str,
+    inp: Path,
+    out: Path,
+    models: str,
+    model: UpscaylModel,
+    scale: UpscaylScale,
+) -> None:
     cmd = [exe, "-i", str(inp), "-o", str(out)]
-    if include_scale:  # matches the app: omit -s when scale == model native scale
-        cmd += ["-s", str(scale)]
-    cmd += ["-m", models, "-n", model, "-f", "png"]
+    if model.native_scale is not scale:  # the app omits -s when they match
+        cmd += ["-s", str(scale.value)]
+    cmd += ["-m", models, "-n", model.value, "-f", "png"]
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
@@ -105,18 +86,18 @@ def run(
     dst: Path,
     cfg: Config,
     *,
-    model: str | None = None,
-    scale: int | None = None,
+    model: UpscaylModel | None = None,
+    scale: UpscaylScale | None = None,
     double: bool | None = None,
 ) -> None:
     exe = resolve_bin(cfg)
     models = resolve_models(cfg)
-    model = model or cfg.upscayl_model
-    scale = cfg.upscayl_scale if scale is None else scale
-    double = cfg.upscayl_double if double is None else double
+    use_model = cfg.upscayl_model if model is None else model
+    use_scale = cfg.upscayl_scale if scale is None else scale
+    use_double = cfg.upscayl_double if double is None else double
 
-    _pass(exe, src, dst, models, model, scale)
-    if double:  # second pass reads the first pass' output in place
-        _pass(exe, dst, dst, models, model, scale)
+    _pass(exe, src, dst, models, use_model, use_scale)
+    if use_double:  # second pass reads the first pass' output in place
+        _pass(exe, dst, dst, models, use_model, use_scale)
     if not dst.exists():
         raise FileError(f"upscayl produced no output for {src.name}")

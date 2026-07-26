@@ -80,6 +80,15 @@ ignore = [
     "DTZ011", "DTZ005",  # naive local dates are intentional for batch labels
 ]
 
+[tool.ruff.lint.flake8-bugbear]
+# `setting()` returns a dataclasses.field, so it is a legitimate dataclass
+# default — the whole point is that a field can carry its own documentation.
+extend-immutable-calls = ["proxdex.config.setting"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# absolute imports everywhere: `from proxdex.x import y`, never `from .x import y`
+ban-relative-imports = "all"
+
 [tool.ruff.lint.per-file-ignores]
 "src/proxdex/cli.py" = ["PLC0206"]  # dict iteration in the settings-panel loop
 
@@ -104,5 +113,8 @@ path = "src/proxdex/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/proxdex"]
-# ship the web-UI frontend (non-.py, so make inclusion explicit)
+# ship the web-UI frontend (non-.py, so make inclusion explicit). Its vendored
+# component library under src/proxdex/static/ — Bootstrap, bundled rather than
+# pulled from a CDN so the local UI works offline — is picked up by `packages`
+# above; force-including it too makes hatchling add every file twice.
 force-include = { "src/proxdex/webui.html" = "proxdex/webui.html" }

@@ -18,13 +18,13 @@ from cardbleed import Edges, bleed_card
 from cardbleed import FileError as _CardbleedError
 from cardbleed.geometry import Amount, FitPlan, solve_fit
 
-from .errors import FileError
+from proxdex.errors import FileError
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from .config import Config
-    from .frames import FrameGuide
+    from proxdex.config import Config
+    from proxdex.frames import FrameGuide
 
 Fracs = tuple[float, float, float, float]  # [top, right, bottom, left]
 

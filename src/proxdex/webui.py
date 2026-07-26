@@ -8,6 +8,7 @@ UI and terminal share exactly one implementation. Served on localhost only.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import re
@@ -15,34 +16,216 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any
+from typing import (
+    Annotated,
+    Any,
+    Literal,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 import requests
 import tomlkit
-from fastapi import Body, FastAPI, File, Form, Query, UploadFile
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
+from fastapi import Path as PathParam
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
+from pydantic import BaseModel, ConfigDict, Field
 
-from . import borders, frames, media, report, sources
-from . import upscale as upscale_mod
-from .config import Config
-from .errors import ProxdexError
-from .library import Library, Stage
+from proxdex import borders, frames, games, media, net, report, sources, steps
+from proxdex import sheet as sheet_mod
+from proxdex.config import Config, Faces, PageSize
+from proxdex.errors import ConfigError, ProxdexError
+from proxdex.games import GameId
+from proxdex.library import FRONT, STAGE_BY_LABEL, Card, Library, Step
 
-_STAGES = (Stage.ORIGINAL, Stage.BORDERED, Stage.UPSCALED, Stage.EDITED)
-_BEST = (Stage.EDITED, Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL)
-_BY_LABEL = {s.label: s for s in Stage}
+_STAGES = steps.STAGES
+_BEST = steps.BEST
 _HTML_PATH = Path(__file__).parent / "webui.html"
-_ID_OK = re.compile(r"^[A-Za-z0-9]+-[A-Za-z0-9]+$")
+_STATIC_DIR = Path(__file__).parent / "static"
+#: contact-sheet tile size, and the card-page proof — large enough that the
+#: viewer never upsamples on a big display
+_THUMB_BOX = (360, 504)
+_VIEW_BOX = (1400, 1960)
+#: encoded JPEGs by (path, mtime, box, quality) — bounded, newest kept
+_JPEG_CACHE: dict[tuple[str, int, int, int], bytes] = {}
+_JPEG_CACHE_MAX = 64
+#: the client routes are real URLs, so a deep link has to reach the SPA shell
+_SPA_ROUTES = ("library", "card", "search", "settings")
+# card ids are <set>-<number>, and MTG collector numbers can carry their own
+# hyphen ("ymid-A-123"). No dots or slashes: these reach the CLI as argv.
+_ID_OK = re.compile(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+){1,2}$")
 
 
-def _safe_ids(ids: list[Any]) -> list[str]:
-    return [s for s in (str(i) for i in ids) if _ID_OK.match(s)]
+#: a card is printed on two sides at most, and both CLI and API number them
+#: from 1 — so a side is `Annotated[int, Field(ge=1, le=_MAX_FACE)]` everywhere
+_MAX_FACE = 2
+
+#: one card id, validated by pattern rather than by a hand-written check: these
+#: reach the CLI as argv, so nothing but `<set>-<number>` may pass
+CardId = Annotated[str, Field(pattern=_ID_OK.pattern)]
+Side = Annotated[int, Field(ge=1, le=_MAX_FACE)]
+#: a value a step setting may hold. Deliberately not `Any`: the settings schema
+#: only ever declares booleans, numbers and closed sets of strings.
+SettingValue = bool | int | float | str
+
+
+class Body(BaseModel):
+    """Base for every request body: unknown keys are refused, not ignored.
+
+    A typo in the client should be a 422 naming the field, not a silently
+    dropped option that makes a step run with the wrong settings.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class Edges(Body):
+    """Per-edge fractions of the image — the align marks, or a border to grow."""
+
+    top: float = Field(ge=0, le=1)
+    right: float = Field(ge=0, le=1)
+    bottom: float = Field(ge=0, le=1)
+    left: float = Field(ge=0, le=1)
+
+
+class StepBody(Body):
+    """Run, skip, unskip or reset one step over some cards.
+
+    ``settings`` holds the focused step's own options and is checked against that
+    step's declared schema (:mod:`proxdex.steps`) before anything reaches argv;
+    ``step`` is only meaningful for the pipeline-state verbs.
+    """
+
+    cmd: str = Field(min_length=1, max_length=32)
+    ids: list[CardId] = Field(min_length=1, max_length=512)
+    face: Side | None = None
+    force: bool = False
+    step: Step | None = None
+    settings: dict[str, SettingValue] = Field(default_factory=dict)
+    #: where the card's inner border currently sits, for the spec-based fit
+    inner: Edges | None = None
+    #: plain per-edge growth in mm, for the no-fit path
+    grow: Edges | None = None
+    #: measure the inner border off the image instead of being told where it is
+    auto: bool = False
+
+
+class FetchBody(Body):
+    ids: list[CardId] = Field(min_length=1, max_length=512)
+    game: GameId | None = None
+    face: Side | None = None
+    #: also fetch the cards these are printed alongside — both meld halves and
+    #: the melded card, the tokens they make
+    related: bool = False
+
+
+class FlipBody(Body):
+    ids: list[CardId] = Field(min_length=1, max_length=512)
+    face: Side | None = None
+
+
+class SheetBody(Body):
+    name: str = Field(default="deck", min_length=1, max_length=64)
+    #: which cards to impose. Empty means every card that is ready, exactly as
+    #: `proxdex sheet <name>` with no ids does.
+    ids: list[CardId] = Field(default_factory=list, max_length=512)
+    faces: Faces | None = None
+    page: PageSize | None = None
+    dpi: int | None = Field(default=None, ge=72, le=4800)
+    profile: str | None = Field(default=None, max_length=64)
+
+
+class BackBody(Body):
+    game: GameId | None = None
+    url: str | None = Field(default=None, max_length=2048)
+
+
+class ConfigBody(Body):
+    """A settings save: whole ``[section]`` tables of values.
+
+    The keys are whatever ``proxdex.toml`` holds, so they cannot be enumerated in
+    a model — but every value is coerced through :class:`Config`'s own annotations
+    before being written, and a bad one is a 400 naming the valid options.
+    """
+
+    sections: dict[str, dict[str, SettingValue | list[SettingValue] | None]]
+
+
+def _rev(card: Card) -> str:
+    """A cheap version token for a card's pixels: which stages of which faces
+    exist, and the newest one's mtime.
+
+    Every image URL carries it, so a file that changed gets a *new* URL and the
+    old one can be cached forever — no revalidation round-trip per thumbnail.
+    The stage bitmask matters as much as the mtime: *removing* a later stage
+    (skip, reset, downstream invalidation) changes which file a thumbnail comes
+    from while leaving every remaining mtime untouched.
+    """
+    bits = 0
+    stamps: list[int] = []
+    bit = 0
+    for face in card.faces:
+        for stage in _STAGES:
+            path = card.stage_path(stage, face)
+            if path.exists():
+                bits |= 1 << bit
+                stamps.append(path.stat().st_mtime_ns)
+            bit += 1
+    return f"{bits:x}-{max(stamps):x}" if stamps else "0"
+
+
+def _cache_control(rev: str | None) -> str:
+    """A ``rev``-stamped URL is immutable; a bare one must be revalidated."""
+    return "private, max-age=31536000, immutable" if rev else "no-cache"
+
+
+def _encode(src: Path, box: tuple[int, int], quality: int) -> bytes:
+    im = Image.open(src).convert("RGB")
+    im.thumbnail(box)
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=quality)
+    return buf.getvalue()
+
+
+def _derived(
+    request: Request, src: Path, box: tuple[int, int], quality: int, rev: str | None
+) -> Response:
+    """A downscaled JPEG of ``src``, memoized and conditionally served.
+
+    Re-encoding an upscaled master is the slowest thing this server does, so a
+    given (file, mtime, box) is encoded once per process, and a browser that
+    already has it gets a 304 without any image work at all.
+    """
+    stat = src.stat()
+    key = (str(src), stat.st_mtime_ns, box[0], quality)
+    # the path is part of the identity — a thumbnail's source moves between
+    # stages as steps run and are undone — and the digest must be stable across
+    # restarts (str.__hash__ is salted per process), or --reload re-sends
+    # everything the browser already holds
+    digest = hashlib.blake2b(repr(key).encode(), digest_size=8).hexdigest()
+    etag = f'"{digest}"'
+    headers = {"ETag": etag, "Cache-Control": _cache_control(rev)}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    body = _JPEG_CACHE.get(key)
+    if body is None:
+        body = _encode(src, box, quality)
+        _JPEG_CACHE[key] = body
+        while len(_JPEG_CACHE) > _JPEG_CACHE_MAX:
+            del _JPEG_CACHE[next(iter(_JPEG_CACHE))]
+    return Response(body, media_type="image/jpeg", headers=headers)
 
 
 def create_app(lib: Library) -> FastAPI:
     app = FastAPI(title="proxdex", docs_url=None, redoc_url=None)
+    # the shell and the JSON payloads compress well; images are already coded
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     cfg_path = lib.root / "proxdex.toml"
     cal_dir = lib.root / "calibration"
 
@@ -56,6 +239,10 @@ def create_app(lib: Library) -> FastAPI:
         return {"ok": proc.returncode == 0, "log": proc.stdout + proc.stderr}
 
     # ---- pages / static ----------------------------------------------------
+    # the vendored component library (Bootstrap, MIT) ships with the package, so
+    # the UI is fully offline — nothing is fetched from a CDN at runtime
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         return _HTML_PATH.read_text(encoding="utf-8")  # re-read → edit & refresh
@@ -65,33 +252,128 @@ def create_app(lib: Library) -> FastAPI:
     def api_config() -> dict[str, Any]:
         text = cfg_path.read_text() if cfg_path.exists() else ""
         doc = tomlkit.parse(text)
+        allowed = _field_options()
+        docs = Config.describe()
         sections: dict[str, Any] = {}
+        options: dict[str, list[str]] = {}
+        described: dict[str, dict[str, str]] = {}
         for name, table in doc.items():
-            if hasattr(table, "items"):
-                sections[name] = {k: _unwrap(v) for k, v in table.items()}
-        return {"root": str(lib.root), "sections": sections}
+            if not hasattr(table, "items"):
+                continue
+            sections[name] = {k: _unwrap(v) for k, v in table.items()}
+            for key in sections[name]:
+                field = Config.field_name(name, key)
+                if field in allowed:
+                    options[f"{name}.{key}"] = allowed[field]
+                # the label, explanation, unit and real default, straight off the
+                # Config field — so the settings screen never invents its own
+                if field in docs:
+                    described[f"{name}.{key}"] = docs[field]
+        return {
+            "root": str(lib.root),
+            "sections": sections,
+            "options": options,
+            "docs": described,
+        }
 
     @app.put("/api/config")
-    def api_config_put(body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+    def api_config_put(body: ConfigBody) -> Any:
         text = cfg_path.read_text() if cfg_path.exists() else ""
         doc = tomlkit.parse(text)
-        for section, kv in body.get("sections", {}).items():
+        # Coerce every value through Config's own annotations *before* writing:
+        # the file then always holds the declared type (an enum's own value, not
+        # a select's "2"), and a bad value is a 400 instead of a broken library.
+        updates: list[tuple[str, str, Any]] = []
+        for section, kv in body.sections.items():
+            for key, value in kv.items():
+                field = Config.field_name(section, key)
+                if field is None:
+                    updates.append((section, key, value))
+                    continue
+                try:
+                    clean = Config.coerce(field, value)
+                except ConfigError as exc:
+                    return _bad(str(exc))
+                updates.append(
+                    (
+                        str(section),
+                        str(key),
+                        clean.value if isinstance(clean, Enum) else clean,
+                    )
+                )
+        for section, key, value in updates:
             if section not in doc:
                 doc[section] = tomlkit.table()
-            for key, value in kv.items():
-                doc[section][key] = value
+            doc[section][key] = value
         cfg_path.write_text(tomlkit.dumps(doc))
         return {"ok": True}
 
     @app.get("/api/meta")
     def api_meta() -> dict[str, Any]:
         calibrated = sorted(p.stem for p in cal_dir.glob("*.json"))
+        cfg = Config.load(lib.root)
         return {
-            "models": list(upscale_mod.MODELS),
-            "profiles": list(media.PROFILES) + calibrated,
-            "faces": ["fronts", "backs", "duplex"],
-            "pages": ["a4", "letter"],
+            # the whole pipeline — order, labels, skippability and every step's
+            # settings schema with this library's defaults. The UI renders its
+            # stepper and its control panels from this and spells nothing itself,
+            # so a new step appears in the UI as soon as it exists in Python.
+            "pipeline": steps.json_pipeline(cfg),
+            "profiles": [p.value for p in media.PROFILES] + calibrated,
+            "faces": [f.value for f in Faces],
+            "pages": [p.value for p in PageSize],
             "stages": [s.label for s in _STAGES],
+            "steps": [s.value for s in Step],
+            "games": [
+                {"id": g.id.value, "name": g.name, "example": g.id_example}
+                for g in games.GAMES.values()
+            ],
+            "default_game": lib.default_game.value,
+            "frames": [_guide_json(g) for g in frames.GUIDES.values()],
+            # the print-kind vocabulary, so the UI names a layout the same way
+            # the CLI does instead of keeping its own copy
+            "layouts": [
+                {"id": lay.value, "label": lay.label, "note": lay.note}
+                for lay in games.Layout
+            ],
+            # every card prints at its own size: the configured trim keeps the
+            # configured grid, an oversized card gets its own pages. Both grids
+            # are served so the sheet dialog can say what the pages will be.
+            "trims": [
+                {
+                    "name": "standard",
+                    "mm": [cfg.card_w_mm, cfg.card_h_mm],
+                    "grid": list(
+                        sheet_mod.grid_for(cfg, (cfg.card_w_mm, cfg.card_h_mm))
+                    ),
+                },
+                {
+                    "name": "oversized",
+                    "mm": [games.OVERSIZED_W_MM, games.OVERSIZED_H_MM],
+                    "grid": list(
+                        sheet_mod.grid_for(
+                            cfg, (games.OVERSIZED_W_MM, games.OVERSIZED_H_MM)
+                        )
+                    ),
+                },
+            ],
+            # the topbar's library path — here so boot needs no second request
+            "root": str(lib.root),
+        }
+
+    @app.get("/api/health")
+    def api_health() -> dict[str, Any]:
+        """Which card APIs are misbehaving right now — recorded by every request
+        proxdex makes, including the ones a CLI subprocess made."""
+        return {
+            "hosts": [
+                {
+                    "host": h.host,
+                    "health": h.health.value,
+                    "detail": h.detail,
+                    "age": round(h.age),
+                }
+                for h in net.health()
+            ]
         }
 
     # ---- cards / images ----------------------------------------------------
@@ -101,74 +383,213 @@ def create_app(lib: Library) -> FastAPI:
         result: list[dict[str, Any]] = []
         for card in lib.cards():
             batch = by_card.get(card.id)
+            names = card.face_names()
             result.append(
                 {
                     "id": card.id,
                     "name": card.name.title(),
                     "set": card.set_id,
-                    "stages": {s.label: card.has(s) for s in _STAGES},
-                    "status": {s.label: card.status(s) for s in _STAGES},
+                    "game": card.game.value,
+                    # one entry per printable side, front first. A single-faced
+                    # card still has exactly one, so nothing has to special-case.
+                    "faces": [
+                        {
+                            "index": f,
+                            "name": names[f] or ("Front" if f == FRONT else "Back"),
+                            "status": {
+                                s.label: card.status(s, f).value for s in _STAGES
+                            },
+                        }
+                        for f in card.faces
+                    ],
+                    "front_face": card.front_face,
+                    # what this printing is, so the contact sheet can badge a
+                    # meld half or an oversized card without asking the API
+                    "layout": card.layout.value,
+                    "oversized": card.oversized,
+                    "frame": card.frame.value if card.frame else None,
+                    # the card's own state for the contact sheet: a card is only
+                    # done at a stage when every one of its sides is
+                    "status": {s.label: card.rollup(s).value for s in _STAGES},
+                    # the guide this card's border step will actually fit to —
+                    # its own recorded frame if it has one, else its set's era
+                    "frame_spec": frames.resolve(
+                        card.set_id, card.game, card.frame
+                    ).id.value,
+                    "frame_measured": frames.resolve(
+                        card.set_id, card.game, card.frame
+                    ).measured,
                     "batch": batch.name if batch else None,
                     "printed": bool(batch and batch.printed),
+                    "rev": _rev(card),
                 }
             )
         return result
 
     @app.get("/api/thumb/{cid}")
-    def api_thumb(cid: str) -> Response:
+    def api_thumb(
+        request: Request, cid: str, face: int = FRONT, rev: str | None = None
+    ) -> Response:
         card = lib.find(cid)
-        src = card.best(*_BEST) if card else None
+        src = card.best(*_BEST, face=face) if card else None
         if src is None:
             return Response(status_code=404)
-        im = Image.open(src).convert("RGB")
-        im.thumbnail((360, 504))
-        buf = io.BytesIO()
-        im.save(buf, "JPEG", quality=82)
-        return Response(buf.getvalue(), media_type="image/jpeg")
+        return _derived(request, src, _THUMB_BOX, 82, rev)
 
     @app.get("/api/view/{cid}/{stage}")
-    def api_view(cid: str, stage: str) -> Response:
-        """A downscaled JPEG for the viewer — small so all stages preload and
-        flipping is instant/flicker-free (the lightbox uses full-res)."""
+    def api_view(
+        request: Request,
+        cid: str,
+        stage: str,
+        face: int = FRONT,
+        rev: str | None = None,
+    ) -> Response:
+        """A downscaled JPEG for the viewer — big enough to fill the proof on a
+        large display, small enough that every stage of the card preloads."""
         card = lib.find(cid)
-        st = _BY_LABEL.get(stage)
-        if card is None or st is None or not card.has(st):
+        st = STAGE_BY_LABEL.get(stage)
+        if card is None or st is None or not card.has(st, face):
             return Response(status_code=404)
-        im = Image.open(card.stage_path(st)).convert("RGB")
-        im.thumbnail((1000, 1400))
-        buf = io.BytesIO()
-        im.save(buf, "JPEG", quality=88)
-        return Response(buf.getvalue(), media_type="image/jpeg")
+        return _derived(request, card.stage_path(st, face), _VIEW_BOX, 88, rev)
 
     @app.get("/api/image/{cid}/{stage}")
-    def api_image(cid: str, stage: str) -> Response:
+    def api_image(
+        cid: str, stage: str, face: int = FRONT, rev: str | None = None
+    ) -> Response:
         card = lib.find(cid)
-        st = _BY_LABEL.get(stage)
-        if card is None or st is None or not card.has(st):
+        st = STAGE_BY_LABEL.get(stage)
+        if card is None or st is None or not card.has(st, face):
             return Response(status_code=404)
-        return FileResponse(card.stage_path(st))
+        return FileResponse(
+            card.stage_path(st, face), headers={"Cache-Control": _cache_control(rev)}
+        )
+
+    @app.get("/api/details/{cid}")
+    def api_details(cid: str) -> dict[str, Any]:
+        """Everything the card's API says about it — facts, links, raw JSON.
+
+        A live provider call, not library state: it is display-only, so a
+        degraded API is reported as an ``error`` the panel shows rather than
+        breaking the card page.
+        """
+        if not _ID_OK.match(cid):
+            return {"error": f"{cid}: not a card id"}
+        card = lib.find(cid)
+        try:
+            detail = sources.details(
+                cid, Config.load(lib.root), card.game if card else None
+            )
+        except (requests.RequestException, ProxdexError) as exc:
+            return {"error": str(exc)}
+        return {
+            "id": detail.meta.id,
+            "name": detail.meta.name,
+            "game": detail.meta.game.value,
+            "set": detail.meta.set_name,
+            "source": detail.source,
+            "layout": detail.meta.layout.value,
+            "layout_label": detail.meta.layout.label,
+            "layout_note": detail.meta.layout.note,
+            "oversized": detail.meta.oversized,
+            # meld halves, the melded card, the tokens it makes — each a card in
+            # its own right, so each can be added from here
+            "related": [
+                {
+                    "relation": r.relation.value,
+                    "label": r.relation.label,
+                    "name": r.name,
+                    "id": r.id,
+                    "have": bool(r.id and lib.find(r.id)),
+                }
+                for r in detail.related
+            ],
+            "groups": [
+                {
+                    "title": g.title,
+                    "facts": [
+                        {"label": f.label, "value": f.value, "block": f.block}
+                        for f in g.facts
+                    ],
+                }
+                for g in detail.groups
+            ],
+            "links": [{"label": ln.label, "url": ln.url} for ln in detail.links],
+        }
 
     @app.get("/api/frame/{cid}")
-    def api_frame(cid: str, stage: str | None = None) -> dict[str, Any]:
+    def api_frame(
+        cid: str, stage: str | None = None, face: int = FRONT
+    ) -> dict[str, Any]:
         """Image pixel size + this card's era frame guide, for the align tool."""
         card = lib.find(cid)
         if card is None:
             return {"error": "no image"}
-        st = _BY_LABEL.get(stage) if stage else None
-        src = card.stage_path(st) if st and card.has(st) else card.best(*_BEST)
+        st = STAGE_BY_LABEL.get(stage) if stage else None
+        src = (
+            card.stage_path(st, face)
+            if st and card.has(st, face)
+            else card.best(*_BEST, face=face)
+        )
         if src is None or not src.exists():
             return {"error": "no image"}
         cfg = Config.load(lib.root)
         w, h = borders.size(src)
-        guide = frames.for_set(card.set_id)
+        guide = frames.resolve(card.set_id, card.game, card.frame)
         return {
             "w": w,
             "h": h,
             "card_aspect": round(cfg.card_w_mm / cfg.card_h_mm, 3),
             "card_w_mm": cfg.card_w_mm,
             "card_h_mm": cfg.card_h_mm,
-            # frame-size guide for this era: inner border inset [top,right,bottom,left]
-            "guide": {"id": guide.id, "name": guide.name, "inset": list(guide.inset)},
+            "game": card.game.value,
+            "game_name": games.get(card.game).name,
+            # frame-size guide: inner border inset [top,right,bottom,left], plus
+            # how much to trust it — the UI warns on an unmeasured set.
+            "guide": _guide_json(guide),
+            "guides": [_guide_json(g) for g in frames.choices(card.game)],
+        }
+
+    @app.get("/api/detect/{cid}")
+    def api_detect(
+        cid: str, stage: str | None = None, face: int = FRONT
+    ) -> dict[str, Any]:
+        """Measure where this side's printed border ends, for the align marks.
+
+        Read-only and cheap, so the border panel can offer "measure it" and the
+        marks land somewhere real before anyone drags them. The per-edge support
+        travels with the numbers: the UI flags the edges the scan lines disagreed
+        about rather than presenting all four as equally certain.
+        """
+        card = lib.find(cid)
+        if card is None:
+            return {"error": f"{cid}: not in this library"}
+        st = STAGE_BY_LABEL.get(stage) if stage else None
+        src = (
+            card.stage_path(st, face)
+            if st and card.has(st, face)
+            else card.best(*_BEST, face=face)
+        )
+        if src is None or not src.exists():
+            return {"error": "no image to measure"}
+        guide = frames.resolve(card.set_id, card.game, card.frame)
+        if not any(guide.inset):
+            return {
+                "inset": [0.0, 0.0, 0.0, 0.0],
+                "support": [1.0, 1.0, 1.0, 1.0],
+                "weak": [],
+                "reliable": True,
+                "frameless": True,
+                "note": f"{guide.name} — nothing to measure, so the fit is pure "
+                "aspect correction.",
+            }
+        found = borders.detect_inset(src)
+        return {
+            "inset": list(found.inset),
+            "support": list(found.support),
+            "weak": list(found.weak),
+            "reliable": found.reliable,
+            "frameless": found.frameless,
+            "note": found.note,
         }
 
     @app.delete("/api/card/{cid}")
@@ -184,15 +605,23 @@ def create_app(lib: Library) -> FastAPI:
     @app.get("/api/search")
     def api_search(
         q: str,
+        game: str | None = None,
         set_filter: Annotated[str | None, Query(alias="set")] = None,
         rarity: str | None = None,
         year: str | None = None,
         limit: int = 60,
     ) -> Any:
         cfg = Config.load(lib.root)
+        want = games.coerce(game, cfg.library_game)
         try:
             found = sources.search(
-                q, cfg, set_filter=set_filter, rarity=rarity, year=year, limit=limit
+                q,
+                cfg,
+                want,
+                set_filter=set_filter,
+                rarity=rarity,
+                year=year,
+                limit=limit,
             )
         except (requests.RequestException, ProxdexError) as exc:
             return {"error": f"search failed (try again): {exc}"}
@@ -200,96 +629,103 @@ def create_app(lib: Library) -> FastAPI:
             {
                 "id": r.id,
                 "name": r.name,
+                "game": r.game.value,
                 "set": r.set_name,
                 "year": r.year,
-                "number": f"{r.number}/{r.printed_total}",
+                "number": f"{r.number}/{r.printed_total}"
+                if r.printed_total
+                else r.number,
                 "rarity": r.rarity,
                 "artist": r.artist,
-                "image": cfg.scrydex_url.format(id=r.id),
+                "image": r.image_url,
                 "have": lib.find(r.id) is not None,
             }
             for r in found
         ]
 
     @app.post("/api/fetch")
-    def api_fetch(body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
-        ids = _safe_ids(body.get("ids") or [])
-        if not ids:
-            return {"ok": False, "log": "no valid ids"}
-        return run_cli(["fetch", *ids])
+    def api_fetch(body: FetchBody) -> dict[str, Any]:
+        args = ["fetch", *body.ids, *_side(body.face)]
+        if body.game is not None:
+            args += ["--game", body.game.value]
+        if body.related:
+            args.append("--related")
+        return run_cli(args)
 
     @app.post("/api/import")
     def api_import(
         file: Annotated[UploadFile, File()],
-        cid: Annotated[str, Form(alias="id")],
+        cid: Annotated[str, Form(alias="id", pattern=_ID_OK.pattern)],
         stage: Annotated[str, Form()] = "original",
+        game: Annotated[GameId | None, Form()] = None,
+        face: Annotated[int | None, Form(ge=1, le=_MAX_FACE)] = None,
     ) -> dict[str, Any]:
+        if stage not in STAGE_BY_LABEL:
+            return {"ok": False, "log": f"bad stage {stage!r}"}
         tmp = _spool(file)
         try:
             args = ["import", str(tmp), "--id", cid, "--stage", stage, "--move"]
-            return run_cli(args)
+            if game is not None:
+                args += ["--game", game.value]
+            return run_cli([*args, *_side(face)])
         finally:
             tmp.unlink(missing_ok=True)
 
     # ---- prepare steps -----------------------------------------------------
     @app.post("/api/step")
-    def api_step(body: Annotated[dict[str, Any], Body()]) -> Any:
-        cmd = str(body.get("cmd", ""))
-        ids = _safe_ids(body.get("ids") or [])
-        opts = body.get("opts") or {}
+    def api_step(body: StepBody) -> Any:
+        side = _side(body.face)
         # pipeline-state verbs: `<cmd> <step> <ids...>`
-        if cmd in {"skip", "unskip", "reset"}:
-            step = str(opts.get("step", ""))
-            if step not in {"border", "upscale", "grade"}:
-                return JSONResponse(
-                    {"ok": False, "log": f"bad step {step}"}, status_code=400
-                )
-            return run_cli([cmd, step, *ids])
-        if cmd not in {"border", "upscale", "grade"}:
-            return JSONResponse(
-                {"ok": False, "log": f"bad step {cmd}"}, status_code=400
-            )
-        args = [cmd, *ids]
-        if cmd == "border":
-            inner = opts.get("inner")
-            if inner:  # marked inner-border edges (fractions) → era-based solve
-                for edge in ("top", "right", "bottom", "left"):
-                    args += [f"--inner-{edge}", str(float(inner[edge]))]
-                if opts.get("stretch"):
-                    args.append("--stretch")
-            else:
-                for edge in ("top", "bottom", "left", "right"):
-                    val = opts.get(edge)
-                    if val:
-                        args += [f"--{edge}", str(float(val))]
-        if cmd == "upscale":
-            if opts.get("model"):
-                args += ["--model", str(opts["model"])]
-            if opts.get("scale"):
-                args += ["--scale", str(int(opts["scale"]))]
-            if "double" in opts:
-                args.append("--double" if opts["double"] else "--no-double")
-        if cmd == "grade" and "normalize" in opts:
-            args.append("--normalize" if opts["normalize"] else "--no-normalize")
-        if body.get("force"):
+        if body.cmd in {"skip", "unskip", "reset"}:
+            if body.step is None:
+                return _bad(f"{body.cmd} needs a step")
+            return run_cli([body.cmd, body.step.value, *body.ids, *side])
+        spec = steps.get(body.cmd)
+        if spec is None or spec.step is None:
+            return _bad(f"bad step {body.cmd!r}")
+        # every setting is checked against the step's own schema here, at the
+        # boundary — an undeclared or malformed one is a 400, never an argv string
+        # that fails later inside an external tool, per card
+        for key, value in body.settings.items():
+            option = spec.option(key)
+            if option is None:
+                return _bad(f"{spec.key} has no setting {key!r}")
+            if option.coerce(value) is None:
+                return _bad(f"bad {key} {value!r}")
+        args = [spec.step.value, *body.ids, *side, *spec.argv(body.settings)]
+        if spec.step is Step.BORDER:
+            if body.auto:  # measure the inner border off the image
+                args.append("--auto")
+            elif body.inner is not None:  # marked border edges → spec-based fit
+                for edge, val in body.inner:
+                    args += [f"--inner-{edge}", f"{val:g}"]
+            elif body.grow is not None:  # plain per-edge growth, no fit
+                for edge, val in body.grow:
+                    args += [f"--{edge}", f"{val:g}"]
+        if body.force:
             args.append("--force")
         return run_cli(args)
 
+    @app.post("/api/flip")
+    def api_flip(body: FlipBody) -> Any:
+        """Choose which side of a two-sided card prints on the front."""
+        return run_cli(["flip", *body.ids, *_side(body.face)])
+
     # ---- produce -----------------------------------------------------------
     @app.post("/api/sheet")
-    def api_sheet(body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
-        args = ["sheet", str(body.get("name") or "deck")]
-        args += ["--faces", str(body.get("faces") or "fronts")]
-        if body.get("profile"):
-            args += ["--profile", str(body["profile"])]
-        if body.get("page"):
-            args += ["--page", str(body["page"])]
-        if body.get("dpi"):
-            args += ["--dpi", str(int(body["dpi"]))]
+    def api_sheet(body: SheetBody) -> dict[str, Any]:
+        args = ["sheet", body.name, *body.ids]
+        args += ["--faces", (body.faces or Faces.FRONTS).value]
+        if body.profile:
+            args += ["--profile", body.profile]
+        if body.page is not None:
+            args += ["--page", body.page.value]
+        if body.dpi is not None:
+            args += ["--dpi", str(body.dpi)]
         return run_cli(args)
 
     @app.post("/api/printed/{name}")
-    def api_printed(name: str) -> dict[str, Any]:
+    def api_printed(name: Annotated[str, PathParam(max_length=64)]) -> dict[str, Any]:
         return run_cli(["printed", name])
 
     @app.post("/api/index")
@@ -298,18 +734,28 @@ def create_app(lib: Library) -> FastAPI:
         return {"ok": True, "log": "INDEX.md regenerated"}
 
     @app.post("/api/back")
-    def api_back(body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
-        if body.get("tcg"):
-            return run_cli(["back", "--tcg", str(body["tcg"])])
-        if body.get("url"):
-            return run_cli(["back", "--url", str(body["url"])])
-        return {"ok": False, "log": "give a url or tcg"}
+    def api_back(body: BackBody) -> dict[str, Any]:
+        game = body.game or lib.default_game
+        args = ["back", "--game", game.value]
+        if body.url:
+            return run_cli([*args, "--url", body.url])
+        if games.get(game).back_url is None:
+            return {
+                "ok": False,
+                "log": f"no downloadable back for {games.get(game).name} — "
+                "upload your own scan",
+            }
+        return run_cli(args)
 
     @app.post("/api/back/upload")
-    def api_back_upload(file: Annotated[UploadFile, File()]) -> dict[str, Any]:
+    def api_back_upload(
+        file: Annotated[UploadFile, File()],
+        game: Annotated[str | None, Form()] = None,
+    ) -> dict[str, Any]:
         tmp = _spool(file)
+        want = games.coerce(game, lib.default_game)
         try:
-            return run_cli(["back", "--file", str(tmp)])
+            return run_cli(["back", "--game", want.value, "--file", str(tmp)])
         finally:
             tmp.unlink(missing_ok=True)
 
@@ -374,6 +820,20 @@ def create_app(lib: Library) -> FastAPI:
         finally:
             tmp.unlink(missing_ok=True)
 
+    # ---- SPA fallback (registered last, so it shadows nothing) --------------
+    @app.get("/{route}", response_class=HTMLResponse)
+    @app.get("/{route}/{rest:path}", response_class=HTMLResponse)
+    def spa(route: str, rest: str = "") -> Response:  # noqa: ARG001 (path only)
+        """Serve the shell for the client's own routes (`/card/ex3-90/upscale`).
+
+        The UI navigates with the History API, so those paths have to survive a
+        reload, a bookmark and a pasted link. Only the known route roots are
+        served — anything else still 404s instead of rendering the app.
+        """
+        if route not in _SPA_ROUTES:
+            return Response(status_code=404)
+        return HTMLResponse(_HTML_PATH.read_text(encoding="utf-8"))
+
     return app
 
 
@@ -389,6 +849,42 @@ def _spool(file: UploadFile) -> Path:
     tmp = Path(tempfile.mkstemp(suffix=suffix)[1])
     tmp.write_bytes(file.file.read())
     return tmp
+
+
+def _field_options() -> dict[str, list[str]]:
+    """Config fields whose values are a closed set → the values, for the UI.
+
+    Reads the dataclass' own annotations, so a new enum-typed setting turns
+    into a dropdown with no further wiring.
+    """
+    out: dict[str, list[str]] = {}
+    for name, hint in get_type_hints(Config).items():
+        if isinstance(hint, type) and issubclass(hint, Enum):
+            out[name] = [str(m.value) for m in hint]
+        elif get_origin(hint) is Literal:
+            out[name] = [str(a) for a in get_args(hint)]
+    return out
+
+
+def _side(face: int | None) -> list[str]:
+    """``--face N``, or nothing at all when the request means "every side"."""
+    return ["--face", str(face)] if face is not None else []
+
+
+def _bad(log: str) -> JSONResponse:
+    return JSONResponse({"ok": False, "log": log}, status_code=400)
+
+
+def _guide_json(guide: frames.FrameGuide) -> dict[str, Any]:
+    return {
+        "id": guide.id.value,
+        "name": guide.name,
+        "game": guide.game.value if guide.game else None,
+        "inset": list(guide.inset),
+        "confidence": guide.confidence.value,
+        "measured": guide.measured,
+        "note": guide.note,
+    }
 
 
 def _unwrap(value: Any) -> Any:

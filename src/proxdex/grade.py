@@ -25,8 +25,8 @@ import numpy as np
 from numpy.typing import NDArray
 from PIL import Image, ImageEnhance
 
-from .borders import frame_color
-from .config import Config
+from proxdex.borders import frame_color
+from proxdex.config import Config
 
 RGB = NDArray[np.float32]
 _LUMA = np.array([0.299, 0.587, 0.114], dtype=np.float32)

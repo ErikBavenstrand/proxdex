@@ -6,7 +6,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .library import Library, Stage
+from proxdex.config import Faces
+from proxdex.library import Library, Stage
 
 
 @dataclass(slots=True)
@@ -17,6 +18,14 @@ class Batch:
     printed_date: str = ""
     cards: list[str] = field(default_factory=list)
     notes: str = ""
+    date: str = ""
+    #: what was imposed. Coerced at read time, so a hand-edited manifest with a
+    #: typo reads as fronts rather than as a bare string nothing can compare to.
+    faces: Faces = Faces.FRONTS
+
+    @property
+    def pdfs(self) -> list[Path]:
+        return sorted(self.dir.glob("*.pdf"))
 
 
 def batches(lib: Library) -> list[Batch]:
@@ -31,9 +40,18 @@ def batches(lib: Library) -> list[Batch]:
                 printed_date=str(data.get("printed_date", "")),
                 cards=list(data.get("cards", [])),
                 notes=str(data.get("notes", "")),
+                date=str(data.get("date", "")),
+                faces=_faces(data.get("faces")),
             )
         )
     return out
+
+
+def _faces(value: object) -> Faces:
+    try:
+        return Faces(str(value).strip().lower())
+    except ValueError:
+        return Faces.FRONTS
 
 
 def card_batch_index(lib: Library) -> dict[str, Batch]:

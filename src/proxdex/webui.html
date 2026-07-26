@@ -1,649 +1,2774 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>proxdex</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230c0c10'/><path d='M7 12V7h5M20 7h5v5M25 20v5h-5M12 25H7v-5' stroke='%23f2418c' stroke-width='2.4' fill='none' stroke-linecap='square'/></svg>" />
+<link rel="stylesheet" href="/static/bootstrap.min.css" />
 <style>
-  :root {
-    --bg:#0e1014; --panel:#171a21; --panel2:#1f2530; --line:#2b303b; --fg:#e7e9ef;
-    --dim:#95a0b2; --accent:#6ea8fe; --ok:#57d38c; --warn:#f0b24b; --bad:#f2678a;
-  }
-  *{box-sizing:border-box} html,body{margin:0;height:100%}
-  body{background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-  a{color:var(--accent);text-decoration:none}
-  button,input,select{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
-    border-radius:8px;padding:7px 10px;font-size:13px;font-family:inherit}
-  button{cursor:pointer} button:hover{border-color:var(--accent)} button:disabled{opacity:.45;cursor:default}
-  button.primary{background:var(--accent);color:#0a0c10;border-color:var(--accent);font-weight:600}
-  button.ghost{background:transparent}
-  button.bad{border-color:var(--bad);color:var(--bad)}
-  label{font-size:12px;color:var(--dim)}
-  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-  header{position:sticky;top:0;z-index:10;background:var(--panel);border-bottom:1px solid var(--line);
-    padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-  header h1{font-size:16px;margin:0;letter-spacing:.5px}
-  .lib{color:var(--dim);font-size:11px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  nav button{background:transparent;border-color:transparent;color:var(--dim)}
-  nav button.active{color:var(--fg);border-color:var(--line);background:var(--panel2)}
-  .spacer{flex:1}
-  main{padding:16px;max-width:1500px;margin:0 auto}
-  h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin:24px 0 10px}
-  .grid{display:grid;gap:13px;grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;overflow:hidden;
-    cursor:pointer;transition:transform .08s,border-color .08s}
-  .card:hover{transform:translateY(-2px);border-color:var(--accent)}
-  .thumb{width:100%;aspect-ratio:63/88;object-fit:cover;background:var(--panel2);display:block}
-  .meta{padding:7px 9px}
-  .meta .id{font-size:10px;color:var(--dim)} .meta .nm{font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .badges{display:flex;gap:3px;margin-top:5px;align-items:center}
-  .b{width:17px;height:17px;border-radius:5px;font-size:10px;font-weight:700;display:grid;place-items:center;background:var(--line);color:var(--dim)}
-  .b.on{background:var(--ok);color:#0a0c10}
-  .pin{margin-left:auto;font-size:11px} .pin.p{color:var(--ok)} .pin.q{color:var(--warn)}
-  .b.sk{color:var(--warn)}
-  /* card detail: pipeline console (rail · viewer · focused-step panel) */
-  .console{display:grid;grid-template-columns:230px 1fr 330px;gap:18px;align-items:start}
-  @media(max-width:980px){.console{grid-template-columns:1fr}}
-  .rail{position:sticky;top:72px;display:flex;flex-direction:column;gap:14px}
-  .rail .who h3{margin:0;font-size:15px} .rail .who .sub{color:var(--dim);font-size:12px;margin-top:2px}
-  .steps{display:flex;flex-direction:column;gap:6px}
-  .step{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);
-    border-radius:10px;background:var(--panel);cursor:pointer;text-align:left;width:100%;font:inherit;color:var(--fg)}
-  .step:hover{border-color:var(--accent)}
-  .step.current{border-color:var(--accent);background:var(--panel2)}
-  .step .ico{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;font-size:12px;
-    font-weight:700;background:var(--line);color:var(--dim);flex:0 0 auto}
-  .step .lbl{flex:1;font-weight:600;font-size:13px} .step .st{font-size:11px;color:var(--dim)}
-  .step.done .ico{background:var(--ok);color:#0a0c10}
-  .step.skipped .ico{background:transparent;color:var(--warn);border:1px solid var(--warn)}
-  .step.skipped .lbl{color:var(--dim);text-decoration:line-through}
-  .step.waiting{opacity:.5} .step.current .lbl{color:var(--fg)}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;position:sticky;top:72px}
-  .panel h3{margin:0 0 3px;font-size:15px;display:flex;align-items:center;gap:8px}
-  .panel .desc{color:var(--dim);font-size:12px;margin-bottom:4px}
-  .panel .io{font-size:11px;color:var(--dim);margin:8px 0 2px} .panel .io b{color:var(--fg)}
-  .panel .actions{display:flex;flex-direction:column;gap:8px;margin-top:14px}
-  .panel .row2{display:flex;gap:8px}.panel .row2 button{flex:1}
-  .panel .statusline{margin-top:6px;font-size:12px;color:var(--dim);border-top:1px solid var(--line);padding-top:10px}
-  .pill{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;border-radius:999px;padding:2px 9px}
-  .pill.done{background:rgba(87,211,140,.16);color:var(--ok)}
-  .pill.skipped{background:rgba(240,178,75,.16);color:var(--warn)}
-  .pill.ready{background:rgba(110,168,254,.16);color:var(--accent)}
-  .pill.waiting{background:var(--panel2);color:var(--dim)}
-  .stageimg.dim{opacity:.4;filter:saturate(.55)}
-  .viewer .vlabel{position:absolute;left:0;right:0;bottom:0;z-index:6;text-align:center;padding:10px 8px;
-    background:linear-gradient(transparent,rgba(0,0,0,.72));font-size:12px;color:var(--fg)}
-  .viewer{position:relative;height:calc(100vh - 150px);aspect-ratio:63/88;margin:0 auto;
-    background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-  .stageimg{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
-    opacity:0;transition:opacity .1s;cursor:zoom-in}
-  .stageimg.show{opacity:1}
-  .viewer .ph{position:absolute;inset:0;display:grid;place-items:center;color:var(--dim);
-    font-size:13px;text-align:center;padding:20px}
-  /* frame-align overlay: drag the lines onto the card's inner border edge */
-  .alignlayer{position:absolute;inset:0;z-index:5}
-  .al-work{position:absolute;inset:0;width:100%;height:100%;object-fit:fill}
-  .al-line{position:absolute;z-index:7;touch-action:none}
-  .al-line::before{content:"";position:absolute;background:#00e9ff;box-shadow:0 0 0 .5px rgba(0,0,0,.55)}
-  .al-line.top,.al-line.bottom{left:0;right:0;height:22px;margin-top:-11px;cursor:ns-resize}
-  .al-line.left,.al-line.right{top:0;bottom:0;width:22px;margin-left:-11px;cursor:ew-resize}
-  .al-line.top::before,.al-line.bottom::before{left:0;right:0;top:10px;height:1px}
-  .al-line.left::before,.al-line.right::before{top:0;bottom:0;left:10px;width:1px}
-  .al-line:hover::before,.al-line.drag::before{height:2px;background:#fff;box-shadow:0 0 0 .5px rgba(0,0,0,.6),0 0 5px rgba(0,233,255,.7)}
-  .al-line.left:hover::before,.al-line.right:hover::before,.al-line.left.drag::before,.al-line.right.drag::before{height:auto;width:2px}
-  .al-line .knob{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);opacity:.8;
-    display:grid;place-items:center;font-size:8px;font-weight:700;color:#061014;background:#00e9ff;
-    border-radius:4px;box-shadow:0 1px 3px rgba(0,0,0,.4)}
-  .al-line.top .knob,.al-line.bottom .knob{width:18px;height:13px}
-  .al-line.left .knob,.al-line.right .knob{width:13px;height:18px}
-  .al-line:hover .knob,.al-line.drag .knob{opacity:1}
-  .edgef{display:grid;grid-template-columns:52px 1fr;gap:8px;align-items:center;margin:3px 0;font-size:12px}
-  .edgef b{font-variant-numeric:tabular-nums;text-align:right}
-  .edgef .warnpx{color:var(--warn)}
-  .side{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;height:fit-content}
-  .side h3{margin:0 0 2px} .side .sub{color:var(--dim);font-size:12px;margin-bottom:14px}
-  .act{border-top:1px solid var(--line);padding:12px 0;display:flex;flex-direction:column;gap:8px}
-  .act:first-of-type{border-top:none}
-  .act .t{font-weight:600;font-size:13px}
-  .nav-cards{display:flex;gap:8px;align-items:center;margin-bottom:14px}
-  fieldset{border:1px solid var(--line);border-radius:10px;margin:0 0 14px;padding:12px 14px}
-  legend{color:var(--accent);font-size:12px;font-weight:600;padding:0 6px}
-  .field{display:grid;grid-template-columns:180px 1fr;gap:10px;align-items:center;margin:6px 0}
-  .field input,.field select{width:100%}
-  .res{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
-  .rcard{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;position:relative}
-  .rcard.have{outline:2px solid var(--ok)}
-  .rcard img{width:100%;aspect-ratio:63/88;object-fit:cover;background:var(--panel2)}
-  .rcard .rm{padding:7px 9px;font-size:11px} .rcard .rm b{font-size:12px}
-  .rcard input[type=checkbox]{position:absolute;top:6px;left:6px;width:18px;height:18px}
-  .batch{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px;display:flex;gap:10px;align-items:center;margin-bottom:6px}
-  .tag{font-size:11px;color:var(--dim)}
-  #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--panel2);
-    border:1px solid var(--line);border-radius:10px;padding:10px 16px;max-width:80vw;white-space:pre-wrap;
-    font-size:12px;display:none;z-index:40;box-shadow:0 10px 34px rgba(0,0,0,.5)}
-  #busy{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;z-index:35;place-items:center;color:var(--fg)}
-  #busy.on{display:grid}
-  #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;z-index:50;place-items:center;padding:30px}
-  #lightbox img{max-width:100%;max-height:100%;border-radius:8px}
-  dialog{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:14px;padding:20px;max-width:440px}
-  dialog::backdrop{background:rgba(0,0,0,.6)}
+/* ============================================================================
+   proxdex — a prepress console.
+
+   The chrome is deliberately colourless: you are judging card colour on these
+   screens, so nothing around the image competes with it. Two accents, and both
+   are borrowed from the marks a press actually prints: registration MAGENTA
+   carries every interaction and every crop mark, registration CYAN carries the
+   one thing that is a measurement rather than a control — the target border the
+   fit is aiming at. Numbers are always monospaced: this is a measuring tool.
+
+   Bootstrap 5.3 supplies the components (nav, buttons, forms, modal, toast,
+   accordion, grid); everything below is the theme plus the five pieces
+   Bootstrap has no answer for — the contact sheet, the filmstrip stepper, the
+   proof viewer with its compare tool, the frame-align overlay, and the
+   loupe.
+   ========================================================================= */
+:root {
+  /* --- ground up. Four surfaces, each one step lighter than the last, so
+     elevation is read from value alone and never needs a shadow. */
+  --ink:      #0c0c10;   /* page ground */
+  --stock:    #14141a;   /* panel surface — "stock" as in paper stock */
+  --stock-2:  #1b1b23;   /* raised control surface */
+  --stock-3:  #23232d;   /* pressed / hovered control */
+  --rule:     #23232e;   /* hairline rules */
+  --rule-2:   #313140;   /* a rule that has to be seen */
+
+  --type:     #eeece8;   /* paper white */
+  --dim:      #8e8e9e;   /* secondary type */
+  --faint:    #5f5f6e;   /* tertiary — units, raw keys */
+
+  --mark:     #f2418c;   /* registration magenta — marks + interaction */
+  --mark-dim: rgba(242,65,140,.16);
+  --reg:      #22c9d6;   /* registration cyan — the measured target */
+  --reg-dim:  rgba(34,201,214,.14);
+  --proof:    #5bd68a;   /* a step that is done */
+  --hold:     #e8b44a;   /* a step deliberately skipped */
+  --bad:      #ff6b6b;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* one spacing scale, 4px-based, used for every gap in the app */
+  --s1: .25rem; --s2: .5rem; --s3: .75rem; --s4: 1rem;
+  --s5: 1.5rem; --s6: 2rem; --s7: 3rem;
+
+  /* Bootstrap, re-skinned */
+  --bs-body-bg: var(--ink);
+  --bs-body-color: var(--type);
+  --bs-body-font-family: var(--font-ui);
+  --bs-body-font-size: .875rem;
+  --bs-body-line-height: 1.5;
+  --bs-emphasis-color: var(--type);
+  --bs-secondary-color: var(--dim);
+  --bs-border-color: var(--rule);
+  --bs-border-radius: .625rem;
+  --bs-border-radius-sm: .375rem;
+  --bs-border-radius-lg: .875rem;
+  --bs-primary: var(--mark);
+  --bs-link-color: var(--mark);
+  --bs-link-hover-color: #ff6ba6;
+  --bs-code-color: var(--mark);
+  --bs-font-monospace: var(--font-mono);
+  --bs-focus-ring-color: rgba(242,65,140,.3);
+
+  /* A real card's die-cut corner: 3 mm on a 63×88 mm card. Given as a
+     percentage PAIR (3/63 horizontal, 3/88 vertical) so the two axes come out
+     to the same absolute radius — a single percentage would make the corner an
+     ellipse — and so it scales with the tile instead of the fixed px it was.
+     3 mm is the spec both games are printed to (1/8" die) and matches what the
+     providers themselves render: Scryfall's PNG corner has the area of a
+     2.7 mm round, scrydex's modern Pokémon scans 3.1 mm. */
+  --card-radius: 4.76% / 3.41%;
+}
+body { background: var(--ink); -webkit-font-smoothing: antialiased; }
+/* Bootstrap's display utilities are !important, so [hidden] loses without this */
+[hidden] { display: none !important; }
+::selection { background: var(--mark-dim); }
+
+/* --- type roles ----------------------------------------------------------
+   Sans reads, mono measures, micro-caps label. Every id, dimension, percent
+   and dpi in this app is mono — that is the whole typographic idea. */
+.mono, .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.eyebrow {
+  font-size: .625rem; font-weight: 700; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--dim);
+}
+.hint { font-size: .75rem; color: var(--dim); line-height: 1.45; }
+.faint { color: var(--faint); }
+h1, h2, h3, h4, h5, h6 { letter-spacing: -.02em; }
+h5 { font-size: 1.0625rem; }
+h6 { font-size: .9375rem; }
+
+/* --- crop marks ----------------------------------------------------------
+   Four L-shaped hairline brackets, drawn with one pseudo-element — the same
+   marks `proxdex sheet` prints at each card corner. Contact-sheet tiles only:
+   the proof shows the card and nothing else, so nothing competes with it. */
+.marks { position: relative; }
+.marks::after {
+  content: ""; position: absolute; inset: -7px; pointer-events: none;
+  opacity: 0; transition: opacity .12s ease;
+  --l: 11px; --w: 1px; --c: var(--mark);
+  background:
+    linear-gradient(var(--c),var(--c))    0    0 / var(--l) var(--w) no-repeat,
+    linear-gradient(var(--c),var(--c))    0    0 / var(--w) var(--l) no-repeat,
+    linear-gradient(var(--c),var(--c)) 100%    0 / var(--l) var(--w) no-repeat,
+    linear-gradient(var(--c),var(--c)) 100%    0 / var(--w) var(--l) no-repeat,
+    linear-gradient(var(--c),var(--c))    0 100% / var(--l) var(--w) no-repeat,
+    linear-gradient(var(--c),var(--c))    0 100% / var(--w) var(--l) no-repeat,
+    linear-gradient(var(--c),var(--c)) 100% 100% / var(--l) var(--w) no-repeat,
+    linear-gradient(var(--c),var(--c)) 100% 100% / var(--w) var(--l) no-repeat;
+}
+.marks:hover::after, .marks.marked::after { opacity: 1; }
+.marks.quiet::after { opacity: .34; }
+
+/* --- surfaces ------------------------------------------------------------ */
+.panel {
+  background: var(--stock); border: 1px solid var(--rule);
+  border-radius: var(--bs-border-radius);
+}
+.panel-2 { background: var(--stock-2); border: 1px solid var(--rule); border-radius: var(--bs-border-radius-sm); }
+.rule { border: 0; border-top: 1px solid var(--rule); opacity: 1; margin: var(--s4) 0; }
+
+.form-control, .form-select {
+  background-color: var(--stock-2); border-color: var(--rule); color: var(--type);
+}
+.form-control::placeholder { color: var(--faint); }
+.form-control:focus, .form-select:focus, .btn:focus-visible, a:focus-visible,
+.form-check-input:focus, [tabindex]:focus-visible {
+  border-color: var(--mark); box-shadow: 0 0 0 .18rem rgba(242,65,140,.28); outline: 0;
+}
+.form-check-input:checked { background-color: var(--mark); border-color: var(--mark); }
+.btn { --bs-btn-font-size: .8125rem; font-weight: 500; }
+.btn-primary {
+  --bs-btn-bg: var(--mark); --bs-btn-border-color: var(--mark); --bs-btn-color: #16050d;
+  --bs-btn-hover-bg: #ff5c9c; --bs-btn-hover-border-color: #ff5c9c; --bs-btn-hover-color: #16050d;
+  --bs-btn-active-bg: #e33580; --bs-btn-active-border-color: #e33580;
+  --bs-btn-disabled-bg: var(--stock-3); --bs-btn-disabled-border-color: var(--rule);
+  --bs-btn-disabled-color: var(--faint); font-weight: 600;
+}
+.btn-outline-secondary {
+  --bs-btn-color: var(--type); --bs-btn-border-color: var(--rule);
+  --bs-btn-bg: transparent;
+  --bs-btn-hover-bg: var(--stock-2); --bs-btn-hover-border-color: var(--rule-2);
+  --bs-btn-hover-color: var(--type); --bs-btn-active-bg: var(--stock-3);
+  --bs-btn-active-border-color: var(--mark); --bs-btn-active-color: var(--type);
+  --bs-btn-disabled-color: var(--faint); --bs-btn-disabled-border-color: var(--rule);
+}
+.btn-outline-danger {
+  --bs-btn-color: var(--bad); --bs-btn-border-color: rgba(255,107,107,.32);
+  --bs-btn-hover-bg: rgba(255,107,107,.12); --bs-btn-hover-border-color: var(--bad);
+  --bs-btn-hover-color: var(--bad);
+}
+.btn-ghost {
+  background: none; border: 1px solid transparent; color: var(--dim);
+  border-radius: var(--bs-border-radius-sm); padding: .25rem .5rem; font-size: .8125rem;
+  white-space: nowrap;
+}
+.btn-ghost:hover { color: var(--type); background: var(--stock-2); }
+
+/* --- header -------------------------------------------------------------- */
+/* Opaque, not translucent: a sticky bar with `backdrop-filter` re-blurs the
+   whole page behind it on every scroll frame, which is what made scrolling
+   stutter. The bar is its own paint layer instead. */
+.topbar {
+  position: sticky; top: 0; z-index: 1030; background: var(--ink);
+  border-bottom: 1px solid var(--rule); contain: paint;
+}
+.wordmark { font-weight: 700; font-size: 1rem; letter-spacing: -.04em; }
+.wordmark::first-letter { color: var(--mark); }
+/* Every control is hit-testable over its whole plate, never just its glyphs:
+   the padding here is the click target, and the active rule sits under it. */
+.navlink {
+  background: none; border: 0; color: var(--dim); font-size: .8125rem; font-weight: 600;
+  padding: .45rem .625rem; border-radius: .375rem .375rem 0 0;
+  border-bottom: 2px solid transparent;
+}
+.navlink:hover { color: var(--type); background: var(--stock); }
+.navlink.active { color: var(--type); border-bottom-color: var(--mark); }
+.libpath { font-size: .6875rem; color: var(--faint); }
+
+/* --- chips & pills ------------------------------------------------------- */
+.chip {
+  display: inline-flex; align-items: center; gap: .2rem;
+  font-family: var(--font-mono); font-size: .625rem; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--dim); white-space: nowrap;
+  border: 1px solid var(--rule); border-radius: .25rem; padding: 0 .3rem; line-height: 1.5;
+}
+.chip.warn  { color: var(--hold);  border-color: rgba(232,180,74,.4); }
+.chip.good  { color: var(--proof); border-color: rgba(91,214,138,.4); }
+.chip.flip  { color: var(--mark);  border-color: rgba(242,65,140,.45); }
+.pill {
+  display: inline-flex; align-items: center; gap: .25rem; border-radius: 999px;
+  padding: .1rem .55rem; font-size: .6875rem; font-weight: 600; white-space: nowrap;
+}
+.pill.done    { background: rgba(91,214,138,.14); color: var(--proof); }
+.pill.skipped { background: rgba(232,180,74,.14); color: var(--hold); }
+.pill.ready   { background: var(--mark-dim); color: var(--mark); }
+.pill.waiting { background: var(--stock-2); color: var(--dim); }
+
+/* --- contact sheet (library) --------------------------------------------- */
+.toolbar {
+  display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center;
+  padding: var(--s2); background: var(--stock); border: 1px solid var(--rule);
+  border-radius: var(--bs-border-radius);
+}
+.toolbar .form-control, .toolbar .form-select { height: 2rem; font-size: .8125rem; }
+.seg { display: inline-flex; background: var(--stock-2); border: 1px solid var(--rule); border-radius: .375rem; padding: 2px; }
+.seg button {
+  background: none; border: 0; color: var(--dim); font-size: .75rem; font-weight: 600;
+  padding: .15rem .5rem; border-radius: .25rem; line-height: 1.5;
+}
+.seg button:hover { color: var(--type); }
+.seg button.on { background: var(--stock-3); color: var(--type); }
+
+/* a per-stage tally of the whole library — what is blocked, what can print */
+.tally { display: flex; flex-wrap: wrap; gap: var(--s4) var(--s5); align-items: flex-end; }
+.tally .cell { min-width: 5.5rem; }
+.tally .cell .n { font-family: var(--font-mono); font-size: 1.375rem; letter-spacing: -.03em; }
+.tally .cell .of { font-size: .75rem; color: var(--faint); }
+.tally .bar { height: 3px; border-radius: 2px; background: var(--rule); margin-top: .3rem; overflow: hidden; display: flex; }
+.tally .bar i { display: block; height: 100%; }
+.tally .bar i.d { background: var(--proof); }
+.tally .bar i.s { background: var(--hold); opacity: .6; }
+
+.sheetgrid { display: grid; gap: var(--s5) var(--s4); }
+.sheetgrid.sm { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+.sheetgrid.md { grid-template-columns: repeat(auto-fill, minmax(152px, 1fr)); }
+.sheetgrid.lg { grid-template-columns: repeat(auto-fill, minmax(224px, 1fr)); }
+/* a real <a href="/card/…"> so the tile is linkable (open in a new tab, copy
+   link), intercepted for same-tab clicks by the router */
+.slot {
+  position: relative; cursor: pointer; background: none; border: 0; padding: 0;
+  text-align: left; display: block; color: inherit; text-decoration: none;
+}
+.slot .shot {
+  width: 100%; aspect-ratio: 63/88; object-fit: cover; display: block;
+  background: var(--stock-2); border: 1px solid var(--rule);
+  border-radius: var(--card-radius);
+}
+.slot:hover .shot { border-color: rgba(242,65,140,.5); }
+.slot.picked .shot { border-color: var(--mark); box-shadow: 0 0 0 2px var(--mark-dim); }
+.slot .cardname {
+  font-weight: 600; font-size: .8125rem; margin-top: var(--s2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.slotmeta { display: flex; align-items: center; gap: .375rem; margin-top: .125rem; min-width: 0; }
+.slotmeta .id { font-family: var(--font-mono); font-size: .625rem; color: var(--faint); }
+/* the checkbox only appears on hover, or once a selection exists — the grid is
+   a contact sheet first and a work queue second */
+.slot .pick {
+  position: absolute; top: .4rem; left: .4rem; z-index: 2; opacity: 0;
+  transition: opacity .1s ease;
+  background-color: rgba(12,12,16,.7); border-color: var(--type);
+  box-shadow: 0 0 0 3px rgba(12,12,16,.55);
+}
+.slot .pick:checked { background-color: var(--mark); border-color: var(--mark); }
+.slot:hover .pick, .slot.picked .pick, body.picking .slot .pick { opacity: 1; }
+.sheetgrid.sm .cardname, .sheetgrid.sm .strip { display: none; }
+
+/* stage strip: one tick per stage — the card's state at a glance */
+.strip { display: flex; gap: 2px; }
+.tick { width: 15px; height: 3px; border-radius: 2px; background: var(--rule); }
+.tick.done { background: var(--proof); }
+.tick.skipped { background: var(--hold); opacity: .55; }
+
+.actionbar {
+  position: fixed; left: 50%; bottom: var(--s4); transform: translateX(-50%);
+  z-index: 1040; width: min(calc(100vw - 2rem), 64rem);
+  display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center;
+  padding: var(--s2) var(--s3); background: var(--stock-2);
+  border: 1px solid var(--rule-2); border-radius: var(--bs-border-radius);
+  box-shadow: 0 12px 36px rgba(0,0,0,.6);
+}
+.actionbar.armed { border-color: var(--mark); }
+/* room for it, so it never sits on top of the last row of whatever it acts on */
+body.hasbar { padding-bottom: 4.5rem; }
+
+/* --- console (card detail) ----------------------------------------------- */
+.cardgrid {
+  display: grid; gap: var(--s4);
+  grid-template-columns: minmax(0,1fr);
+}
+@media (min-width: 992px) {
+  .cardgrid { grid-template-columns: 15rem minmax(0,1fr) 21rem; align-items: start; }
+  .rail, .steppanel { position: sticky; top: 4.5rem; }
+}
+.rail { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+
+/* face tabs — only ever rendered when the card really has two sides */
+.faces { display: flex; gap: 2px; padding: 2px; background: var(--stock-2);
+  border: 1px solid var(--rule); border-radius: .375rem; }
+.faces button {
+  flex: 1 1 0; min-width: 0; background: none; border: 0; color: var(--dim);
+  font-size: .75rem; font-weight: 600; padding: .3rem .4rem; border-radius: .25rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.faces button:hover { color: var(--type); }
+.faces button.on { background: var(--stock-3); color: var(--type); }
+.faces button .fdot { display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--rule-2); margin-right: .3rem; vertical-align: middle; }
+.faces button.settled .fdot { background: var(--proof); }
+.faces button.partial .fdot { background: var(--hold); }
+
+/* filmstrip stepper: the pipeline as pictures. Each row carries the actual
+   image that stage produced for the focused side, so the rail *is* the history
+   of the card and clicking a frame is how you compare. */
+.film { display: flex; flex-direction: column; gap: var(--s2); }
+.frame {
+  display: flex; align-items: center; gap: var(--s3); width: 100%; text-align: left;
+  padding: .375rem .5rem; font: inherit; color: var(--type);
+  background: var(--stock); border: 1px solid var(--rule);
+  border-radius: .5rem; position: relative;
+}
+.frame:hover { border-color: var(--rule-2); background: var(--stock-2); }
+.frame.current { border-color: var(--mark); background: var(--stock-2); }
+.frame .cel {
+  flex: 0 0 auto; width: 30px; height: 42px; border-radius: 3px; overflow: hidden;
+  background: var(--stock-3); border: 1px solid var(--rule); position: relative;
+}
+.frame .cel img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.frame .cel .no {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-family: var(--font-mono); font-size: .625rem; color: var(--faint);
+}
+.frame .who { flex: 1 1 auto; min-width: 0; }
+.frame .who b { display: block; font-weight: 600; font-size: .8125rem; }
+.frame .who span { font-family: var(--font-mono); font-size: .625rem; color: var(--faint); }
+.frame.skipped .who b { color: var(--dim); text-decoration: line-through; }
+.frame.waiting { opacity: .5; }
+.frame .dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--rule-2); }
+.frame.done .dot { background: var(--proof); }
+.frame.skipped .dot { background: var(--hold); }
+.frame.ready .dot { background: var(--mark); box-shadow: 0 0 0 3px var(--mark-dim); }
+
+/* --- proof viewer -------------------------------------------------------- */
+/* The proof is as large as the space allows: bounded by its column's width and
+   by the viewport height, whichever runs out first. There is no lightbox — this
+   *is* the full view. */
+.stage { display: flex; flex-direction: column; align-items: center; gap: var(--s3); }
+.proof {
+  width: 100%;
+  /* height-bounded as well as width-bounded, so the whole card is always on
+     screen — there is no second, larger view to fall back on */
+  max-width: min(100%, calc((100vh - 13rem) * 63 / 88));
+  margin: 0 auto;
+}
+.viewer {
+  position: relative; width: 100%; aspect-ratio: 63/88;
+  background: var(--stock-2); border: 1px solid var(--rule);
+  border-radius: var(--card-radius); overflow: hidden;
+}
+/* while aligning, the corners are image data you are measuring against and must
+   not be clipped away — and the ghost trim needs to overflow the frame */
+.viewer.aligning {
+  border-radius: .25rem; overflow: visible;
+  /* the ghost trim is drawn *outside* the frame on purpose, so the column leaves
+     room for it rather than letting it cross the caption underneath */
+  margin-bottom: 2rem;
+}
+/* an INPUT, not this step's output: the image stays at full colour and full
+   brightness — you cannot judge a grade or place a border on a dimmed card —
+   and the fact is stated in the chrome around it instead. */
+.viewer.is-input { border-style: dashed; border-color: var(--rule-2); }
+.stageimg {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+  display: block;
+}
+.viewer .empty {
+  position: absolute; inset: 0; display: grid; place-items: center; gap: var(--s2);
+  color: var(--dim); font-size: .8125rem; text-align: center; padding: var(--s5);
+}
+/* what you are looking at, above the card, never on top of it — and no wider
+   than the card, so its right-aligned note stays next to the thing it is about.
+   Its height is FIXED: the compare tool's blend slider appears and disappears in
+   here, and the card must not move an inch when it does. */
+.plate {
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: nowrap;
+  width: 100%; height: 2.25rem;
+  max-width: min(100%, calc((100vh - 13rem) * 63 / 88));
+}
+.plate .what {
+  font-size: .75rem; color: var(--dim);
+  min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.plate .what b { color: var(--type); font-weight: 600; }
+
+/* --- compare: a tool you turn on, not the default ------------------------
+   Off, the viewer simply shows the step's output. Wipe clips the output over
+   the input along a draggable split; fade cross-dissolves the two. The modes
+   are mutually exclusive — one question ("how do these two differ?"), two ways
+   of answering it, never both at once. */
+.cmp { position: absolute; inset: 0; z-index: 3; }
+.cmp .over { position: absolute; inset: 0; }
+.cmp .over img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.cmp .bar {
+  position: absolute; top: 0; bottom: 0; width: 20px; margin-left: -10px;
+  cursor: ew-resize; touch-action: none; z-index: 4;
+}
+.cmp .bar::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 9px; width: 2px;
+  background: var(--mark);
+}
+.cmp .bar::after {
+  content: "‹ ›"; position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  font-family: var(--font-mono); font-size: .625rem; font-weight: 700;
+  color: #16050d; background: var(--mark); border-radius: 3px;
+  padding: .1rem .25rem; letter-spacing: -.05em;
+}
+.cmp .tag {
+  position: absolute; top: .5rem; font-family: var(--font-mono); font-size: .625rem;
+  text-transform: uppercase; letter-spacing: .06em; color: var(--type);
+  background: rgba(12,12,16,.78); border-radius: .25rem; padding: .1rem .35rem;
+}
+.cmp .tag.l { left: .5rem; }
+.cmp .tag.r { right: .5rem; }
+
+/* the fade's blend slider — mono, thin, magenta, like every other control.
+   Shrinkable, and zero-margin so it never adds to the plate's height. */
+.blend { flex: 0 1 9rem; min-width: 3.5rem; }
+input[type="range"] {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 16px;
+  margin: 0; display: block; background: none; cursor: ew-resize;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 2px; background: var(--rule-2); border-radius: 1px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 12px; height: 12px;
+  margin-top: -5px; border-radius: 2px; background: var(--mark);
+  border: 1px solid #16050d;
+}
+input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
+
+/* --- frame-align overlay -------------------------------------------------
+   Drag the four rules onto the card's real inner border edge. The marks are the
+   only magenta here; the cyan ghost is the *result* — where the trim will land
+   and how thick the target border is — so control and measurement never read as
+   the same thing. */
+.alignlayer { position: absolute; inset: 0; z-index: 5; }
+.al-work { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; }
+/* the trim the fit will produce, and the border it is aiming at */
+.al-ghost { position: absolute; z-index: 6; pointer-events: none; border: 1px dashed var(--reg); }
+.al-band {
+  position: absolute; z-index: 6; pointer-events: none;
+  border: 0 solid var(--reg-dim); background: none;
+}
+.al-band i { position: absolute; inset: 0; outline: 1px solid rgba(34,201,214,.5); }
+
+/* a mark: one hairline at constant width, plus two grips placed a quarter and
+   three quarters along it — clear of the corners, where the border you are
+   measuring actually is. Nothing thickens on hover; the grips are the target. */
+.al-line { position: absolute; z-index: 7; touch-action: none; }
+.al-line::before { content: ""; position: absolute; background: var(--mark); }
+.al-line.top, .al-line.bottom { left: 0; right: 0; height: 18px; margin-top: -9px; }
+.al-line.left, .al-line.right { top: 0; bottom: 0; width: 18px; margin-left: -9px; }
+.al-line.top::before, .al-line.bottom::before { left: 0; right: 0; top: 8.5px; height: 1px; }
+.al-line.left::before, .al-line.right::before { top: 0; bottom: 0; left: 8.5px; width: 1px; }
+.al-line.sel::before { background: #fff; }
+.al-grip {
+  position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px;
+  background: var(--mark); border: 1px solid #16050d; border-radius: 2px;
+}
+.al-line.top .al-grip, .al-line.bottom .al-grip { top: 9px; cursor: ns-resize; }
+.al-line.left .al-grip, .al-line.right .al-grip { left: 9px; cursor: ew-resize; }
+.al-line.sel .al-grip { background: #fff; }
+.al-tag {
+  position: absolute; white-space: nowrap;
+  font-family: var(--font-mono); font-size: .5625rem; font-weight: 700;
+  color: var(--mark); background: rgba(12,12,16,.8); border-radius: 2px; padding: 0 .2rem;
+}
+.al-line.top .al-tag    { top: -6px;  left: 50%; transform: translateX(-50%); }
+.al-line.bottom .al-tag { top: 14px;  left: 50%; transform: translateX(-50%); }
+.al-line.left .al-tag   { left: 14px; top: 50%;  transform: translateY(-50%); }
+.al-line.right .al-tag  { right: 14px; top: 50%; transform: translateY(-50%); }
+
+/* the loupe: source pixels at 6×, parked in the page corner furthest from the
+   pointer so it never covers the edge you are aiming at */
+#loupe {
+  position: fixed; z-index: 1060; width: 168px; pointer-events: none;
+  background: var(--stock); border: 1px solid var(--rule-2);
+  border-radius: .5rem; padding: 6px; box-shadow: 0 12px 40px rgba(0,0,0,.6);
+}
+#loupe canvas { display: block; width: 156px; height: 156px; border-radius: .25rem; background: #000; }
+#loupe .rd {
+  display: flex; justify-content: space-between; gap: var(--s2);
+  font-family: var(--font-mono); font-size: .6875rem; padding: .3rem .1rem 0;
+}
+#loupe .rd b { color: var(--mark); }
+
+.readout { display: grid; grid-template-columns: 1fr auto; gap: .125rem .75rem; }
+.readout dt { font-size: .6875rem; font-weight: 400; color: var(--dim); }
+.readout dd {
+  margin: 0; font-family: var(--font-mono); font-size: .75rem;
+  font-variant-numeric: tabular-nums; text-align: right;
+}
+/* four per-edge number fields, laid out like the edges they set */
+.edges { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--s2); }
+.edges label { font-family: var(--font-mono); font-size: .625rem; color: var(--dim); display: block; }
+.edges .form-control { height: 1.75rem; font-size: .75rem; font-family: var(--font-mono); }
+
+/* --- step settings ------------------------------------------------------- */
+/* every step shows its settings from the moment you focus it — there are no
+   modes to enter and nothing to click through */
+.setting { display: grid; grid-template-columns: minmax(6.5rem, 38%) 1fr; gap: var(--s2); align-items: center; }
+.setting > label { font-size: .75rem; color: var(--dim); }
+.setting .form-select, .setting .form-control { height: 2rem; font-size: .8125rem; }
+.settings { display: flex; flex-direction: column; gap: var(--s3); }
+.settings .opt { display: flex; flex-direction: column; gap: .2rem; }
+.settings .opt .why { font-size: .6875rem; color: var(--faint); line-height: 1.4; }
+
+/* --- card data (what the provider says) -----------------------------------
+   A reference sheet, not a form: labels are micro-caps, every value is mono
+   (this app measures), and rules/flavour prose gets its own block so it reads
+   as text instead of a table cell. Column count follows the width. */
+/* Balanced columns of independent stacks, filled in JS: CSS multi-column
+   relayouts its whole flow as the page repaints (the scroll stutter) and a
+   plain auto-fill grid leaves holes where groups differ in height. */
+.facts { display: grid; gap: 0 var(--s5); align-items: start; }
+.factcol { min-width: 0; }
+.factgroup { margin-bottom: var(--s4); }
+.factgroup > .eyebrow { display: block; padding-bottom: .3rem; border-bottom: 1px solid var(--rule); }
+.factrow {
+  display: grid; grid-template-columns: minmax(5.5rem, 40%) 1fr; gap: var(--s2);
+  padding: .22rem 0; border-bottom: 1px solid rgba(35,35,46,.6);
+}
+.factrow .flabel, .factblock .flabel { font-size: .6875rem; color: var(--dim); }
+.factrow .fval {
+  font-family: var(--font-mono); font-size: .75rem; text-align: right;
+  overflow-wrap: anywhere;
+}
+.factblock { padding: .35rem 0; border-bottom: 1px solid rgba(35,35,46,.6); }
+.factblock p { margin: .1rem 0 0; font-size: .75rem; line-height: 1.5; white-space: pre-wrap; }
+.linkrow { display: flex; flex-wrap: wrap; gap: .375rem; }
+
+/* --- related cards ------------------------------------------------------- */
+.rels { display: flex; flex-direction: column; gap: 2px; }
+.rel {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 2px 0; min-width: 0; font-size: .8125rem;
+}
+.rel .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+           white-space: nowrap; }
+.rel .mono { font-size: .6875rem; }
+
+/* --- small data tables (frame specs) ------------------------------------- */
+.tblwrap { overflow-x: auto; }
+.tbl { width: 100%; border-collapse: collapse; font-size: .8125rem; }
+.tbl th {
+  text-align: left; font-size: .625rem; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--dim); font-weight: 600; padding: 0 var(--s2) 4px 0; white-space: nowrap;
+}
+.tbl td { padding: 4px var(--s2) 4px 0; border-top: 1px solid var(--rule); white-space: nowrap; }
+
+/* --- the keyboard sheet --------------------------------------------------- */
+.keys { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: var(--s2) var(--s5); }
+.keyrow { display: flex; align-items: baseline; gap: var(--s2); font-size: .8125rem; }
+.keyrow kbd {
+  font: 600 .6875rem/1 ui-monospace, monospace; padding: 3px 5px; border-radius: 3px;
+  background: var(--stock-3); border: 1px solid var(--rule-2); color: var(--type);
+  white-space: nowrap;
+}
+.keyrow span { color: var(--dim); }
+
+/* --- search results ------------------------------------------------------ */
+.results { display: grid; gap: var(--s3); grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); }
+.hit { position: relative; display: block; cursor: pointer; }
+.hit img {
+  width: 100%; aspect-ratio: 63/88; object-fit: cover; background: var(--stock-2);
+  border: 1px solid var(--rule); border-radius: var(--card-radius);
+}
+.hit input { position: absolute; top: .5rem; left: .5rem; z-index: 2; }
+.hit.have img { border-color: var(--proof); }
+.hit .hitmeta { font-size: .6875rem; color: var(--dim); margin-top: .375rem; line-height: 1.4; }
+.hit .hitmeta b { color: var(--type); font-size: .75rem; }
+
+/* --- settings screen ----------------------------------------------------- */
+.setgrid { display: grid; gap: var(--s4); grid-template-columns: minmax(0,1fr); }
+@media (min-width: 992px) { .setgrid { grid-template-columns: 13rem minmax(0,1fr); } }
+.secnav { display: flex; flex-direction: column; gap: 2px; }
+@media (min-width: 992px) { .secnav { position: sticky; top: 4.5rem; } }
+.secnav button {
+  text-align: left; background: none; border: 0; color: var(--dim);
+  font-size: .8125rem; font-weight: 600; padding: .4rem .625rem;
+  border-radius: .375rem; border-left: 2px solid transparent;
+}
+.secnav button:hover { color: var(--type); background: var(--stock); }
+.secnav button.on { color: var(--type); background: var(--stock-2); border-left-color: var(--mark); }
+.secnav button .cnt { font-family: var(--font-mono); font-size: .625rem; color: var(--faint); float: right; }
+
+/* a settings panel is prose plus a control: capped at a comfortable measure so
+   the explanation and the field it belongs to stay next to each other */
+#secbody > .panel { max-width: 58rem; }
+.field { display: grid; gap: var(--s2) var(--s4); padding: var(--s3) 0; border-bottom: 1px solid var(--rule); }
+@media (min-width: 768px) { .field { grid-template-columns: 1fr 15rem; align-items: start; } }
+.field:last-child { border-bottom: 0; }
+.field .lbl { font-size: .8125rem; font-weight: 600; }
+.field .why { font-size: .75rem; color: var(--dim); margin: .15rem 0 0; line-height: 1.45; }
+.field .key { font-family: var(--font-mono); font-size: .625rem; color: var(--faint); margin-top: .2rem; }
+.field .ctl { display: flex; align-items: center; gap: var(--s2); }
+.field .ctl .form-control, .field .ctl .form-select { height: 2rem; font-size: .8125rem; }
+.field .unit { font-family: var(--font-mono); font-size: .6875rem; color: var(--faint); }
+.field.dirty { box-shadow: inset 2px 0 0 var(--mark); padding-left: var(--s3); margin-left: calc(var(--s3) * -1); }
+
+
+/* --- sheet dialog: pick the side of every two-sided card ----------------- */
+.picklist { max-height: 15rem; overflow: auto; border: 1px solid var(--rule); border-radius: .375rem; }
+.pickrow {
+  display: flex; align-items: center; gap: var(--s2); padding: .375rem var(--s2);
+  border-bottom: 1px solid var(--rule);
+}
+.pickrow:last-child { border-bottom: 0; }
+.pickrow img { width: 24px; height: 34px; object-fit: cover; border-radius: 2px; background: var(--stock-3); }
+.pickrow .nm { flex: 1 1 auto; min-width: 0; font-size: .75rem; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- overlays ------------------------------------------------------------ */
+.modal-content, .toast, .dropdown-menu { background: var(--stock); border-color: var(--rule); }
+.toast { --bs-toast-bg: var(--stock); }
+#busy {
+  position: fixed; inset: 0; z-index: 1080; display: none;
+  place-items: center; background: rgba(10,10,13,.6);
+}
+#busy.on { display: grid; }
+.spinner-border { color: var(--mark); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
 </head>
 <body>
-<header>
-  <h1>proxdex</h1><span class="lib" id="lib"></span>
-  <nav class="row">
-    <button data-view="library" class="active">Library</button>
-    <button data-view="search">Search</button>
-    <button data-view="settings">Settings</button>
-  </nav>
-  <div class="spacer"></div>
-  <div class="row">
-    <button onclick="sheetDialog()">🖨 Sheet</button>
-    <button title="Regenerate INDEX.md" onclick="act('/api/index',{},'index updated')">↺ index</button>
-    <button onclick="refresh()">⟳</button>
+
+<header class="topbar">
+  <div class="container-fluid px-3 py-2 d-flex align-items-center gap-3 flex-wrap">
+    <span class="wordmark">proxdex</span>
+    <span class="libpath mono d-none d-lg-inline" id="lib" title=""></span>
+    <nav class="d-flex gap-1" id="nav">
+      <button class="navlink active" data-view="library">Library</button>
+      <button class="navlink" data-view="search">Search</button>
+      <button class="navlink" data-view="settings">Settings</button>
+    </nav>
+    <div class="ms-auto d-flex align-items-center gap-2">
+      <span id="apihealth" class="chip warn d-none"
+            title="A card API is answering slowly or failing; proxdex retries and serves cached metadata."></span>
+      <button class="btn btn-sm btn-primary" onclick="sheetDialog()">Make sheet</button>
+      <button class="btn btn-sm btn-outline-secondary" title="Rebuild INDEX.md"
+              onclick="act('/api/index',{},'Index rebuilt')">Index</button>
+      <button class="btn btn-sm btn-outline-secondary" title="Reload from disk"
+              onclick="refresh()">Reload</button>
+    </div>
   </div>
 </header>
-<main id="main"></main>
 
-<div id="busy"><div>working…</div></div>
-<div id="toast"></div>
-<div id="lightbox" onclick="this.style.display='none'"><img id="lbimg" /></div>
+<main id="main" class="container-fluid px-3 py-4"></main>
 
-<dialog id="sheetdlg">
-  <h3 style="margin-top:0">Make print sheet</h3>
-  <div class="field"><label>batch name</label><input id="sd_name" value="deck" /></div>
-  <div class="field"><label>faces</label><select id="sd_faces"></select></div>
-  <div class="field"><label>page</label><select id="sd_page"></select></div>
-  <div class="field"><label>dpi</label><input id="sd_dpi" type="number" placeholder="config default" /></div>
-  <div class="field"><label>profile</label><select id="sd_profile"></select></div>
-  <div class="row" style="justify-content:flex-end;margin-top:14px">
-    <button onclick="sheetdlg.close()">cancel</button>
-    <button class="primary" onclick="makeSheet()">Make sheet</button>
+<div id="busy"><div class="spinner-border" role="status"><span class="visually-hidden">Working</span></div></div>
+
+<div id="loupe" hidden>
+  <canvas width="156" height="156"></canvas>
+  <div class="rd"><span id="lp_edge">T</span><b id="lp_val">0.00%</b></div>
+</div>
+
+<div class="toast-container position-fixed bottom-0 start-50 translate-middle-x p-3">
+  <div id="toast" class="toast" role="status" aria-live="polite" data-bs-autohide="true">
+    <div class="toast-body"><span id="toastmsg" style="white-space:pre-wrap"></span></div>
   </div>
-</dialog>
+</div>
 
+<div class="modal fade" id="askdlg" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-sm">
+    <div class="modal-content">
+      <div class="modal-body"><p class="mb-0" id="asktext"></p></div>
+      <div class="modal-footer border-0 pt-0">
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-sm btn-primary" id="askok">Continue</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="keysdlg" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content">
+      <div class="modal-header border-0 pb-1">
+        <div>
+          <div class="eyebrow">Keyboard</div>
+          <h5 class="modal-title mb-0">Shortcuts</h5>
+        </div>
+        <button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="keysbody"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="sheetdlg" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header border-0 pb-1">
+        <div>
+          <div class="eyebrow">Impose</div>
+          <h5 class="modal-title mb-0">Make print sheet</h5>
+        </div>
+        <button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body vstack gap-3">
+        <div id="sd_scope"></div>
+        <p class="hint mb-0" id="sd_blurb"></p>
+        <div id="sd_sizes"></div>
+        <div class="setting"><label for="sd_name">batch name</label>
+          <input class="form-control form-control-sm" id="sd_name" value="deck" /></div>
+        <div class="setting"><label for="sd_faces">what to print</label>
+          <select class="form-select form-select-sm" id="sd_faces" onchange="paintPicks()"></select></div>
+        <div class="setting"><label for="sd_page">page</label>
+          <select class="form-select form-select-sm" id="sd_page"></select></div>
+        <div class="setting"><label for="sd_dpi">dpi</label>
+          <input class="form-control form-control-sm" id="sd_dpi" type="number" placeholder="config default" /></div>
+        <div class="setting"><label for="sd_profile">medium</label>
+          <select class="form-select form-select-sm" id="sd_profile"></select></div>
+        <div id="sd_sides"></div>
+      </div>
+      <div class="modal-footer border-0 pt-0">
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-sm btn-primary" onclick="makeSheet()">Make sheet</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/bootstrap.bundle.min.js"></script>
 <script>
+'use strict';
 const $ = s => document.querySelector(s);
-const state = { view:'library', cards:[], meta:null, idx:-1, step:null, ver:{}, cfg:null };
+const $$ = s => [...document.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-function toast(msg, ms=4500){ const t=$('#toast'); t.textContent=msg; t.style.display='block';
-  clearTimeout(t._t); if(ms) t._t=setTimeout(()=>t.style.display='none',ms); }
-async function get(p){ const r=await fetch(p); if(!r.ok) throw await r.text(); return r.json(); }
-async function act(path, body, okmsg){
-  $('#busy').classList.add('on');
-  try{
-    const r=await fetch(path,{method:body&&body._method||'POST',headers:{'Content-Type':'application/json'},
-      body: body&&body._method?undefined:JSON.stringify(body||{})});
-    const j=await r.json();
-    toast(j.ok!==false ? (okmsg+'\n'+tail(j.log)) : ('failed:\n'+(j.log||'')), j.ok!==false?4500:14000);
-  }catch(e){ toast('error: '+e,14000); }
-  $('#busy').classList.remove('on');
-  await refresh(true);
+/* The card is addressed by id and side, never by grid position: a URL then
+   survives a reload, a bookmark, and the library changing underneath it.
+   `search` holds the query so going back to Search restores it (and its cached
+   results); `lib` holds the contact sheet's filters for the same reason. */
+const state = {
+  view:'library', id:null, face:0, step:null,
+  cards:[], meta:null, cfg:null, details:{},
+  search:{q:'', game:'', set:'', rarity:'', year:'', related:false}, results:null,
+  lib:{q:'', game:'', set:'', st:'', sort:'name', density:'md'},
+  sel:new Set(),
+  // the compare tool: 'off' shows the step's output, 'wipe' clips it over its
+  // input along `split`, 'fade' cross-dissolves at `blend`. Mutually exclusive,
+  // and sticky across cards — it is a way of looking, not a property of a card.
+  compare:'off', split:50, blend:50,
+};
+const card = () => state.cards.find(c => c.id === state.id) || null;
+/* What a card is, when it is not an ordinary one-sided 63×88 print. The names
+   come from /api/meta's layout vocabulary — the same words the CLI prints — so
+   the UI never invents its own. */
+const layoutOf = id => (state.meta.layouts || []).find(l => l.id === id) || null;
+/* The trim sizes a sheet can hold, and how many of each fit a page — served by
+   /api/meta so the UI states the real geometry rather than guessing it. */
+const trimOf = name => (state.meta.trims || []).find(t => t.name === name) || null;
+const trimMm = t => t ? t.mm.map(v => +(+v).toFixed(1)).join('×') : '';
+const trimGrid = t => t ? `${t.grid[0]}×${t.grid[1]} per page` : '';
+function kindChips(c){
+  const out = [];
+  const lay = layoutOf(c.layout);
+  if(lay && c.layout !== 'single')
+    out.push(`<span class="chip flip" title="${esc(lay.note)}">${esc(lay.label)}</span>`);
+  else if((c.faces || []).length > 1)
+    out.push('<span class="chip flip" title="Two-sided card">2&nbsp;sides</span>');
+  if(c.oversized){
+    const t = trimOf('oversized');
+    out.push(`<span class="chip" title="Printed at ${esc(trimMm(t))}mm — imposed at that size, on its own pages">oversized</span>`);
+  }
+  if(c.frame === 'borderless')
+    out.push('<span class="chip" title="No printed frame, so the border step only corrects the aspect">borderless</span>');
+  return out.join('');
+}
+const cardIndex = () => visible().findIndex(c => c.id === state.id);
+const revOf = id => (state.cards.find(c => c.id === id) || {}).rev || '0';
+/* the focused side of the focused card, and its per-stage state */
+const stStatus = (c, stage, face) => {
+  const f = c.faces[face === undefined ? state.face : face] || c.faces[0];
+  return (f && f.status[stage]) || 'pending';
+};
+
+/* ---------- shell ---------- */
+let _toast;
+function toast(msg, ms=4500){
+  _toast ||= new bootstrap.Toast($('#toast'));
+  $('#toastmsg').textContent = msg;
+  $('#toast').setAttribute('data-bs-delay', ms);
+  _toast.show();
 }
 const tail = s => (s||'').trim().split('\n').slice(-4).join('\n');
-function bump(id){ state.ver[id]=(state.ver[id]||0)+1; }
-const imgsrc = (id,stage) => `/api/image/${id}/${stage}?v=${state.ver[id]||0}`;
+async function get(p){ const r = await fetch(p); if(!r.ok) throw await r.text(); return r.json(); }
+
+async function act(path, body, okmsg){
+  const {_method, ...payload} = body || {};
+  const method = _method || 'POST';
+  let ok = false;
+  $('#busy').classList.add('on');
+  try{
+    const r = await fetch(path, {
+      method,
+      headers: {'Content-Type':'application/json'},
+      // DELETE carries no body; everything else sends the payload as-is
+      body: method === 'DELETE' ? undefined : JSON.stringify(payload),
+    });
+    const j = await r.json();
+    ok = j.ok !== false;
+    toast(ok ? okmsg + '\n' + tail(j.log) : 'Failed\n' + (j.log || JSON.stringify(j)),
+          ok ? 4500 : 14000);
+  } catch(e){ toast('Failed\n' + e, 14000); }
+  $('#busy').classList.remove('on');
+  await refresh(true);
+  return ok;
+}
+
+/* A confirm() replacement that matches the rest of the console. */
+let _ask;
+function ask(text, okLabel='Continue'){
+  _ask ||= new bootstrap.Modal($('#askdlg'));
+  $('#asktext').textContent = text;
+  $('#askok').textContent = okLabel;
+  return new Promise(resolve => {
+    const done = v => { $('#askok').onclick = null; $('#askdlg').removeEventListener('hidden.bs.modal', onHide); resolve(v); };
+    const onHide = () => done(false);
+    $('#askok').onclick = () => { _ask.hide(); done(true); };
+    $('#askdlg').addEventListener('hidden.bs.modal', onHide, {once:true});
+    _ask.show();
+  });
+}
+
+/* Image URLs carry the card's rev (its newest stage mtime) and the side, so the
+   browser can cache them forever and a changed file simply becomes a different
+   URL. */
+const side = f => (f ? `&face=${f}` : '');
+const viewsrc = (id, stage, f) => `/api/view/${encodeURIComponent(id)}/${stage}?rev=${revOf(id)}${side(f)}`;
+const fullsrc = (id, stage, f) => `/api/image/${encodeURIComponent(id)}/${stage}?rev=${revOf(id)}${side(f)}`;
+const thumbsrc = (c, f) => `/api/thumb/${encodeURIComponent(c.id)}?rev=${c.rev}${side(f)}`;
+/* Warm the browser cache for images we are about to want (next/prev card, the
+   card's other stages) — a decoded hit makes those navigations instant. */
+function prefetch(urls){ for(const u of urls) if(u) new Image().src = u; }
+
+/* API health: a pill in the topbar, so a slow/failing provider is visible
+   rather than looking like proxdex hanging. */
+async function pollHealth(){
+  const pill = $('#apihealth');
+  try{
+    const j = await get('/api/health');
+    const worst = (j.hosts || [])[0];
+    pill.classList.toggle('d-none', !worst);
+    if(worst) pill.textContent = `${worst.host} ${worst.health}`;
+    if(worst) pill.title = worst.detail;
+  } catch(e){ pill.classList.add('d-none'); }
+}
+
+/* ---------- the pipeline, as the server declares it -----------------------
+   Order, labels, skippability and every step's settings schema come from
+   /api/meta. This file spells no step name, no option and no default of its
+   own, so a step added in Python appears here with its controls already built. */
+const PIPE = () => state.meta.pipeline;
+const SPEC = key => PIPE().find(s => s.key === key) || PIPE()[0];
+const STAGES = () => PIPE().map(s => s.stage);
+
+/* ---------- routing ------------------------------------------------------
+   Real URLs and real history: /library, /card/<id>[/<step>][?side=2],
+   /search?q=…, /settings. Every navigation pushes an entry, popstate re-renders
+   from the URL, and the server serves the shell for these paths so a reload or
+   a pasted link lands in the same place. Nothing here refetches: a view switch
+   is a pure client-side render off the cards we already hold. */
+function currentUrl(){
+  if(state.view === 'card' && state.id){
+    const s = state.face ? `?side=${state.face + 1}` : '';
+    return `/card/${encodeURIComponent(state.id)}` + (state.step ? `/${state.step}` : '') + s;
+  }
+  if(state.view === 'search'){
+    const p = new URLSearchParams(Object.entries(state.search).filter(([,v]) => v));
+    return '/search' + (p.toString() ? '?' + p : '');
+  }
+  if(state.view === 'settings') return '/settings';
+  return '/library';
+}
+function routeFromUrl(){
+  const parts = location.pathname.split('/').filter(Boolean);
+  const q = new URLSearchParams(location.search);
+  if(parts[0] === 'card' && parts[1]){
+    const face = Math.max(0, (parseInt(q.get('side'), 10) || 1) - 1);
+    const step = parts[2] && state.meta && SPEC(parts[2]).key === parts[2] ? parts[2] : null;
+    return {view:'card', id:decodeURIComponent(parts[1]), face, step};
+  }
+  if(parts[0] === 'search'){
+    return {view:'search', id:null, step:null, search:{
+      q: q.get('q') || '', game: q.get('game') || '', set: q.get('set') || '',
+      rarity: q.get('rarity') || '', year: q.get('year') || '',
+    }};
+  }
+  if(parts[0] === 'settings') return {view:'settings', id:null, step:null};
+  return {view:'library', id:null, step:null};
+}
+/* replace (not push) when only the URL detail changed — typing in the search
+   filters shouldn't bury the previous page under a dozen history entries. */
+function navigate(next, {replace = false} = {}){
+  // remember where this page was scrolled to, so Back lands where you left
+  history.replaceState({...routeState(), scroll: window.scrollY}, '');
+  Object.assign(state, next);
+  const url = currentUrl();
+  const here = location.pathname + location.search;
+  if(replace || url === here) history.replaceState(routeState(), '', url);
+  else history.pushState(routeState(), '', url);
+  render();
+  window.scrollTo(0, 0);
+}
+const routeState = () => ({view:state.view, id:state.id, face:state.face, step:state.step,
+                           search:{...state.search}});
+/* Update the address bar in place — used while typing a search, where a
+   re-render would fight the form and a push would bury the last page. */
+function syncUrl(){ history.replaceState(routeState(), '', currentUrl()); }
+history.scrollRestoration = 'manual';    // we restore it ourselves, per entry
+/* The grid grows as lazy thumbnails resolve, so one scrollTo can land short —
+   re-apply it over the next moment until the page is tall enough. */
+function restoreScroll(y){
+  if(!y) return window.scrollTo(0, 0);
+  let tries = 0;
+  const tick = () => {
+    window.scrollTo(0, y);
+    if(Math.abs(window.scrollY - y) > 1 && ++tries < 12) setTimeout(tick, 40);
+  };
+  requestAnimationFrame(tick);
+}
+window.addEventListener('popstate', ev => {
+  Object.assign(state, routeFromUrl());
+  render();
+  restoreScroll((ev.state && ev.state.scroll) || 0);
+});
 
 async function refresh(keepDetail){
-  [state.cards, state.meta] = await Promise.all([get('/api/cards'), state.meta?Promise.resolve(state.meta):get('/api/meta')]);
-  if(state.view==='library') render();
-  else if(state.view==='card' && keepDetail){ bumpAll(); renderCard(); }
+  pollHealth();
+  const [cards, meta] = await Promise.all([
+    get('/api/cards'),
+    state.meta ? Promise.resolve(state.meta) : get('/api/meta'),
+  ]);
+  state.cards = cards; state.meta = meta;
+  state.cfg = null;                       // proxdex.toml may have changed too
+  if(state.view === 'card' && keepDetail) renderCard();
   else render();
 }
-function bumpAll(){ if(state.idx>=0){ const c=state.cards[state.idx]; if(c) bump(c.id); } }
 
-/* ---------- views ---------- */
 function render(){
-  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active', b.dataset.view===state.view));
-  const m=$('#main');
-  if(state.view==='library') m.innerHTML=viewLibrary();
-  else if(state.view==='card') { m.innerHTML=''; renderCard(); }
-  else if(state.view==='search') m.innerHTML=viewSearch();
-  else if(state.view==='settings'){ m.innerHTML='<div class="tag">loading…</div>'; renderSettings(); }
+  const section = state.view === 'card' ? 'library' : state.view;   // a card lives under Library
+  $$('.navlink').forEach(b => b.classList.toggle('active', b.dataset.view === section));
+  document.body.classList.toggle('picking', state.sel.size > 0);
+  document.body.classList.remove('hasbar');   // each view re-arms its own bar
+  const m = $('#main');
+  if(state.view === 'library'){ m.innerHTML = viewLibrary(); loadBatches(); paintBulk(); }
+  else if(state.view === 'card'){ m.innerHTML = ''; renderCard(); }
+  else if(state.view === 'search'){
+    m.innerHTML = viewSearch();
+    if(state.results){          // returning to Search: repaint, don't re-query
+      paintResults(state.results);
+      showHint(state.results.length ? '' : 'No matches. Try fewer words, or switch game.');
+    } else if(state.search.q.trim()) doSearch();   // a /search?q=… link
+  }
+  else if(state.view === 'settings') renderSettings();
 }
+
+/* ---------- library: the contact sheet ----------------------------------- */
+/* the card-level rollup: a card is only done at a stage when every side is */
+const cardStatus = (c, stage) => c.status[stage] || 'pending';
+const twoSided = c => c.faces.length > 1;
+
+function visible(){
+  const f = state.lib;
+  const q = f.q.trim().toLowerCase();
+  let out = state.cards.filter(c => {
+    if(q && !(c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q))) return false;
+    if(f.game && c.game !== f.game) return false;
+    if(f.set && c.set !== f.set) return false;
+    if(f.st === 'todo' && sheetReady(c)) return false;
+    if(f.st === 'ready' && !(sheetReady(c) && !c.printed)) return false;
+    if(f.st === 'printed' && !c.printed) return false;
+    if(f.st === 'twosided' && !twoSided(c)) return false;
+    if(f.st === 'oversized' && !c.oversized) return false;
+    return true;
+  });
+  const by = {
+    name: (a,b) => a.name.localeCompare(b.name),
+    id:   (a,b) => a.id.localeCompare(b.id),
+    set:  (a,b) => a.set.localeCompare(b.set) || a.id.localeCompare(b.id),
+    recent: (a,b) => String(b.rev).localeCompare(String(a.rev)),
+  }[f.sort] || (() => 0);
+  return out.sort(by);
+}
+/* ready to impose = the last stage is settled on the side that would print */
+function sheetReady(c){
+  const last = STAGES()[STAGES().length - 1];
+  const f = c.faces[c.front_face] || c.faces[0];
+  return f && f.status[last] !== 'pending';
+}
+
 function viewLibrary(){
-  const cards = state.cards.map((c,i)=>{
-    const pin=c.printed?'<span class="pin p">✓</span>':(c.batch?`<span class="pin q">•</span>`:'');
-    const bd=['original','bordered','upscaled','edited'].map(k=>badge(stStatus(c,k),k[0].toUpperCase())).join('');
-    return `<div class="card" onclick="openCard(${i})">
-      <img class="thumb" loading="lazy" src="/api/thumb/${c.id}?v=${state.ver[c.id]||0}" onerror="this.style.opacity=.12">
-      <div class="meta"><div class="id">${c.id}</div><div class="nm">${c.name}</div>
-      <div class="badges">${bd}${pin}</div>
-      </div></div>`;
-  }).join('') || '<div class="tag">No cards yet — go to Search to add some.</div>';
-  return `<div class="grid">${cards}</div><h2>Print batches</h2><div id="batches"></div>`;
+  const rows = visible();
+  const sets = [...new Set(state.cards.map(c => c.set))].sort();
+  const f = state.lib;
+  const opt = (v, label, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
+
+  const slots = rows.map(c => {
+    const picked = state.sel.has(c.id);
+    return `
+    <a class="slot marks ${picked ? 'picked' : ''}" href="/card/${encodeURIComponent(c.id)}"
+       onclick="return openCard('${esc(c.id)}', event)" title="${esc(c.name)} · ${esc(c.id)}">
+      <input class="form-check-input pick" type="checkbox" ${picked ? 'checked' : ''}
+             aria-label="Select ${esc(c.name)}"
+             onclick="event.stopPropagation();togglePick('${esc(c.id)}')">
+      <img class="shot" loading="lazy" alt="${esc(c.name)}"
+           src="${thumbsrc(c, c.front_face)}" onerror="this.style.opacity=.12">
+      <div class="cardname">${esc(c.name)}</div>
+      <div class="slotmeta">
+        <span class="id">${esc(c.id)}</span>
+        ${kindChips(c)}
+        ${c.printed ? '<span class="chip good">printed</span>'
+          : c.batch ? '<span class="chip">queued</span>' : ''}
+      </div>
+      <div class="slotmeta"><div class="strip">${
+        STAGES().map(s => `<span class="tick ${cardStatus(c,s)}"></span>`).join('')
+      }</div><span class="chip ms-auto">${esc(c.game)}</span></div>
+    </a>`;
+  }).join('');
+
+  const unmeasured = state.cards.filter(c => c.frame_measured === false).length;
+  const notice = unmeasured ? `
+    <div class="panel p-2 px-3 mb-3 d-flex align-items-center gap-2 flex-wrap">
+      <span class="chip warn">estimated frame</span>
+      <span class="hint">${unmeasured === 1
+        ? 'One card belongs' : unmeasured + ' cards belong'} to a set with no measured border
+      spec. Border still runs, but against an estimate — run
+      <code>proxdex frames</code> to see which sets.</span>
+    </div>` : '';
+
+  return `
+    ${tallyStrip()}
+    <div class="toolbar mb-3">
+      <input class="form-control" style="max-width:15rem" placeholder="Filter by name or id"
+             value="${esc(f.q)}" oninput="setFilter('q', this.value)">
+      <select class="form-select" style="max-width:9rem" onchange="setFilter('game', this.value)">
+        ${opt('', 'Any game', f.game)}${state.meta.games.map(g => opt(g.id, g.name, f.game)).join('')}
+      </select>
+      <select class="form-select" style="max-width:8rem" onchange="setFilter('set', this.value)">
+        ${opt('', 'Any set', f.set)}${sets.map(s => opt(s, s, f.set)).join('')}
+      </select>
+      <select class="form-select" style="max-width:11rem" onchange="setFilter('st', this.value)">
+        ${opt('', 'Any state', f.st)}${opt('todo', 'Needs work', f.st)}
+        ${opt('ready', 'Ready to print', f.st)}${opt('printed', 'Printed', f.st)}
+        ${opt('twosided', 'Two-sided', f.st)}${opt('oversized', 'Oversized', f.st)}
+      </select>
+      <span class="ms-auto d-flex align-items-center gap-2">
+        <select class="form-select" style="max-width:9rem" onchange="setFilter('sort', this.value)">
+          ${opt('name','Sort: name',f.sort)}${opt('id','Sort: id',f.sort)}
+          ${opt('set','Sort: set',f.sort)}${opt('recent','Sort: recent',f.sort)}
+        </select>
+        <span class="seg" role="group" aria-label="Tile size">
+          ${['sm','md','lg'].map(d => `<button class="${f.density === d ? 'on' : ''}"
+             onclick="setFilter('density','${d}')">${d.toUpperCase()}</button>`).join('')}
+        </span>
+      </span>
+    </div>
+    ${notice}
+    ${slots ? `<div class="sheetgrid ${f.density}">${slots}</div>`
+            : `<div class="panel p-5 text-center">
+                 <p class="mb-1">${state.cards.length ? 'Nothing matches those filters.' : 'No cards yet.'}</p>
+                 <p class="hint mb-3">${state.cards.length
+                    ? 'Clear a filter to see the rest of the sheet.'
+                    : 'Search a game to find cards and add them to this library.'}</p>
+                 ${state.cards.length
+                    ? '<button class="btn btn-sm btn-outline-secondary" onclick="clearFilters()">Clear filters</button>'
+                    : '<button class="btn btn-sm btn-primary" onclick="go(&quot;search&quot;)">Find cards to add</button>'}
+               </div>`}
+    <div id="bulk"></div>
+    <div class="eyebrow mt-5 mb-2">Print batches</div>
+    <div id="batches"></div>`;
 }
-const badge=(st,l)=>`<div class="b ${st==='done'?'on':(st==='skipped'?'sk':'')}">${st==='skipped'?'⤳':l}</div>`;
+
+/* Where the whole library stands, per stage: what is blocked and what can go
+   to paper. Counted over sides, not cards — a two-sided card is two jobs. */
+function tallyStrip(){
+  const sides = state.cards.flatMap(c => c.faces);
+  const total = sides.length || 1;
+  const cells = PIPE().map(s => {
+    const done = sides.filter(f => f.status[s.stage] === 'done').length;
+    const skip = sides.filter(f => f.status[s.stage] === 'skipped').length;
+    return `<div class="cell">
+      <div class="eyebrow">${esc(s.label)}</div>
+      <div><span class="n">${done}</span><span class="of"> / ${total}</span></div>
+      <div class="bar"><i class="d" style="width:${done/total*100}%"></i>
+        <i class="s" style="width:${skip/total*100}%"></i></div>
+    </div>`;
+  }).join('');
+  const ready = state.cards.filter(c => sheetReady(c) && !c.printed).length;
+  return `<div class="panel p-3 mb-3">
+    <div class="tally">
+      <div class="cell">
+        <div class="eyebrow">Cards</div>
+        <div><span class="n">${state.cards.length}</span>
+          <span class="of">${sides.length !== state.cards.length ? ` / ${sides.length} sides` : ''}</span></div>
+      </div>
+      ${cells}
+      <div class="cell ms-auto text-end">
+        <div class="eyebrow">Ready to print</div>
+        <div><span class="n" style="color:var(--mark)">${ready}</span></div>
+      </div>
+    </div></div>`;
+}
+
+function setFilter(key, value){
+  state.lib[key] = value;
+  $('#main').innerHTML = viewLibrary(); loadBatches(); paintBulk();
+}
+function clearFilters(){
+  state.lib = {...state.lib, q:'', game:'', set:'', st:''};
+  render();
+}
+function togglePick(id){
+  if(state.sel.has(id)) state.sel.delete(id); else state.sel.add(id);
+  document.body.classList.toggle('picking', state.sel.size > 0);
+  $$('.slot').forEach(el => {
+    const cid = decodeURIComponent(el.getAttribute('href').split('/card/')[1]);
+    el.classList.toggle('picked', state.sel.has(cid));
+  });
+  paintBulk();
+}
+/* Bulk actions are still one step at a time, explicitly chosen — this is a
+   selection acting as an id list, not an auto-runner. */
+function paintBulk(){
+  const host = $('#bulk'); if(!host) return;
+  const n = state.sel.size;
+  document.body.classList.toggle('hasbar', n > 0);
+  if(!n){ host.innerHTML = ''; return; }
+  const runnable = PIPE().filter(s => s.skippable);
+  host.innerHTML = `<div class="actionbar">
+    <b class="mono">${n} selected</b>
+    <button class="btn btn-sm btn-outline-secondary" onclick="pickAll()">Select all shown</button>
+    <button class="btn btn-sm btn-ghost" onclick="clearPicks()">Clear</button>
+    <span class="ms-auto d-flex flex-wrap gap-2 align-items-center">
+      <span class="eyebrow">Run</span>
+      ${runnable.map(s => `<button class="btn btn-sm btn-primary"
+        onclick="bulkStep('${s.key}')">${esc(s.label)}</button>`).join('')}
+      <span class="eyebrow ms-2">Skip</span>
+      ${runnable.map(s => `<button class="btn btn-sm btn-outline-secondary"
+        onclick="bulkPipe('skip','${s.key}')">${esc(s.label)}</button>`).join('')}
+      <button class="btn btn-sm btn-outline-danger ms-2" onclick="bulkDelete()">Delete</button>
+    </span></div>`;
+}
+function pickAll(){ visible().forEach(c => state.sel.add(c.id)); render(); paintBulk(); }
+function clearPicks(){ state.sel.clear(); render(); }
+async function bulkStep(key){
+  const ids = [...state.sel];
+  // border needs to know where each card's border is, and nobody is going to
+  // drag marks onto fifty cards — so in bulk it measures each one and says so
+  const auto = key === 'border';
+  const extra = auto
+    ? ' Each card\'s border is measured off its own image; check the ones the'
+      + ' measurement was unsure about afterwards.'
+    : ' Later stages that already exist will be rebuilt.';
+  if(!await ask(`Run ${SPEC(key).label.toLowerCase()} on ${ids.length} card(s)?` + extra,
+    'Run')) return;
+  await act('/api/step', {cmd:key, ids, force:true, auto},
+    `${key} · ${ids.length} card(s)`);
+}
+async function bulkPipe(cmd, key){
+  const ids = [...state.sel];
+  await act('/api/step', {cmd, step:key, ids}, `${cmd} ${key} · ${ids.length} card(s)`);
+}
+async function bulkDelete(){
+  const ids = [...state.sel];
+  if(!await ask(`Delete ${ids.length} card(s) and every file in their folders?`, 'Delete')) return;
+  for(const id of ids) await fetch('/api/card/' + encodeURIComponent(id), {method:'DELETE'});
+  state.sel.clear();
+  toast(`Deleted ${ids.length} card(s)`);
+  await refresh();
+}
 
 async function loadBatches(){
-  const b=await get('/api/batches'); const el=$('#batches'); if(!el) return;
-  el.innerHTML = b.length? b.map(x=>`<div class="batch"><b>${x.name}</b>
-    <span class="tag">${x.cards} cards · ${x.faces||''} · ${x.printed?'printed':'queued'}</span><div class="spacer"></div>
-    ${x.pdfs.map(f=>`<a href="/api/pdf/${x.dir}/${f}" target="_blank">${f}</a>`).join(' · ')}
-    ${x.printed?'':`<button onclick="act('/api/printed/${encodeURIComponent(x.name)}',{},'marked printed')">mark printed</button>`}
-    </div>`).join('') : '<div class="tag">none yet</div>';
+  const b = await get('/api/batches');
+  const el = $('#batches'); if(!el) return;
+  el.innerHTML = b.length ? b.map(x => `
+    <div class="panel p-2 px-3 mb-2 d-flex align-items-center gap-3 flex-wrap">
+      <b>${esc(x.name)}</b>
+      <span class="mono faint" style="font-size:.6875rem">${x.cards} cards</span>
+      <span class="chip ${x.printed ? 'good' : ''}">${x.printed ? 'printed' : 'queued'}</span>
+      <span class="ms-auto d-flex gap-3 align-items-center">
+        ${x.pdfs.map(f => `<a href="/api/pdf/${encodeURIComponent(x.dir)}/${encodeURIComponent(f)}"
+           target="_blank" class="mono" style="font-size:.75rem">${esc(f)}</a>`).join('')}
+        ${x.printed ? '' : `<button class="btn btn-sm btn-outline-secondary"
+           onclick="act('/api/printed/${encodeURIComponent(x.name)}',{},'Marked printed')">Mark printed</button>`}
+      </span>
+    </div>`).join('')
+    : '<p class="hint mb-0">Nothing imposed yet.</p>';
 }
 
-/* ---------- card detail: pipeline console ----------------------------------
-   Ordered, optional steps. Each is run OR skipped — never automatic. The left
-   rail is the pipeline (status per step); the right panel shows ONLY the
-   focused step's controls; the centre previews that step's output (or, if it's
-   not done, the input it would consume). Running/skipping advances the focus. */
-const STEPS = [
-  {key:'original', label:'Original', stage:'original', skippable:false,
-   desc:'The source scan — everything else derives from it.'},
-  {key:'border', label:'Border', stage:'bordered', skippable:true,
-   desc:'Reshape to the exact card size with the correct border.'},
-  {key:'upscale', label:'Upscale', stage:'upscaled', skippable:true,
-   desc:'Sharpen and enlarge with Upscayl.'},
-  {key:'grade', label:'Grade', stage:'edited', skippable:true,
-   desc:'Colour-normalise to a uniform batch look — the trim master.'},
-];
-const STEP = Object.fromEntries(STEPS.map(s=>[s.key,s]));
-const stStatus=(c,stage)=>(c.status&&c.status[stage])||(c.stages[stage]?'done':'pending');
-const viewsrc=(id,k)=>`/api/view/${id}/${k}?v=${state.ver[id]||0}`;
+/* ---------- card console -------------------------------------------------
+   Ordered, optional steps, one side at a time. Each step is run OR skipped —
+   never automatic. The rail is the pipeline as pictures, the right panel holds
+   the focused step's settings and actions (always, from the moment you focus
+   it), and the centre is the proof: this step's output, or its input at full
+   colour with the fact stated around the card rather than over it. */
+function go(view){ navigate({view, id:null, step:null}); }
+/* Let ⌘/ctrl/middle-click and "open in new tab" work like any other link. */
+function openCard(id, ev){
+  if(ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button)) return true;
+  if(ev) ev.preventDefault();
+  align.show = null;
+  navigate({view:'card', id, face:0, step:null});
+  return false;
+}
+function stepCard(d){
+  const rows = visible(); if(!rows.length) return;
+  const i = cardIndex();
+  const next = rows[((i < 0 ? 0 : i) + d + rows.length) % rows.length];
+  navigate({view:'card', id:next.id, face:0, step:null});
+}
+function focusStep(key){ navigate({view:'card', id:state.id, face:state.face, step:key}); }
+function cycleFocus(d){
+  const i = PIPE().findIndex(s => s.key === state.step);
+  focusStep(PIPE()[(i + d + PIPE().length) % PIPE().length].key);
+}
+function focusFace(f){
+  align.show = null;         // the other side is at its own point in the pipeline
+  navigate({view:'card', id:state.id, face:f, step:state.step});
+}
+function flipFace(){
+  const c = card(); if(!c || !twoSided(c)) return;
+  focusFace((state.face + 1) % c.faces.length);
+}
 
-function openCard(i){ state.idx=i; state.step=null; state.view='card';
-  document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active')); render(); }
-function stepCard(d){ exitAlign(); state.idx=(state.idx+d+state.cards.length)%state.cards.length; state.step=null; renderCard(); }
-function focusStep(key){ exitAlign(); state.step=key; renderCard(); }
-function cycleFocus(d){ const i=STEPS.findIndex(s=>s.key===state.step);
-  focusStep(STEPS[(i+d+STEPS.length)%STEPS.length].key); }
+/* This side's other stages, the card's other side, and the neighbours' proofs —
+   so ↑/↓, F and ←/→ show an already-decoded image instead of a request. */
+function prefetchAround(c){
+  const mine = STAGES().filter(s => stStatus(c, s) === 'done')
+    .map(s => viewsrc(c.id, s, state.face));
+  const other = twoSided(c)
+    ? STAGES().filter(s => stStatus(c, s, 1 - state.face) === 'done')
+        .map(s => viewsrc(c.id, s, 1 - state.face)) : [];
+  const rows = visible(), i = cardIndex(), n = rows.length;
+  const near = n > 1 ? [rows[(i + 1) % n], rows[(i - 1 + n) % n]] : [];
+  prefetch([...mine, ...other, ...near.filter(Boolean).map(x => thumbsrc(x, x.front_face))]);
+}
 
-function stepInput(c,key){   // the stage this step would consume: nearest earlier done
-  const i=STEPS.findIndex(s=>s.key===key);
-  for(let j=i-1;j>=0;j--){ if(stStatus(c,STEPS[j].stage)==='done') return STEPS[j].stage; }
+function stepInput(c, key){          // the stage this step consumes: nearest earlier done
+  const i = PIPE().findIndex(s => s.key === key);
+  for(let j = i - 1; j >= 0; j--){
+    const st = PIPE()[j].stage;
+    if(stStatus(c, st) === 'done') return st;
+  }
   return null;
 }
-function actionable(c,key){
-  const st=stStatus(c,STEP[key].stage);
-  if(key==='original') return st!=='done';
-  return st!=='done' && st!=='skipped' && !!stepInput(c,key);
+/* "actionable" = this step is the next thing worth doing: not settled, and its
+   input exists. Used for the rail's ready dot and for advancing focus. */
+function actionable(c, key){
+  const spec = SPEC(key), st = stStatus(c, spec.stage);
+  if(key === PIPE()[0].key) return st !== 'done';
+  return st !== 'done' && st !== 'skipped' && !!stepInput(c, key);
 }
-function nextActionable(c){ const s=STEPS.find(s=>actionable(c,s.key)); return s?s.key:null; }
+/* Whether the Run button works, which is a different question: running a step
+   is also how you take it *off* skip, so a skipped step is still runnable. What
+   gates it is only whether there is an input to read. */
+function runnable(c, key){
+  return key === PIPE()[0].key || !!stepInput(c, key);
+}
+function nextActionable(c){ const s = PIPE().find(s => actionable(c, s.key)); return s ? s.key : null; }
 function defaultStep(c){
-  const n=nextActionable(c); if(n) return n;
-  for(let i=STEPS.length-1;i>=0;i--){ if(stStatus(c,STEPS[i].stage)==='done') return STEPS[i].key; }
-  return 'original';
+  const n = nextActionable(c); if(n) return n;
+  for(let i = PIPE().length - 1; i >= 0; i--)
+    if(stStatus(c, PIPE()[i].stage) === 'done') return PIPE()[i].key;
+  return PIPE()[0].key;
 }
-/* changing a stage invalidates everything downstream (the CLI removes those
-   stale files). Warn before that throws away a done upscale — it's slow. */
-function cascadeVictims(c,key){
-  const i=STEPS.findIndex(s=>s.key===key);
-  return STEPS.slice(i+1).filter(s=>stStatus(c,s.stage)==='done');
+/* Changing a stage invalidates everything downstream (the CLI removes those
+   stale files). Warn before that throws away a done upscale — it is slow. */
+function cascadeVictims(c, key){
+  const i = PIPE().findIndex(s => s.key === key);
+  return PIPE().slice(i + 1).filter(s => stStatus(c, s.stage) === 'done');
 }
-function okCascade(c,key){
-  const v=cascadeVictims(c,key); if(!v.some(s=>s.key==='upscale')) return true;
-  return confirm(`This rebuilds from the new ${STEP[key].label.toLowerCase()} and `
-    +`removes the existing ${v.map(s=>s.label.toLowerCase()).join(' + ')} — the upscale `
-    +`is slow to regenerate. Continue?`);
+async function okCascade(c, key){
+  const v = cascadeVictims(c, key);
+  if(!v.some(s => s.key === 'upscale')) return true;
+  return ask(`Rebuilding from ${SPEC(key).label.toLowerCase()} removes the existing `
+    + `${v.map(s => s.label.toLowerCase()).join(' and ')}. The upscale is slow to redo.`,
+    'Rebuild');
 }
 
 function renderCard(){
-  align.on=false;
-  const c=state.cards[state.idx]; if(!c){ state.view='library'; return render(); }
-  if(!state.step || !STEP[state.step]) state.step=defaultStep(c);
-  const rail = STEPS.map((s,i)=>{
-    const st=stStatus(c,s.stage), ready=actionable(c,s.key);
-    const cls=[st, state.step===s.key?'current':'', (st==='pending'&&!ready&&s.key!=='original')?'waiting':''].filter(Boolean).join(' ');
-    const ico = st==='done'?'✓' : st==='skipped'?'⤳' : (i+1);
-    const txt = st==='done'?'done' : st==='skipped'?'skipped' : ready?'ready':'waiting';
-    return `<button class="step ${cls}" onclick="focusStep('${s.key}')">
-      <span class="ico">${ico}</span><span class="lbl">${s.label}</span><span class="st">${txt}</span></button>`;
-  }).join('');
-  $('#main').innerHTML = `
-    <div class="nav-cards">
-      <button onclick="state.view='library';render()">← Library</button>
-      <button onclick="stepCard(-1)">‹ Prev</button><button onclick="stepCard(1)">Next ›</button>
-      <b>${c.name}</b><span class="tag">${c.id} · ${state.idx+1}/${state.cards.length} · ←/→ cards · ↑/↓ steps</span>
-    </div>
-    <div class="console">
-      <div class="rail">
-        <div class="who"><h3>${c.name}</h3><div class="sub">${c.id} · ${c.set}</div></div>
-        <div class="steps">${rail}</div>
-        <button class="bad" onclick="delCard()">Delete card</button>
-      </div>
-      <div>${renderViewer(c,state.step)}</div>
-      <div id="steppanel"></div>
-    </div>`;
-  renderStepPanel(c,state.step);
-}
-function renderViewer(c,key){
-  const s=STEP[key], st=stStatus(c,s.stage);
-  if(st==='done') return `<div class="viewer"><img class="stageimg show" src="${viewsrc(c.id,s.stage)}"
-    onclick="lightbox('${imgsrc(c.id,s.stage)}')"></div>`;
-  const inp=stepInput(c,key);
-  if(inp){ const note = st==='skipped' ? `skipped — master keeps the ${inp}` : `input · ${inp} — not yet ${s.label.toLowerCase()}d`;
-    return `<div class="viewer preview"><img class="stageimg show dim" src="${viewsrc(c.id,inp)}"
-      onclick="lightbox('${imgsrc(c.id,inp)}')"><div class="vlabel">${note}</div></div>`; }
-  return `<div class="viewer"><div class="ph">${key==='original'?'no original yet — fetch or import it':'nothing to show yet'}</div></div>`;
-}
-
-/* ---- the focused step's panel (only this step's controls) ---- */
-function renderStepPanel(c,key){
-  const p=$('#steppanel'); if(!p) return;
-  const s=STEP[key], st=stStatus(c,s.stage), ready=actionable(c,key);
-  const pill = st==='done'?'<span class="pill done">✓ done</span>'
-    : st==='skipped'?'<span class="pill skipped">⤳ skipped</span>'
-    : ready?'<span class="pill ready">● ready</span>':'<span class="pill waiting">○ waiting</span>';
-  const io = key==='original' ? '' : `<div class="io">input → <b>${stepInput(c,key)||'—'}</b></div>`;
-  const body = {original:originalBody,border:borderBody,upscale:upscaleBody,grade:gradeBody}[key](c,st,ready);
-  p.innerHTML = `<div class="panel"><h3>${s.label} ${pill}</h3>
-    <div class="desc">${s.desc}</div>${io}${body}
-    <div class="actions">${footer(c,key,st,ready)}</div></div>`;
-}
-function originalBody(){
-  return `<label class="io" style="display:block">replace with a file
-    <input type="file" accept="image/*" onchange="importOriginal(this)"></label>`;
-}
-function borderBody(){ return `<div id="alpanel"></div>`; }
-function upscaleBody(){
-  const models=state.meta.models.map(m=>`<option ${m==='digital-art-4x'?'selected':''}>${m}</option>`).join('');
-  const scales=[1,2,3,4].map(n=>`<option ${n===2?'selected':''}>${n}</option>`).join('');
-  return `<div class="field"><label>model</label><select id="u_model">${models}</select></div>
-    <div class="field"><label>scale</label><select id="u_scale">${scales}</select></div>
-    <div class="field"><label>double</label><input type="checkbox" id="u_double" checked></div>`;
-}
-function gradeBody(){ return `<div class="field"><label>normalize</label><input type="checkbox" id="g_norm" checked></div>`; }
-
-function footer(c,key,st,ready){
-  const s=STEP[key], done=st==='done';
-  let run;
-  if(key==='border') run=`<button class="primary" onclick="startAlign()" ${ready||done?'':'disabled'}>${done?'Re-align':'Align to spec'}</button>`;
-  else if(key==='original') run=`<button class="primary" onclick="refetch()">${done?'Re-fetch':'Fetch'} original</button>`;
-  else run=`<button class="primary" onclick="runStep('${key}')" ${ready||done?'':'disabled'}>${done?'Re-run':'Run '+s.label.toLowerCase()}</button>`;
-  const sec=[];
-  if(s.skippable){
-    if(st==='skipped') sec.push(`<button onclick="pipe('unskip','${key}')">Unskip</button>`);
-    else sec.push(`<button onclick="pipe('skip','${key}')">Skip</button>`);
-    if(done||st==='skipped') sec.push(`<button onclick="pipe('reset','${key}')">Reset</button>`);
+  align.on = false;
+  const c = card();
+  if(!c){                       // a stale/deep link to a card that isn't here
+    if(state.id) toast(`${state.id} is not in this library.`);
+    navigate({view:'library', id:null, step:null}, {replace:true});
+    return;
   }
-  const row2 = sec.length?`<div class="row2">${sec.join('')}</div>`:'';
-  const stat = done?'done — part of the master'
-    : st==='skipped'?'skipped — not applied'
-    : ready?'ready to run'
-    : `waiting on ${key==='original'?'a source image':'an earlier step'}`;
-  return `${run}${row2}<div class="statusline">status: ${stat}</div>`;
+  if(state.face >= c.faces.length) state.face = 0;
+  if(!state.step || SPEC(state.step).key !== state.step) state.step = defaultStep(c);
+  prefetchAround(c);
+  const rows = visible();
+
+  $('#main').innerHTML = `
+    <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+      <button class="btn btn-sm btn-outline-secondary" onclick="go('library')">← Library</button>
+      <div class="btn-group btn-group-sm">
+        <button class="btn btn-outline-secondary" onclick="stepCard(-1)" aria-label="Previous card">‹</button>
+        <button class="btn btn-outline-secondary" onclick="stepCard(1)" aria-label="Next card">›</button>
+      </div>
+      <span class="mono faint" style="font-size:.75rem">
+        ${cardIndex() + 1} / ${rows.length}</span>
+      <span class="ms-auto hint d-none d-md-inline">
+        ←/→ card · ↑/↓ step${twoSided(c) ? ' · F side' : ''} · C compare ·
+        <button class="btn btn-ghost btn-sm py-0 px-1" onclick="showKeys()"
+          title="All keyboard shortcuts">?</button></span>
+    </div>
+    <div class="cardgrid">
+      <div class="rail">
+        <div>
+          <div class="eyebrow">${esc(c.game)} · ${esc(c.set)}</div>
+          <h5 class="mb-0 mt-1">${esc(c.name)}</h5>
+          <div class="mono faint" style="font-size:.75rem">${esc(c.id)}</div>
+          ${kindChips(c) ? `<div class="d-flex flex-wrap gap-1 mt-2">${kindChips(c)}</div>` : ''}
+        </div>
+        ${faceTabs(c)}
+        <div class="film">${filmstrip(c)}</div>
+        ${c.oversized ? `<div class="panel-2 p-2">
+          <div class="eyebrow mb-1">Oversized card</div>
+          <p class="hint mb-0">Printed at ${esc(trimMm(trimOf('oversized')))}mm, not
+            ${esc(trimMm(trimOf('standard')))}. A sheet imposes it at that size on pages
+            of its own (${esc(trimGrid(trimOf('oversized')))}) — nothing to configure.</p>
+        </div>` : ''}
+        ${twoSided(c) ? frontPicker(c) : ''}
+        <button class="btn btn-sm btn-outline-danger" onclick="delCard()">Delete card</button>
+      </div>
+      <div class="stage" id="stagewrap">${renderViewer(c, state.step)}</div>
+      <div id="steppanel"></div>
+      <div id="carddata" style="grid-column:1/-1"></div>
+    </div>`;
+  renderStepPanel(c, state.step);
+  wireViewer(c, state.step);
+  loadDetails(c.id);
 }
 
-const stepOpts=cmd=> cmd==='upscale' ? {model:$('#u_model').value,scale:+$('#u_scale').value,double:$('#u_double').checked}
-  : cmd==='grade' ? {normalize:$('#g_norm').checked} : {};
-async function runStep(cmd){
-  const c=state.cards[state.idx];
-  if(!okCascade(c,cmd)) return;
-  await act('/api/step',{cmd, ids:[c.id], opts:stepOpts(cmd), force:true}, `${cmd} · ${c.id}`);
+function faceTabs(c){
+  if(!twoSided(c)) return '';
+  const last = STAGES()[STAGES().length - 1];
+  return `<div class="faces" role="tablist" aria-label="Card side">${c.faces.map(f => {
+    const done = STAGES().every(s => f.status[s] === 'done');
+    const settled = f.status[last] !== 'pending';
+    const cls = [f.index === state.face ? 'on' : '',
+                 done ? 'settled' : settled ? 'partial' : ''].filter(Boolean).join(' ');
+    return `<button class="${cls}" role="tab" aria-selected="${f.index === state.face}"
+      title="${esc(f.name)}" onclick="focusFace(${f.index})">
+      <i class="fdot"></i>${esc(f.name)}</button>`;
+  }).join('')}</div>`;
+}
+
+/* Which side goes on the paper. A transform card has two real fronts and no back
+   of its own, so this is a choice only you can make — and in a duplex sheet the
+   other side prints on the reverse. */
+function frontPicker(c){
+  const names = c.faces.map(f => f.name);
+  return `<div class="panel-2 p-2">
+    <div class="eyebrow mb-1">Prints on the front</div>
+    <div class="d-flex align-items-center gap-2">
+      <span class="mono" style="font-size:.75rem">${esc(names[c.front_face])}</span>
+      <button class="btn btn-sm btn-ghost ms-auto" onclick="flipPrint()"
+        title="Swap which side prints on the front of the sheet">Swap ⇄</button>
+    </div>
+    <p class="hint mb-0 mt-1">A duplex sheet prints ${esc(names[1 - c.front_face])} on the reverse.</p>
+  </div>`;
+}
+async function flipPrint(){
+  const c = card(); if(!c) return;
+  await act('/api/flip', {ids:[c.id]}, `Flipped ${c.id}`);
+}
+
+function filmstrip(c){
+  return PIPE().map((s, i) => {
+    const st = stStatus(c, s.stage), ready = actionable(c, s.key);
+    const cls = [st, state.step === s.key ? 'current' : '',
+                 ready ? 'ready' : '',
+                 (st === 'pending' && !ready && i > 0) ? 'waiting' : ''].filter(Boolean).join(' ');
+    const cel = st === 'done'
+      ? `<img loading="lazy" alt="" src="${viewsrc(c.id, s.stage, state.face)}">`
+      : `<span class="no">${st === 'skipped' ? '⤳' : i + 1}</span>`;
+    const label = st === 'done' ? 'done' : st === 'skipped' ? 'skipped' : ready ? 'ready' : 'waiting';
+    return `<button class="frame ${cls}" onclick="focusStep('${s.key}')"
+      aria-current="${state.step === s.key}">
+      <span class="cel">${cel}</span>
+      <span class="who"><b>${esc(s.label)}</b><span>${label}</span></span>
+      <span class="dot"></span></button>`;
+  }).join('');
+}
+
+/* ---- the proof ---------------------------------------------------------- */
+function renderViewer(c, key){
+  const s = SPEC(key), st = stStatus(c, s.stage);
+  const inp = stepInput(c, key);
+  const aligning = key === 'border' && marksOn(c);
+
+  if(st === 'done'){
+    // This step's own output. With an input to compare against, the compare tool
+    // can lay the two over each other — off by default, because the thing you
+    // came to look at is the result.
+    // the align marks own the viewer while they are live, so the compare tool
+    // stands down rather than offering a view it cannot show
+    const mode = inp && !aligning ? state.compare : 'off';
+    const out = viewsrc(c.id, s.stage, state.face);
+    // off: the output alone. wipe/fade: the input beneath, the output over it.
+    const base = mode === 'off' ? out : viewsrc(c.id, inp, state.face);
+    const over = mode === 'off' ? '' : `
+      <div class="cmp" id="cmp">
+        <div class="over" id="cover" style="${mode === 'wipe'
+          ? `clip-path:inset(0 0 0 ${state.split}%)` : `opacity:${state.blend / 100}`}">
+          <img alt="${esc(s.label)} output" src="${out}">
+        </div>
+        <span class="tag l">${esc(mode === 'wipe' ? inp : `${100 - state.blend}% ${inp}`)}</span>
+        <span class="tag r">${esc(mode === 'wipe' ? s.stage : `${state.blend}% ${s.stage}`)}</span>
+        ${mode === 'wipe' ? `<div class="bar" id="cbar" style="left:${state.split}%"
+          role="separator" aria-label="Wipe between ${esc(inp)} and ${esc(s.stage)}"></div>` : ''}
+      </div>`;
+    return `
+      <div class="plate">
+        <span class="what"><b>${esc(s.label)}</b><span class="d-none d-sm-inline">
+          · ${esc(mode === 'off' ? s.stage : `${inp} → ${s.stage}`)}</span></span>
+        ${inp && !aligning ? compareControl(inp, s.stage) : ''}
+      </div>
+      <div class="proof"><div class="viewer ${aligning ? 'aligning' : ''}">
+        <img class="stageimg" alt="${esc(s.stage)}" src="${base}">${over}
+      </div></div>
+      ${fullLink(c, s.stage)}`;
+  }
+  if(inp){
+    // an input, shown as it really looks: no dim, no text over the card
+    return `
+      <div class="plate">
+        <span class="what">Showing <b>${esc(inp)}</b><span class="d-none d-sm-inline">
+          — the input</span></span>
+        <span class="pill ${st === 'skipped' ? 'skipped' : 'waiting'}">${
+          st === 'skipped' ? `${esc(s.label.toLowerCase())} skipped` : `not ${esc(s.label.toLowerCase())}d yet`
+        }</span>
+      </div>
+      <div class="proof"><div class="viewer is-input ${aligning ? 'aligning' : ''}">
+        <img class="stageimg" alt="${esc(inp)}" src="${viewsrc(c.id, inp, state.face)}">
+      </div></div>
+      ${fullLink(c, inp)}`;
+  }
+  return `<div class="plate"><span class="what">${esc(s.label)}</span></div>
+    <div class="proof"><div class="viewer"><div class="empty">
+      <div>${key === PIPE()[0].key
+        ? 'No original for this side yet.' : 'Nothing to show until an earlier step runs.'}</div>
+      ${key === PIPE()[0].key
+        ? '<button class="btn btn-sm btn-primary" onclick="refetch()">Fetch original</button>' : ''}
+    </div></div></div>`;
+}
+/* The compare tool: three exclusive modes, plus the fade's blend slider. Only
+   ever rendered when there really are two stages to compare. */
+const COMPARE_MODES = [
+  {key:'off',  label:'Result', title:'Show this step\'s output on its own'},
+  {key:'wipe', label:'Wipe',   title:'Drag a split across the card'},
+  {key:'fade', label:'Fade',   title:'Cross-dissolve between the two stages'},
+];
+function compareControl(inp, stage){
+  const slider = state.compare === 'fade' ? `
+    <label class="blend d-flex align-items-center gap-2">
+      <span class="visually-hidden">Blend ${esc(inp)} into ${esc(stage)}</span>
+      <input type="range" min="0" max="100" step="1" value="${state.blend}"
+             id="cblend" oninput="setBlend(+this.value)">
+      <span class="mono faint flex-shrink-0" style="font-size:.6875rem;width:2.5rem;
+        text-align:right">${state.blend}%</span>
+    </label>` : '';
+  return `<span class="ms-auto d-flex align-items-center gap-2 flex-shrink-0"
+    style="min-width:0">
+    ${slider}
+    <span class="seg flex-shrink-0" role="group" aria-label="Compare with ${esc(inp)}">${
+      COMPARE_MODES.map(m => `<button class="${state.compare === m.key ? 'on' : ''}"
+        title="${esc(m.title)}" onclick="setCompare('${m.key}')">${esc(m.label)}</button>`).join('')}
+    </span></span>`;
+}
+function setCompare(mode){
+  if(state.compare === mode) return;
+  state.compare = mode;
+  const c = card(); if(c) repaintProof(c, state.step);
+}
+function setBlend(v){
+  state.blend = clamp(v, 0, 100);
+  const over = $('#cover');
+  if(over) over.style.opacity = String(state.blend / 100);
+  // the tags read out the mix, so they have to follow it
+  const l = $('.cmp .tag.l'), r = $('.cmp .tag.r'), inp = stepInput(card(), state.step);
+  if(l) l.textContent = `${100 - state.blend}% ${inp}`;
+  if(r) r.textContent = `${state.blend}% ${SPEC(state.step).stage}`;
+  const out = $('#cblend')?.nextElementSibling;
+  if(out) out.textContent = state.blend + '%';
+}
+/* Switching compare mode changes only the proof, so it repaints in place — the
+   rail, the settings panel and the card-data sheet are untouched. */
+function repaintProof(c, key){
+  const host = $('#stagewrap'); if(!host) return;
+  host.innerHTML = renderViewer(c, key);
+  wireViewer(c, key);
+}
+
+function fullLink(c, stage){
+  return `<a class="hint" href="${fullsrc(c.id, stage, state.face)}" target="_blank"
+    rel="noopener">Open the full-resolution ${esc(stage)} file ↗</a>`;
+}
+
+/* The curtain: dragging the bar wipes between the step's input and its output.
+   Clipping the top layer (rather than cross-fading) keeps both images at their
+   true colour, which is the point of comparing them at all. */
+function wireViewer(c, key){
+  const bar = $('#cbar');
+  if(bar){
+    const set = clientX => {
+      const r = $('#cmp').getBoundingClientRect();
+      state.split = clamp((clientX - r.left) / r.width * 100, 0, 100);
+      bar.style.left = state.split + '%';
+      $('#cover').style.clipPath = `inset(0 0 0 ${state.split}%)`;
+    };
+    bar.addEventListener('pointerdown', ev => {
+      ev.preventDefault();
+      const move = e => set(e.clientX);
+      const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+      addEventListener('pointermove', move); addEventListener('pointerup', up);
+    });
+  }
+  if(key === 'border' && marksOn(c)) startAlign();
+  else if(key === 'border'){ align.on = false; renderAlignPanel(); }
+}
+
+/* ---- card data: everything the provider says about this card -------------
+   A live API call (nothing here is library state), so it is fetched once per
+   card and kept in `state.details` — coming back to the card, or running a
+   step, repaints from that cache instead of hitting the provider again. */
+async function loadDetails(id){
+  const host = $('#carddata'); if(!host) return;
+  if(state.details[id]){ host.innerHTML = detailsPanel(state.details[id]); return; }
+  host.innerHTML = detailsShell('<p class="hint mb-0">Loading from the card API…</p>');
+  let d;
+  try{ d = await get('/api/details/' + encodeURIComponent(id)); }
+  catch(e){ d = {error: String(e)}; }
+  state.details[id] = d;
+  // the user may have navigated away while the provider was thinking
+  if(state.view === 'card' && state.id === id && $('#carddata'))
+    $('#carddata').innerHTML = detailsPanel(d);
+}
+function detailsShell(body, source){
+  return `<div class="panel p-3">
+    <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+      <span class="eyebrow">Card data</span>
+      ${source ? `<span class="chip">${esc(source)}</span>` : ''}
+    </div>${body}</div>`;
+}
+function detailsPanel(d){
+  if(d.error) return detailsShell(`<p class="mb-2" style="color:var(--bad);font-size:.8125rem">${esc(d.error)}</p>
+    <button class="btn btn-sm btn-outline-secondary" onclick="retryDetails()">Try again</button>`);
+  const links = (d.links || []).map(l =>
+    `<a class="btn btn-sm btn-outline-secondary" href="${esc(l.url)}"
+        target="_blank" rel="noopener noreferrer">${esc(l.label)} ↗</a>`).join('');
+  const cols = factColumns(d.groups || []);
+  _factCols = cols.length;
+  const body = cols.length
+    ? `<div class="facts" style="grid-template-columns:repeat(${cols.length},1fr)">${
+        cols.map(col => `<div class="factcol">${col.map(factGroup).join('')}</div>`).join('')}</div>`
+    : '<p class="hint mb-0">This API returned nothing else.</p>';
+  return detailsShell(`${links ? `<div class="linkrow mb-3">${links}</div>` : ''}${relatedRow(d)}${body}`, d.source);
+}
+/* Cards this one is printed alongside. A meld pair is three physical cards —
+   both halves and the melded card — so the honest thing is to file them as three
+   cards and say so here, where each can be added in one click. */
+function relatedRow(d){
+  const rel = d.related || [];
+  if(!rel.length) return '';
+  const missing = rel.filter(r => r.id && !r.have).length;
+  return `<div class="panel-2 p-2 px-3 mb-3">
+    <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+      <span class="eyebrow">Printed alongside</span>
+      ${missing ? `<button class="btn btn-sm btn-primary ms-auto" onclick="addRelated()">
+        Add all ${missing} missing</button>` : '<span class="chip good ms-auto">all in library</span>'}
+    </div>
+    <div class="rels">${rel.map(r => {
+      const known = r.id && r.have;
+      const action = known
+        ? `<a class="btn btn-sm btn-ghost" href="/card/${encodeURIComponent(r.id)}"
+             onclick="return openCard('${esc(r.id)}', event)">Open</a>`
+        : r.id
+          ? `<button class="btn btn-sm btn-ghost" onclick="addRelated('${esc(r.id)}')">Add</button>`
+          : `<span class="chip warn" title="This API gave no id for that printing — search it by name">no id</span>`;
+      return `<div class="rel">
+        <span class="chip">${esc(r.label)}</span>
+        <span class="nm">${esc(r.name)}</span>
+        <span class="mono faint">${esc(r.id || '')}</span>
+        ${action}</div>`;
+    }).join('')}</div>
+    <p class="hint mb-0 mt-2">${esc(d.layout_note || '')}</p>
+  </div>`;
+}
+/* Adding one, or every one still missing — the same `fetch` the CLI runs. */
+async function addRelated(id){
+  const d = state.details[state.id]; if(!d) return;
+  const ids = id ? [id] : (d.related || []).filter(r => r.id && !r.have).map(r => r.id);
+  if(!ids.length) return;
+  if(!await act('/api/fetch', {ids}, `Added ${ids.join(', ')}`)) return;
+  delete state.details[state.id];
+  loadDetails(state.id);
+}
+
+function factGroup(g){
+  return `<section class="factgroup"><span class="eyebrow">${esc(g.title)}</span>
+    ${g.facts.map(f => f.block
+      ? `<div class="factblock"><div class="flabel">${esc(f.label)}</div><p>${esc(f.value)}</p></div>`
+      : `<div class="factrow"><span class="flabel">${esc(f.label)}</span><span class="fval">${esc(f.value)}</span></div>`
+    ).join('')}</section>`;
+}
+/* Fill as many ~300px columns as the panel is wide, each group going to the
+   shortest column so far — reading order stays top-to-bottom-then-across and
+   no column ends up carrying the whole sheet. Prose counts for more than a row
+   because it wraps. */
+const FACTCOL_MIN = 300;
+function factColumns(groups){
+  const width = ($('#carddata') || document.body).clientWidth - 32;
+  const n = Math.max(1, Math.min(5, Math.floor(width / FACTCOL_MIN)));
+  if(!groups.length) return [];
+  const cols = Array.from({length: n}, () => []), load = new Array(n).fill(0);
+  for(const g of groups){
+    const weight = 1.2 + g.facts.reduce((s, f) => s + (f.block ? 1 + f.value.length / 90 : 1), 0);
+    const i = load.indexOf(Math.min(...load));
+    cols[i].push(g); load[i] += weight;
+  }
+  return cols.filter(c => c.length);
+}
+function retryDetails(){ delete state.details[state.id]; loadDetails(state.id); }
+/* The column count is width-derived, so a resize has to re-lay it out — but
+   only when the count actually changes, and never mid-drag. */
+let _factCols = 0, _resizeTimer;
+addEventListener('resize', () => {
+  clearTimeout(_resizeTimer);
+  _resizeTimer = setTimeout(() => {
+    const host = $('#carddata'), d = state.details[state.id];
+    if(!host || !d || d.error) return;
+    const n = factColumns(d.groups || []).length;
+    if(n !== _factCols){ _factCols = n; host.innerHTML = detailsPanel(d); }
+  }, 150);
+});
+
+/* ---- the focused step's panel ------------------------------------------
+   Built entirely from the step's declared schema, so every step shows its
+   settings the moment you focus it and none of them is a click-through. */
+function renderStepPanel(c, key){
+  const p = $('#steppanel'); if(!p) return;
+  const s = SPEC(key), st = stStatus(c, s.stage), ready = actionable(c, key);
+  const pill = st === 'done' ? '<span class="pill done">done</span>'
+    : st === 'skipped' ? '<span class="pill skipped">skipped</span>'
+    : ready ? '<span class="pill ready">ready</span>' : '<span class="pill waiting">waiting</span>';
+  const io = key === PIPE()[0].key ? ''
+    : `<div class="mono faint mt-2" style="font-size:.6875rem">reads ${esc(stepInput(c, key) || '—')}</div>`;
+
+  p.innerHTML = `<div class="panel p-3 steppanel">
+    <div class="d-flex align-items-center gap-2">
+      <h6 class="mb-0">${esc(s.label)}</h6>${pill}</div>
+    <p class="hint mb-0 mt-1">${esc(s.blurb)}</p>
+    ${io}
+    ${s.options.length ? `<hr class="rule" style="margin:${'.875rem 0'}">
+      <div class="settings" id="stepsettings">${s.options.map(optField).join('')}</div>` : ''}
+    ${key === 'border' ? '<div id="alpanel"></div>' : ''}
+    ${key === PIPE()[0].key ? sourceExtra() : ''}
+    <div class="d-grid gap-2 mt-3" id="stepactions">${footer(c, key, st)}</div>
+  </div>`;
+}
+
+/* One control per declared option, its kind choosing the widget. */
+function optField(o){
+  const id = 'so_' + o.key;
+  let ctl;
+  if(o.kind === 'bool'){
+    ctl = `<div class="form-check mb-0">
+      <input class="form-check-input" type="checkbox" id="${id}" ${o.default ? 'checked' : ''}
+             onchange="onSetting()">
+      <label class="form-check-label" style="font-size:.8125rem" for="${id}">${esc(o.label)}</label></div>`;
+    return `<div class="opt">${ctl}<span class="why">${esc(o.help)}</span></div>`;
+  }
+  if(o.kind === 'choice'){
+    const auto = o.optional
+      ? `<option value="">Automatic (card's set)</option>` : '';
+    ctl = `<select class="form-select form-select-sm mono" id="${id}" onchange="onSetting()">${auto}${
+      o.choices.map(v => `<option ${String(v) === String(o.default) ? 'selected' : ''}
+        >${esc(String(v))}</option>`).join('')}</select>`;
+  } else {
+    ctl = `<input class="form-control form-control-sm mono" type="number" step="any" id="${id}"
+      value="${esc(o.default ?? '')}" oninput="onSetting()">`;
+  }
+  return `<div class="opt">
+    <div class="setting"><label for="${id}">${esc(o.label)}</label>${ctl}</div>
+    <span class="why">${esc(o.help)}</span></div>`;
+}
+/* Read the panel back into the wire shape the API validates. */
+function stepSettings(key){
+  const out = {};
+  for(const o of SPEC(key).options){
+    const el = $('#so_' + o.key); if(!el) continue;
+    if(o.kind === 'bool') out[o.key] = el.checked;
+    else if(el.value !== '') out[o.key] = o.kind === 'number' ? +el.value : el.value;
+  }
+  return out;
+}
+/* A settings change while the border marks are live changes what the fit would
+   do, so the ghost trim and the readout have to follow it immediately. */
+function onSetting(){
+  if(align.on){ align.guide = $('#so_frame') ? $('#so_frame').value : ''; computeExtend(); }
+}
+function sourceExtra(){
+  return `<hr class="rule" style="margin:.875rem 0">
+    <label class="eyebrow d-block mb-1" for="o_file">Replace this side with a file</label>
+    <input class="form-control form-control-sm" type="file" id="o_file" accept="image/*"
+           onchange="importOriginal(this)">`;
+}
+
+function footer(c, key, st){
+  const s = SPEC(key), done = st === 'done';
+  const first = key === PIPE()[0].key;
+  // border without marks measures the border itself, so the button says so
+  const measuring = key === 'border' && !(align.on && align.plan);
+  const verb = measuring ? 'Measure & reshape' : s.run_label;
+  const label = done ? (first ? 'Fetch again' : `${verb} again`) : verb;
+  const run = first
+    ? `<button class="btn btn-sm btn-primary" onclick="refetch()">${esc(label)}</button>`
+    : `<button class="btn btn-sm btn-primary" id="runbtn" onclick="runStep('${key}')"
+        ${runnable(c, key) ? '' : 'disabled'}
+        title="${measuring
+          ? 'Reads the border position off the image, then fits to the frame spec'
+          : 'Fits to the frame spec using the marks you placed'}"
+        >${esc(label)}</button>`;
+
+  const sec = [];
+  if(s.skippable){
+    sec.push(st === 'skipped'
+      ? `<button class="btn btn-sm btn-outline-secondary" onclick="pipe('unskip','${key}')">Unskip</button>`
+      : `<button class="btn btn-sm btn-outline-secondary" onclick="pipe('skip','${key}')">Skip</button>`);
+    if(done || st === 'skipped')
+      sec.push(`<button class="btn btn-sm btn-outline-secondary" onclick="pipe('reset','${key}')">Reset</button>`);
+  }
+  if(twoSided(c) && !first)
+    sec.push(`<button class="btn btn-sm btn-outline-secondary" onclick="runStep('${key}', true)"
+      title="Run this step on both sides with these settings">Both sides</button>`);
+  const row = sec.length ? `<div class="btn-group btn-group-sm w-100">${sec.join('')}</div>` : '';
+  // no restatement of the step's state here — the pill in the header, the rail
+  // and the plate above the card already say it, three times over
+  return `${run}${row}`;
+}
+
+/* Every mutation names the side it acts on, so the other side is untouched. */
+async function runStep(cmd, bothSides){
+  const c = card();
+  if(!await okCascade(c, cmd)) return;
+  const body = {cmd, ids:[c.id], settings:stepSettings(cmd), force:true};
+  if(!bothSides && twoSided(c)) body.face = state.face + 1;
+  if(cmd === 'border'){
+    if(align.on && align.plan){   // marks are placed: fit to exactly those
+      body.inner = {top:align.blue.t, right:align.blue.r,
+                    bottom:align.blue.b, left:align.blue.l};
+    } else {
+      // nobody placed marks, and a reshape with no idea where the border is
+      // would do nothing at all — so measure it first and say so on the button
+      body.auto = true;
+    }
+  }
+  await act('/api/step', body, `${cmd} · ${c.id}`);
   afterStep(cmd);
 }
 async function pipe(cmd, key){
-  const c=state.cards[state.idx];
-  if((cmd==='skip'||cmd==='reset') && !okCascade(c,key)) return;
-  await act('/api/step',{cmd, ids:[c.id], opts:{step:key}}, `${cmd} ${key} · ${c.id}`);
+  const c = card();
+  if((cmd === 'skip' || cmd === 'reset') && !await okCascade(c, key)) return;
+  const body = {cmd, step:key, ids:[c.id]};
+  if(twoSided(c)) body.face = state.face + 1;
+  await act('/api/step', body, `${cmd} ${key} · ${c.id}`);
   afterStep(cmd);
 }
-async function refetch(){ const c=state.cards[state.idx];
-  if(!okCascade(c,'original')) return;
-  await act('/api/fetch',{ids:[c.id]}, `fetch · ${c.id}`); afterStep('run'); }
-async function importOriginal(inp){
-  if(!inp.files[0])return; const c=state.cards[state.idx];
-  if(!okCascade(c,'original')){ inp.value=''; return; }
-  const fd=new FormData(); fd.append('file',inp.files[0]); fd.append('id',c.id); fd.append('stage','original');
-  $('#busy').classList.add('on');
-  const r=await fetch('/api/import',{method:'POST',body:fd}); const j=await r.json();
-  $('#busy').classList.remove('on'); toast(j.ok?'imported':'failed:\n'+tail(j.log)); await refresh(true); afterStep('run');
+async function refetch(){
+  const c = card();
+  if(!await okCascade(c, PIPE()[0].key)) return;
+  const body = {ids:[c.id], game:c.game};
+  if(twoSided(c)) body.face = state.face + 1;
+  await act('/api/fetch', body, `Fetched ${c.id}`);
+  afterStep('run');
 }
-function afterStep(cmd){   // auto-advance focus on run/skip; stay put on reset/unskip
-  const c=state.cards[state.idx]; if(!c) return;
-  if(cmd!=='reset' && cmd!=='unskip'){ const n=nextActionable(c); if(n) state.step=n; }
-  renderCard();
+async function importOriginal(inp){
+  if(!inp.files[0]) return;
+  const c = card();
+  if(!await okCascade(c, PIPE()[0].key)){ inp.value = ''; return; }
+  const fd = new FormData();
+  fd.append('file', inp.files[0]); fd.append('id', c.id);
+  fd.append('stage', PIPE()[0].stage); fd.append('game', c.game);
+  if(twoSided(c)) fd.append('face', String(state.face + 1));
+  $('#busy').classList.add('on');
+  const r = await fetch('/api/import', {method:'POST', body:fd});
+  const j = await r.json();
+  $('#busy').classList.remove('on');
+  toast(j.ok ? 'Imported' : 'Failed\n' + tail(j.log || JSON.stringify(j)));
+  await refresh(true); afterStep('run');
+}
+function afterStep(cmd){   // advance focus on run/skip; stay put on reset/unskip
+  const c = card(); if(!c) return;
+  let step = state.step;
+  if(cmd !== 'reset' && cmd !== 'unskip'){ const n = nextActionable(c); if(n) step = n; }
+  // replace, not push: the focus moved as a *result* of the action, so Back
+  // should leave the card, not walk back through the steps it advanced through
+  navigate({step}, {replace:true});
 }
 
-/* ---------- frame align ---------------------------------------------------
-   Drag the four lines onto the card's actual inner border edge. From the card's
-   era (set id) we know the true border width, so one per-edge extension fixes
-   aspect AND border width together — no automatic guessing. Then upscale.    */
-const align = { on:false, meas:null, blue:{t:0,r:0,b:0,l:0}, plan:null, stretch:false, oldAspect:'' };
-const mmr = v => (Math.round(v*10)/10).toFixed(1);
+async function delCard(){
+  const c = card();
+  if(!await ask(`Delete ${c.id} and every file in its folder?`, 'Delete')) return;
+  await act('/api/card/' + encodeURIComponent(c.id), {_method:'DELETE'}, 'Deleted');
+  go('library');
+}
+
+/* ---------- frame align --------------------------------------------------
+   Put the four marks on the card's actual inner border edge. The card's game +
+   set give the true border width, so one per-edge extension fixes aspect AND
+   border together — never guessed automatically.
+
+   The marks are always live while Border is focused: there is no mode to enter
+   and nothing to cancel. A mark can be dragged, or selected and nudged with the
+   arrow keys, or typed as a percentage — because "close enough by eye" is
+   exactly what the border step exists to avoid. */
+const align = {
+  on:false, meas:null, blue:{t:.08, r:.08, b:.08, l:.08},
+  plan:null, guide:'', sel:null, img:null,
+  // which card+side the current marks were placed on, so switching either one
+  // starts from a fresh rectangle instead of inheriting someone else's border
+  owner:null,
+  // whether the marks are drawn on the card. Not a mode you enter — a setting in
+  // the panel like every other, and left null so it can default per state: on
+  // while there is a border to place, off once there is a result to look at
+  // (the marks live over the source, so they'd hide it).
+  show:null,
+};
+/* The marks are live by default exactly when there is still a border to place. */
+/* Inline handlers must never touch a top-level object by name. An inline
+   handler's scope chain starts at the *element*, and an HTMLElement carries a
+   legacy `align` property — so `align.show = …` in an attribute quietly writes
+   to a discarded String wrapper instead of the align state. Every handler goes
+   through a named function for that reason. */
+function toggleMarks(el){ align.show = el.checked; renderCard(); }
+function resetMarks(){
+  align.blue = {t:.08, r:.08, b:.08, l:.08};
+  positionLines(); computeExtend(); syncRunLabel();
+}
+function setSearchRelated(on){ state.search.related = on; }
+
+const marksOn = c => align.show === null
+  ? stStatus(c, SPEC('border').stage) !== 'done' : align.show;
+const EDGE_NAME = {t:'top', r:'right', b:'bottom', l:'left'};
+
 async function startAlign(){
-  const c=state.cards[state.idx]; if(!c) return;
-  align.on=true;
-  try{ align.meas=await get('/api/frame/'+c.id+'?stage=original'); }catch(e){ align.meas=null; }
-  const m=align.meas;
-  if(!m || m.error){ toast('need an original image to align'); align.on=false; return; }
-  const v=$('.viewer');                          // show the scan at its own aspect (undistorted)
-  if(v){ align.oldAspect=v.style.aspectRatio; v.style.aspectRatio=`${m.w} / ${m.h}`; }
-  align.blue={t:0.08,r:0.08,b:0.08,l:0.08};      // a visible starting rectangle to drag onto the border
-  buildAlignLayer(c); renderAlignPanel(); positionLines(); computeExtend();
+  const c = card(); if(!c) return;
+  try {
+    align.meas = await get(`/api/frame/${encodeURIComponent(c.id)}`
+      + `?stage=${PIPE()[0].stage}&face=${state.face}`);
+  } catch { align.meas = null; }
+  const m = align.meas;
+  if(!m || m.error){ align.on = false; renderAlignPanel(); return; }
+  align.on = true;
+  const owner = `${c.id}/${state.face}`;
+  const fresh = align.owner !== owner;
+  if(fresh){ align.owner = owner; align.blue = {t:.08, r:.08, b:.08, l:.08}; }
+  align.guide = $('#so_frame') ? $('#so_frame').value : '';
+  // show the scan at its own aspect: the marks measure the source, undistorted
+  const v = $('.viewer');
+  if(v) v.style.aspectRatio = `${m.w} / ${m.h}`;
+  // the loupe reads real source pixels, so it needs the image itself
+  align.img = new Image();
+  align.img.src = viewsrc(c.id, PIPE()[0].stage, state.face);
+  buildAlignLayer(c);
+  renderAlignPanel();
+  positionLines();
+  computeExtend();
+  // land the marks on a measurement rather than on an arbitrary 8%: it is where
+  // the border actually is, and every mark is still yours to move
+  if(fresh) measureBorder();
 }
 function buildAlignLayer(c){
-  const v=$('.viewer'); if(!v) return;
-  document.querySelectorAll('.stageimg').forEach(el=>el.style.visibility='hidden');
-  const old=$('#allayer'); if(old) old.remove();
-  const layer=document.createElement('div'); layer.className='alignlayer'; layer.id='allayer';
-  layer.innerHTML=`<img class="al-work" id="al_work" src="${viewsrc(c.id,'original')}">
-    <div class="al-line top" data-e="t"><span class="knob">T</span></div>
-    <div class="al-line bottom" data-e="b"><span class="knob">B</span></div>
-    <div class="al-line left" data-e="l"><span class="knob">L</span></div>
-    <div class="al-line right" data-e="r"><span class="knob">R</span></div>`;
+  endDrag();
+  const v = $('.viewer'); if(!v) return;
+  v.classList.add('aligning');
+  $$('.stageimg, .cmp').forEach(el => { el.style.visibility = 'hidden'; });
+  $('#allayer')?.remove();
+  const layer = document.createElement('div');
+  layer.className = 'alignlayer'; layer.id = 'allayer';
+  layer.innerHTML = `
+    <img class="al-work" alt="Original scan" src="${viewsrc(c.id, PIPE()[0].stage, state.face)}">
+    <div class="al-ghost" id="al_ghost"></div>
+    <div class="al-band" id="al_band"><i></i></div>
+    ${['top','bottom','left','right'].map(e => `
+      <div class="al-line ${e}" data-e="${e[0]}" tabindex="0"
+           role="slider" aria-label="${e} border edge">
+        <span class="al-tag">${e[0].toUpperCase()}</span>
+        <span class="al-grip" style="${e === 'top' || e === 'bottom' ? 'left:25%' : 'top:25%'}"></span>
+        <span class="al-grip" style="${e === 'top' || e === 'bottom' ? 'left:75%' : 'top:75%'}"></span>
+      </div>`).join('')}`;
   v.appendChild(layer);
-  layer.querySelectorAll('.al-line').forEach(h=>h.addEventListener('pointerdown',startDrag));
+  layer.querySelectorAll('.al-line').forEach(h => {
+    h.addEventListener('pointerdown', startDrag);
+    h.addEventListener('focus', () => selectEdge(h.dataset.e));
+  });
 }
-function positionLines(){ const b=align.blue;
-  const set=(sel,prop,val)=>{ const el=$(sel); if(el) el.style[prop]=val+'%'; };
-  set('.al-line.top','top',b.t*100); set('.al-line.bottom','top',(1-b.b)*100);
-  set('.al-line.left','left',b.l*100); set('.al-line.right','left',(1-b.r)*100); }
+function selectEdge(e){
+  align.sel = e;
+  $$('.al-line').forEach(el => el.classList.toggle('sel', el.dataset.e === e));
+}
+function positionLines(){
+  const b = align.blue;
+  const set = (sel, prop, val) => { const el = $(sel); if(el) el.style[prop] = val + '%'; };
+  set('.al-line.top','top', b.t*100);   set('.al-line.bottom','top', (1-b.b)*100);
+  set('.al-line.left','left', b.l*100); set('.al-line.right','left', (1-b.r)*100);
+  $$('.al-line').forEach(el => {
+    const v = align.blue[el.dataset.e];
+    el.setAttribute('aria-valuenow', (v*100).toFixed(2));
+    const tag = el.querySelector('.al-tag');
+    if(tag) tag.textContent = `${el.dataset.e.toUpperCase()} ${(v*100).toFixed(2)}%`;
+  });
+  syncEdgeFields();
+}
+function setEdge(e, v){
+  const b = align.blue;
+  const other = {t:'b', b:'t', l:'r', r:'l'}[e];
+  align.blue[e] = clamp(v, 0, 1 - b[other] - 0.05);
+  positionLines(); computeExtend();
+}
+/* One drag at a time, and it ends even if the pointer never reports coming up —
+   a lost capture, a cancelled touch or a pointer leaving the window would
+   otherwise leave the mark following the cursor forever. */
+let _drag = null;
 function startDrag(ev){
   ev.preventDefault(); ev.stopPropagation();
-  const edge=ev.currentTarget.dataset.e, r=$('.viewer').getBoundingClientRect();
-  const cl=(v,hi)=>Math.max(0,Math.min(hi,v));
-  ev.currentTarget.classList.add('drag');
-  const move=e=>{ const b=align.blue;
-    if(edge==='t') b.t=cl((e.clientY-r.top)/r.height, 1-b.b-0.05);
-    else if(edge==='b') b.b=cl((r.bottom-e.clientY)/r.height, 1-b.t-0.05);
-    else if(edge==='l') b.l=cl((e.clientX-r.left)/r.width, 1-b.r-0.05);
-    else if(edge==='r') b.r=cl((r.right-e.clientX)/r.width, 1-b.l-0.05);
-    positionLines(); computeExtend(); };
-  const up=()=>{ document.removeEventListener('pointermove',move); document.removeEventListener('pointerup',up);
-    document.querySelectorAll('.al-line').forEach(h=>h.classList.remove('drag')); };
-  document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
-}
-/* live preview only — mirrors cardbleed.solve_fit (authoritative on apply).
-   Reshapes to the exact card aspect with borders as close to the era spec as
-   possible (exactly, with stretch); an already-over-target edge may be shaved. */
-function solveFit(m,b,stretch){
-  const g={top:m.guide.inset[0],right:m.guide.inset[1],bottom:m.guide.inset[2],left:m.guide.inset[3]};
-  const cw=m.card_w_mm, ch=m.card_h_mm, w=m.w, h=m.h;
-  let cur={top:b.t*h,right:b.r*w,bottom:b.b*h,left:b.l*w};   // current border px
-  let iw=w-cur.left-cur.right, ih=h-cur.top-cur.bottom;
-  if(iw<=0||ih<=0) return null;
-  const ca=cw/ch, expInner=ca*(1-g.left-g.right)/(1-g.top-g.bottom);
-  let w2=w, h2=h, sx=1, sy=1;
-  if(stretch){
-    if(iw/ih>expInner) sy=(iw/ih)/expInner; else sx=expInner/(iw/ih);
-    cur={top:cur.top*sy,right:cur.right*sx,bottom:cur.bottom*sy,left:cur.left*sx};
-    iw*=sx; ih*=sy; w2=w*sx; h2=h*sy;
-  }
-  const a=iw/cw, c=ih/ch, p=1-g.left-g.right, q=1-g.top-g.bottom;
-  let u=(a*p+c*q)/(a*a+c*c);
-  u=Math.min(u, 1/Math.max(iw/cw, ih/ch));                  // never shave into the art
-  const k=1/u, tw=cw*k, th=ch*k;
-  const split=(budget,ta,tb,ca_,cb)=>{
-    const loA=-ca_, loB=-cb, surplus=budget-(ta-ca_)-(tb-cb);
-    let ea=(ta-ca_)+surplus/2, eb=(tb-cb)+surplus/2;
-    if(ea<loA){ ea=loA; eb=budget-loA; } if(eb<loB){ eb=loB; ea=budget-loB; }
-    return [ea,eb];
+  if(_drag) endDrag();
+  const line = ev.currentTarget, edge = line.dataset.e;
+  const r = $('.viewer').getBoundingClientRect();
+  selectEdge(edge); line.focus({preventScroll:true});
+  const move = e => {
+    if(edge === 't') setEdge('t', (e.clientY - r.top) / r.height);
+    else if(edge === 'b') setEdge('b', (r.bottom - e.clientY) / r.height);
+    else if(edge === 'l') setEdge('l', (e.clientX - r.left) / r.width);
+    else setEdge('r', (r.right - e.clientX) / r.width);
+    showLoupe(edge, e.clientX, e.clientY, r);
   };
-  const [eL,eR]=split(tw-w2, g.left*tw, g.right*tw, cur.left, cur.right);
-  const [eT,eB]=split(th-h2, g.top*th, g.bottom*th, cur.top, cur.bottom);
-  const ext={left:eL,right:eR,top:eT,bottom:eB}, bd={};
-  for(const e of ['top','right','bottom','left'])
-    bd[e]=(cur[e]+ext[e])/((e==='left'||e==='right')?tw:th);
-  return {tw:Math.round(tw),th:Math.round(th),borders:bd,
-    cropped:['top','right','bottom','left'].filter(e=>ext[e]<-0.5)};
+  _drag = {move, line};
+  for(const type of ['pointermove', 'pointerup', 'pointercancel'])
+    addEventListener(type, type === 'pointermove' ? move : endDrag);
+  try { line.setPointerCapture(ev.pointerId); } catch { /* synthetic pointer */ }
+  move(ev);
 }
-function computeExtend(){ align.plan=solveFit(align.meas,align.blue,align.stretch); renderExtReadout(); }
+function endDrag(){
+  if(!_drag) return;
+  const {move} = _drag;
+  _drag = null;
+  removeEventListener('pointermove', move);
+  removeEventListener('pointerup', endDrag);
+  removeEventListener('pointercancel', endDrag);
+  hideLoupe();
+}
+/* Arrow keys nudge the selected mark. Shift is a coarse step, plain is fine —
+   fine being roughly one source pixel, which is as precise as the image is. */
+function nudge(dv){
+  if(!align.sel) return;
+  setEdge(align.sel, align.blue[align.sel] + dv);
+  const r = $('.viewer')?.getBoundingClientRect();
+  if(r) showLoupeAtMark(align.sel, r);
+}
+
+/* ---- the loupe ---------------------------------------------------------
+   Source pixels at 6× with a crosshair on the mark, parked in whichever page
+   corner is furthest from the pointer so it never hides the edge you are
+   aiming at. */
+const LOUPE = {zoom: 6, size: 156, w: 180, h: 204};
+/* Park it in the corner of the *proof's own column* that is furthest from the
+   pointer: furthest-from-the-cursor keeps it off the edge you are aiming at, and
+   staying inside that column keeps it off the readout you are aiming *for*. */
+function loupeCorner(x, y){
+  const host = $('#stagewrap');
+  const a = host ? host.getBoundingClientRect()
+                 : {left: 0, right: innerWidth, top: 0, bottom: innerHeight};
+  const pad = 12;
+  const midX = (a.left + a.right) / 2, midY = (a.top + a.bottom) / 2;
+  return {
+    left: `${Math.round(x < midX ? a.right - LOUPE.w - pad : a.left + pad)}px`,
+    top:  `${Math.round(clamp(y < midY ? a.bottom - LOUPE.h - pad : a.top + pad,
+                              pad, innerHeight - LOUPE.h - pad))}px`,
+  };
+}
+function showLoupe(edge, px, py, rect){
+  const box = $('#loupe'), img = align.img;
+  if(!box || !img || !img.naturalWidth) return;
+  const b = align.blue;
+  // the mark's position in the displayed rect, then in source pixels
+  const fx = edge === 'l' ? b.l : edge === 'r' ? 1 - b.r : (px - rect.left) / rect.width;
+  const fy = edge === 't' ? b.t : edge === 'b' ? 1 - b.b : (py - rect.top) / rect.height;
+  paintLoupe(edge, fx, fy);
+  Object.assign(box.style, loupeCorner(px, py));
+  box.hidden = false;
+}
+function showLoupeAtMark(edge, rect){
+  const b = align.blue;
+  const fx = edge === 'l' ? b.l : edge === 'r' ? 1 - b.r : 0.5;
+  const fy = edge === 't' ? b.t : edge === 'b' ? 1 - b.b : 0.5;
+  paintLoupe(edge, fx, fy);
+  const box = $('#loupe');
+  Object.assign(box.style, loupeCorner(rect.left + rect.width * fx, rect.top + rect.height * fy));
+  box.hidden = false;
+  clearTimeout(showLoupeAtMark._t);
+  showLoupeAtMark._t = setTimeout(hideLoupe, 1400);
+}
+function paintLoupe(edge, fx, fy){
+  const box = $('#loupe'), img = align.img;
+  const cv = box.querySelector('canvas'), ctx = cv.getContext('2d');
+  const src = LOUPE.size / LOUPE.zoom;                 // source px shown
+  const sx = fx * img.naturalWidth - src / 2, sy = fy * img.naturalHeight - src / 2;
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, LOUPE.size, LOUPE.size);
+  ctx.drawImage(img, sx, sy, src, src, 0, 0, LOUPE.size, LOUPE.size);
+  const mid = LOUPE.size / 2;
+  ctx.strokeStyle = '#f2418c'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  if(edge === 't' || edge === 'b'){ ctx.moveTo(0, mid + .5); ctx.lineTo(LOUPE.size, mid + .5); }
+  else { ctx.moveTo(mid + .5, 0); ctx.lineTo(mid + .5, LOUPE.size); }
+  ctx.stroke();
+  $('#lp_edge').textContent = EDGE_NAME[edge];
+  $('#lp_val').textContent = (align.blue[edge] * 100).toFixed(2) + '%';
+}
+function hideLoupe(){ const b = $('#loupe'); if(b) b.hidden = true; }
+
+/* Live preview only — mirrors cardbleed.solve_fit (authoritative on apply).
+   Reshapes to the exact card aspect with borders as close to the spec as
+   possible (exactly, with stretch); an already-over-target edge may be shaved. */
+function solveFit(m, b, stretch, guide){
+  const g = {top:guide.inset[0], right:guide.inset[1], bottom:guide.inset[2], left:guide.inset[3]};
+  const cw = m.card_w_mm, ch = m.card_h_mm, w = m.w, h = m.h;
+  let cur = {top:b.t*h, right:b.r*w, bottom:b.b*h, left:b.l*w};   // current border px
+  let iw = w - cur.left - cur.right, ih = h - cur.top - cur.bottom;
+  if(iw <= 0 || ih <= 0) return null;
+  const ca = cw/ch, expInner = ca*(1-g.left-g.right)/(1-g.top-g.bottom);
+  let w2 = w, h2 = h, sx = 1, sy = 1;
+  if(stretch){
+    if(iw/ih > expInner) sy = (iw/ih)/expInner; else sx = expInner/(iw/ih);
+    cur = {top:cur.top*sy, right:cur.right*sx, bottom:cur.bottom*sy, left:cur.left*sx};
+    iw *= sx; ih *= sy; w2 = w*sx; h2 = h*sy;
+  }
+  const a = iw/cw, c = ih/ch, p = 1-g.left-g.right, q = 1-g.top-g.bottom;
+  let u = (a*p + c*q)/(a*a + c*c);
+  u = Math.min(u, 1/Math.max(iw/cw, ih/ch));                  // never shave into the art
+  const k = 1/u, tw = cw*k, th = ch*k;
+  const split = (budget, ta, tb, ca_, cb) => {
+    const loA = -ca_, loB = -cb, surplus = budget - (ta-ca_) - (tb-cb);
+    let ea = (ta-ca_) + surplus/2, eb = (tb-cb) + surplus/2;
+    if(ea < loA){ ea = loA; eb = budget - loA; }
+    if(eb < loB){ eb = loB; ea = budget - loB; }
+    return [ea, eb];
+  };
+  const [eL, eR] = split(tw - w2, g.left*tw, g.right*tw, cur.left, cur.right);
+  const [eT, eB] = split(th - h2, g.top*th, g.bottom*th, cur.top, cur.bottom);
+  const ext = {left:eL, right:eR, top:eT, bottom:eB}, bd = {};
+  for(const e of ['top','right','bottom','left'])
+    bd[e] = (cur[e] + ext[e]) / ((e === 'left' || e === 'right') ? tw : th);
+  return {tw:Math.round(tw), th:Math.round(th), borders:bd, ext, w2, h2, guide:g,
+          cropped:['top','right','bottom','left'].filter(e => ext[e] < -0.5)};
+}
+const activeGuide = () =>
+  (align.meas.guides || []).find(g => g.id === align.guide) || align.meas.guide;
+function computeExtend(){
+  if(!align.on || !align.meas) return;
+  const stretch = $('#so_stretch') ? $('#so_stretch').checked : false;
+  align.plan = solveFit(align.meas, align.blue, stretch, activeGuide());
+  drawGhost();
+  renderExtReadout();
+}
+/* The result, drawn where it will actually land: a dashed outline for the trim
+   the fit produces, and a cyan band for the border it is aiming at. Both are in
+   the source image's own coordinates, so you can see the marks against them. */
+function drawGhost(){
+  const ghost = $('#al_ghost'), band = $('#al_band'), p = align.plan;
+  if(!ghost || !band) return;
+  if(!p){ ghost.hidden = band.hidden = true; return; }
+  ghost.hidden = band.hidden = false;
+  const pct = (v, span) => (v / span) * 100;
+  const L = -pct(p.ext.left, p.w2), T = -pct(p.ext.top, p.h2);
+  const W = pct(p.tw, p.w2), H = pct(p.th, p.h2);
+  Object.assign(ghost.style, {left:`${L}%`, top:`${T}%`, width:`${W}%`, height:`${H}%`});
+  // the target border sits inside the trim, by the guide's own inset
+  const g = p.guide;
+  Object.assign(band.style, {
+    left:`${L}%`, top:`${T}%`, width:`${W}%`, height:`${H}%`,
+    borderTopWidth: `${g.top * H}%`, borderBottomWidth: `${g.bottom * H}%`,
+    borderLeftWidth: `${g.left * W}%`, borderRightWidth: `${g.right * W}%`,
+    borderStyle: 'solid',
+  });
+}
 function renderExtReadout(){
-  const p=align.plan, rd=$('#al_read'); if(!rd) return;
-  if(!p){ rd.innerHTML='<div class="tag"><span class="warnpx">marks leave no inner frame</span></div>'; return; }
-  const row=(mk,lbl)=>`<div class="edgef"><label>${lbl}</label><b>${(p.borders[mk]*100).toFixed(2)}%</b></div>`;
-  rd.innerHTML=`${row('top','top')}${row('right','right')}${row('bottom','bottom')}${row('left','left')}
-    <div class="tag" style="margin-top:4px">→ ${p.tw}×${p.th}px at the ${align.meas.guide.name} spec
-    ${p.cropped.length?`<br><span class="warnpx">⚠ shaved over-target ${p.cropped.join(', ')}</span>`:''}</div>`;
+  const p = align.plan, rd = $('#al_read'); if(!rd) return;
+  if(!p){ rd.innerHTML = '<p class="hint mb-0" style="color:var(--hold)">The marks leave no inner frame.</p>'; return; }
+  const row = (k, l) => `<dt>${l}</dt><dd>${(p.borders[k]*100).toFixed(2)}%</dd>`;
+  rd.innerHTML = `<dl class="readout mb-1">
+      ${row('top','border top')}${row('right','right')}${row('bottom','bottom')}${row('left','left')}
+      <dt>output</dt><dd>${p.tw}×${p.th} px</dd></dl>
+    ${p.cropped.length ? `<p class="hint mb-0" style="color:var(--hold)">
+       Shaves the over-target ${p.cropped.join(', ')}.</p>` : ''}`;
+}
+function syncEdgeFields(){
+  for(const e of ['t','r','b','l']){
+    const el = $('#al_' + e);
+    if(el && document.activeElement !== el) el.value = (align.blue[e] * 100).toFixed(2);
+  }
+}
+function marksToggle(c){
+  const on = marksOn(c);
+  return `<div class="form-check mb-2">
+    <input class="form-check-input" type="checkbox" id="al_show" ${on ? 'checked' : ''}
+           onchange="toggleMarks(this)">
+    <label class="form-check-label" style="font-size:.8125rem" for="al_show">
+      Show the align marks on the card</label></div>`;
 }
 function renderAlignPanel(){
-  const p=$('#alpanel'); if(!p) return; const g=align.meas.guide;
-  p.innerHTML=`<div style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:8px">
-    <div class="tag" style="margin-bottom:6px">drag <b style="color:#00e9ff">T B L R</b> onto the card's inner border edge —
-      the <b>${g.name}</b> spec then reshapes to the exact card aspect</div>
-    <div id="al_read"></div>
-    <label class="tag" style="display:flex;gap:6px;align-items:center;margin-top:6px">
-      <input type="checkbox" ${align.stretch?'checked':''}
-        onchange="align.stretch=this.checked;computeExtend()"> stretch to hit the borders exactly</label>
-    <div class="row" style="margin-top:8px"><button class="primary" onclick="applyAlign()">Reshape → border</button>
-      <button onclick="exitAlign()">cancel</button>
-      <button class="ghost" onclick="align.blue={t:0.08,r:0.08,b:0.08,l:0.08};positionLines();computeExtend()">reset</button></div></div>`;
+  const p = $('#alpanel'), c = card(); if(!p || !c) return;
+  if(!align.on){
+    const noSource = stStatus(c, PIPE()[0].stage) !== 'done';
+    p.innerHTML = `<hr class="rule" style="margin:.875rem 0">
+      <div class="eyebrow mb-1">Where the border is now</div>
+      ${noSource
+        ? `<p class="hint mb-0">Fetch this side's original first — the fit is measured
+           against it.</p>`
+        : marksToggle(c) + `<p class="hint mb-0">Turn the marks on to place the inner
+           border edge again and reshape from the original.</p>`}`;
+    return;
+  }
+  const g = activeGuide();
+  const warn = g.measured ? '' : `
+    <div class="d-flex gap-2 align-items-start mt-2">
+      <span class="chip warn flex-shrink-0">estimated</span>
+      <span class="hint">${esc(g.note)}</span>
+    </div>`;
+  p.innerHTML = `
+    <hr class="rule" style="margin:.875rem 0">
+    <div class="eyebrow mb-1">Where the border is now</div>
+    ${marksToggle(c)}
+    <p class="hint">Drag <b style="color:var(--mark)">T R B L</b> onto the card's inner
+      border edge — a loupe follows each one. Arrow keys nudge the selected mark;
+      the <b style="color:var(--reg)">cyan</b> outline is the trim you'll get and the
+      band is the border it's aiming at.</p>
+    <div class="edges mb-2">
+      ${['t','r','b','l'].map(e => `<div>
+        <label for="al_${e}">${EDGE_NAME[e]} %</label>
+        <input class="form-control form-control-sm" id="al_${e}" type="number" step="0.05"
+               min="0" max="95" onchange="setEdge('${e}', (+this.value||0)/100)"
+               onfocus="selectEdge('${e}')"></div>`).join('')}
+    </div>
+    <div class="d-flex gap-2 mb-2">
+      <button class="btn btn-sm btn-outline-secondary flex-fill" onclick="measureBorder()"
+        title="Read the border's position off the image">Measure it</button>
+      <button class="btn btn-sm btn-ghost flex-fill" onclick="resetMarks()">Reset</button>
+    </div>
+    <div id="al_measured"></div>
+    ${warn}
+    <div id="al_read" class="mt-2"></div>`;
+  positionLines();
+  renderExtReadout();
+  syncRunLabel();
 }
-async function applyAlign(){
-  const c=state.cards[state.idx];
-  if(!okCascade(c,'border')) return;   // keep the overlay open so they can cancel
-  const b={...align.blue}, stretch=align.stretch; exitAlign();
-  await act('/api/step',{cmd:'border', ids:[c.id],   // send marks; the CLI does the real fit
-    opts:{inner:{top:b.t,right:b.r,bottom:b.b,left:b.l},stretch}, force:true}, `border · ${c.id}`);
-  afterStep('border');
-}
-function exitAlign(){ if(!align.on) return; align.on=false;
-  const v=$('.viewer'); if(v) v.style.aspectRatio=align.oldAspect||'';
-  const l=$('#allayer'); if(l) l.remove(); const p=$('#alpanel'); if(p) p.innerHTML='';
-  document.querySelectorAll('.stageimg').forEach(el=>el.style.visibility=''); }
-async function delCard(){ const c=state.cards[state.idx];
-  if(!confirm('Delete '+c.id+' and all its files?')) return;
-  await act('/api/card/'+c.id,{_method:'DELETE'},'deleted'); state.view='library'; render(); }
-function lightbox(src){ $('#lbimg').src=src; $('#lightbox').style.display='grid'; }
 
-/* ---------- search ---------- */
+/* The border button either measures first or uses the marks, and the marks come
+   up after the panel is drawn — so its label is re-stated once they do, rather
+   than promising one thing and doing the other. */
+function syncRunLabel(){
+  const btn = $('#runbtn'), c = card();
+  if(!btn || !c || state.step !== 'border') return;
+  const s = SPEC('border'), marks = align.on && align.plan;
+  const verb = marks ? s.run_label : 'Measure & reshape';
+  btn.textContent = stStatus(c, s.stage) === 'done' ? `${verb} again` : verb;
+  btn.title = marks
+    ? 'Fits to the frame spec using the marks you placed'
+    : 'Reads the border position off the image, then fits to the frame spec';
+}
+
+/* Read the border's position off the image and put the marks there. A
+   pre-placement, not a decision: each edge reports how many of its scan lines
+   agreed, the weak ones are named, and every mark is still yours to nudge. */
+async function measureBorder(){
+  const c = card(); if(!c) return;
+  const host = $('#al_measured');
+  if(host) host.innerHTML = '<p class="hint mb-2">Measuring…</p>';
+  let d;
+  try{
+    d = await get(`/api/detect/${encodeURIComponent(c.id)}?stage=${PIPE()[0].stage}`
+      + `&face=${state.face}`);
+  } catch(e){ d = {error: String(e)}; }
+  if(!host) return;
+  if(d.error){
+    host.innerHTML = `<p class="hint mb-2" style="color:var(--bad)">${esc(d.error)}</p>`;
+    return;
+  }
+  const [t, r, b, l] = d.inset;
+  align.blue = {t, r, b, l};
+  positionLines(); computeExtend();
+  syncRunLabel();
+  const weak = d.weak || [];
+  host.innerHTML = `
+    <div class="d-flex align-items-start gap-2 mb-2">
+      <span class="chip ${d.reliable ? 'good' : 'warn'} flex-shrink-0">${
+        d.frameless ? 'no frame' : d.reliable ? 'clean' : 'check ' + weak.join(' + ')}</span>
+      <span class="hint">${esc(d.note)}</span>
+    </div>`;
+}
+
+/* ---------- search -------------------------------------------------------
+   The query lives in the URL (and in state.search), so a search is a shareable
+   link and coming back to it restores both the inputs and the last results —
+   no second round-trip to the card API. */
 function viewSearch(){
-  return `<div class="row" style="margin-bottom:6px">
-    <input id="q" placeholder="card name, e.g. entei ex" size="24" onkeydown="if(event.key==='Enter')doSearch()">
-    <input id="f_set" placeholder="set (ex4)" size="8"><input id="f_rar" placeholder="rarity" size="8">
-    <input id="f_year" placeholder="year" size="6">
-    <button class="primary" onclick="doSearch()">Search</button>
-    <div class="spacer"></div><button onclick="fetchSel()">⬇ Fetch selected</button></div>
-    <div id="results" class="res"></div>`;
+  const s = state.search;
+  const game = s.game || state.meta.default_game;
+  const gopts = state.meta.games.map(g =>
+    `<option value="${esc(g.id)}" ${g.id === game ? 'selected' : ''}>${esc(g.name)}</option>`).join('');
+  const example = state.meta.games.find(g => g.id === game)?.example || '';
+  return `
+    <div class="eyebrow mb-2">Find cards</div>
+    <div class="panel p-3 mb-3">
+      <div class="row g-2 align-items-center">
+        <div class="col-12 col-md-3"><select class="form-select form-select-sm" id="f_game"
+          onchange="onGameChange()">${gopts}</select></div>
+        <div class="col-12 col-md-4"><input class="form-control form-control-sm" id="q"
+          placeholder="Card name" value="${esc(s.q)}" onkeydown="if(event.key==='Enter')doSearch()"></div>
+        <div class="col-4 col-md-2"><input class="form-control form-control-sm" id="f_set" placeholder="set" value="${esc(s.set)}"></div>
+        <div class="col-4 col-md-1"><input class="form-control form-control-sm" id="f_rar" placeholder="rarity" value="${esc(s.rarity)}"></div>
+        <div class="col-4 col-md-1"><input class="form-control form-control-sm" id="f_year" placeholder="year" value="${esc(s.year)}"></div>
+        <div class="col-12 col-md-1 d-grid"><button class="btn btn-sm btn-primary" onclick="doSearch()">Search</button></div>
+      </div>
+      <div class="d-flex align-items-center gap-2 mt-2">
+        <span class="hint">Every word must appear in the card name. Ids look like
+          <code class="mono" id="q_example">${esc(example)}</code>. A two-sided card
+          arrives with both sides.</span>
+        <span class="form-check mb-0 ms-auto">
+          <input class="form-check-input" type="checkbox" id="f_related"
+                 ${state.search.related ? 'checked' : ''}
+                 onchange="setSearchRelated(this.checked)">
+          <label class="form-check-label" style="font-size:.75rem" for="f_related"
+            title="Meld halves, the melded card, the tokens a card makes">
+            with related cards</label>
+        </span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="fetchSel()">Add selected</button>
+      </div>
+    </div>
+    <div id="results" class="results"></div>
+    <p class="hint" id="results_hint">Search a game to see what's out there.</p>`;
+}
+function onGameChange(){
+  const g = state.meta.games.find(x => x.id === $('#f_game').value);
+  if(g) $('#q_example').textContent = g.example;
+  if($('#q').value.trim()) doSearch();
+}
+function showHint(text){
+  const h = $('#results_hint'); if(h) h.textContent = text || '';
+}
+function readSearchForm(){
+  return {
+    q: $('#q').value, game: $('#f_game').value, set: $('#f_set').value,
+    rarity: $('#f_rar').value, year: $('#f_year').value,
+  };
+}
+function paintResults(rows){
+  const box = $('#results'); if(!box) return;
+  box.innerHTML = rows.map(x => `
+      <label class="hit ${x.have ? 'have' : ''}">
+        <input class="form-check-input" type="checkbox" value="${esc(x.id)}" ${x.have ? 'disabled' : ''}>
+        <img loading="lazy" alt="${esc(x.name)}" src="${esc(x.image)}" onerror="this.style.opacity=.12">
+        <div class="hitmeta"><b>${esc(x.name)}</b><br>${esc(x.set)} · ${esc(x.year)} ·
+          <span class="mono">${esc(x.number)}</span><br>
+          ${esc(x.rarity)} · ${esc(x.artist)}${x.have ? ' · in library' : ''}</div>
+      </label>`).join('');
 }
 async function doSearch(){
-  const p=new URLSearchParams({q:$('#q').value});
-  if($('#f_set').value)p.set('set',$('#f_set').value);
-  if($('#f_rar').value)p.set('rarity',$('#f_rar').value);
-  if($('#f_year').value)p.set('year',$('#f_year').value);
-  $('#results').innerHTML='<div class="tag">searching…</div>';
-  try{ const r=await get('/api/search?'+p);
-    if(!Array.isArray(r)){ $('#results').innerHTML='<div class="tag">'+(r.error||'no results')+'</div>'; return; }
-    $('#results').innerHTML = r.length? r.map(x=>`<label class="rcard ${x.have?'have':''}">
-      <input type="checkbox" value="${x.id}" ${x.have?'disabled':''}>
-      <img loading="lazy" src="${x.image}" onerror="this.style.opacity=.12">
-      <div class="rm"><b>${x.name}</b><br>${x.set} · ${x.year} · ${x.number}<br>
-      <span class="tag">${x.rarity} · ${x.artist}${x.have?' · have':''}</span></div></label>`).join('')
-      : '<div class="tag">no matches</div>';
-  }catch(e){ $('#results').innerHTML='<div class="tag">error: '+e+'</div>'; }
+  state.search = readSearchForm();
+  syncUrl();          // the URL mirrors the query without re-rendering the form
+  const p = new URLSearchParams(Object.entries(state.search).filter(([,v]) => v));
+  $('#results').innerHTML = '';
+  showHint('Searching…');
+  try{
+    const r = await get('/api/search?' + p);
+    if(!Array.isArray(r)){ state.results = null; showHint(r.error || 'No results.'); return; }
+    state.results = r;
+    showHint(r.length ? '' : 'No matches. Try fewer words, or switch game.');
+    paintResults(r);
+  } catch(e){ state.results = null; showHint('Search failed: ' + e); }
 }
 async function fetchSel(){
-  const ids=[...document.querySelectorAll('#results input:checked')].map(c=>c.value);
-  if(!ids.length){ toast('select some cards first'); return; }
-  await act('/api/fetch',{ids},`fetched ${ids.length}`);
+  const ids = $$('#results input:checked').map(c => c.value);
+  if(!ids.length){ toast('Select some cards first.'); return; }
+  await act('/api/fetch', {ids, game: $('#f_game').value, related: state.search.related},
+    `Added ${ids.length} card(s)`);
 }
 
-/* ---------- settings ---------- */
+/* ---------- settings -----------------------------------------------------
+   A real form: every setting carries its own label, explanation, unit and
+   default, all of which come from the Config field itself (/api/config), with
+   the raw TOML key kept visible so nothing becomes untraceable. Nothing is
+   written until you say so, and the save bar only exists while something is
+   actually different. */
+const settingsUi = {section:null, dirty:new Map()};
+
 async function renderSettings(){
-  state.cfg = await get('/api/config');
-  const secs = Object.entries(state.cfg.sections).map(([name,kv])=>`<fieldset><legend>${name}</legend>
-    ${Object.entries(kv).map(([k,v])=>fieldFor(name,k,v)).join('')}</fieldset>`).join('');
-  $('#main').innerHTML = `<div class="row"><h2 style="margin:0">Config — proxdex.toml</h2>
-    <div class="spacer"></div><button class="primary" onclick="saveConfig()">Save config</button></div>
-    ${secs}
-    <h2>Card back</h2>
-    <div class="row"><select id="bk_tcg"><option value="">— tcg —</option><option>mtg</option></select>
-      <input id="bk_url" placeholder="or image URL" size="30">
-      <button onclick="setBack()">Set back</button>
-      <label>upload <input type="file" id="bk_file" accept="image/*" onchange="uploadBack(this)"></label></div>
-    <h2>Calibration</h2><div id="calwrap" class="tag">loading…</div>`;
-  loadCal();
-}
-function fieldFor(sec,key,val){
-  const id=`cfg_${sec}_${key}`; let input;
-  if(typeof val==='boolean') input=`<input type="checkbox" id="${id}" ${val?'checked':''}>`;
-  else if(typeof val==='number') input=`<input type="number" step="any" id="${id}" value="${val}">`;
-  else if(Array.isArray(val)) input=`<input id="${id}" value="${val.join(', ')}" placeholder="comma list">`;
-  else input=`<input id="${id}" value="${String(val).replace(/"/g,'&quot;')}">`;
-  return `<div class="field"><label>${key}</label>${input}</div>`;
-}
-async function saveConfig(){
-  const sections={};
-  for(const [name,kv] of Object.entries(state.cfg.sections)){
-    sections[name]={};
-    for(const [k,v] of Object.entries(kv)){
-      const el=$(`#cfg_${name}_${k}`);
-      if(typeof v==='boolean') sections[name][k]=el.checked;
-      else if(typeof v==='number') sections[name][k]=parseFloat(el.value);
-      else if(Array.isArray(v)) sections[name][k]=el.value.trim()?el.value.split(',').map(s=>{const n=+s.trim();return isNaN(n)?s.trim():n;}):[];
-      else sections[name][k]=el.value;
-    }
+  if(!state.cfg){
+    $('#main').innerHTML = '<p class="hint">Loading…</p>';
+    state.cfg = await get('/api/config');
+    settingsUi.dirty.clear();
   }
-  await act('/api/config',{sections},'config saved');
+  const names = Object.keys(state.cfg.sections);
+  // the leading-underscore sections are proxdex's own screens (card backs, frame
+  // specs, calibration), not tables in the file — they are valid too
+  const known = n => n && (n.startsWith('_') || names.includes(n));
+  if(!known(settingsUi.section)) settingsUi.section = names[0] || null;
+
+  $('#main').innerHTML = `
+    <div class="d-flex align-items-baseline gap-2 mb-3 flex-wrap">
+      <div><div class="eyebrow">proxdex.toml</div><h5 class="mb-0">Settings</h5></div>
+      <span class="mono faint ms-auto" style="font-size:.6875rem">${esc(state.cfg.root)}</span>
+    </div>
+    <div class="setgrid">
+      <div class="secnav" id="secnav">${names.map(n => `
+        <button class="${n === settingsUi.section ? 'on' : ''}" onclick="pickSection('${esc(n)}')">
+          ${esc(n)}<span class="cnt">${Object.keys(state.cfg.sections[n]).length}</span></button>`).join('')}
+        <hr class="rule" style="margin:.5rem 0">
+        <button class="${settingsUi.section === '_backs' ? 'on' : ''}" onclick="pickSection('_backs')">card backs</button>
+        <button class="${settingsUi.section === '_frames' ? 'on' : ''}" onclick="pickSection('_frames')">frame specs</button>
+        <button class="${settingsUi.section === '_cal' ? 'on' : ''}" onclick="pickSection('_cal')">calibration</button>
+      </div>
+      <div id="secbody"></div>
+    </div>
+    <div id="savebar"></div>`;
+  paintSection();
+}
+function pickSection(name){ settingsUi.section = name; renderSettings(); }
+
+function paintSection(){
+  const host = $('#secbody'); if(!host) return;
+  if(settingsUi.section === '_backs'){ host.innerHTML = backsPanel(); return; }
+  if(settingsUi.section === '_frames'){ host.innerHTML = framesPanel(); return; }
+  if(settingsUi.section === '_cal'){ host.innerHTML = '<div class="panel p-3" id="calwrap"><p class="hint mb-0">Loading…</p></div>'; loadCal(); return; }
+  const sec = settingsUi.section, kv = state.cfg.sections[sec] || {};
+  host.innerHTML = `<div class="panel p-3">
+    ${Object.entries(kv).map(([k, v]) => fieldFor(sec, k, v)).join('')
+      || '<p class="hint mb-0">This section is empty.</p>'}</div>`;
+  paintSaveBar();
+}
+/* One row per setting: what it is, what it does, what it defaults to, and the
+   raw key it writes — plus the control, typed from the value and from the
+   options map the server derives from Config's own annotations. */
+function fieldFor(sec, key, val){
+  const path = `${sec}.${key}`, id = `cfg_${sec}_${key}`;
+  const doc = state.cfg.docs?.[path] || {};
+  const choices = state.cfg.options?.[path];
+  const dirty = settingsUi.dirty.has(path) ? ' dirty' : '';
+  let ctl;
+  if(choices){          // a setting with a closed set of values is never free text
+    ctl = `<select class="form-select form-select-sm mono" id="${id}"
+      onchange="markDirty('${esc(path)}')">${choices.map(o =>
+      `<option ${String(o) === String(val) ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+  } else if(typeof val === 'boolean'){
+    ctl = `<div class="form-check form-switch mb-0">
+      <input class="form-check-input" type="checkbox" id="${id}" ${val ? 'checked' : ''}
+             onchange="markDirty('${esc(path)}')"></div>`;
+  } else if(typeof val === 'number'){
+    ctl = `<input class="form-control form-control-sm mono" type="number" step="any" id="${id}"
+      value="${val}" oninput="markDirty('${esc(path)}')">`;
+  } else if(Array.isArray(val)){
+    ctl = `<input class="form-control form-control-sm mono" id="${id}"
+      value="${esc(val.join(', '))}" placeholder="comma-separated"
+      oninput="markDirty('${esc(path)}')">`;
+  } else {
+    ctl = `<input class="form-control form-control-sm mono" id="${id}" value="${esc(val)}"
+      oninput="markDirty('${esc(path)}')">`;
+  }
+  return `<div class="field${dirty}" data-path="${esc(path)}">
+    <div>
+      <div class="lbl">${esc(doc.label || key)}</div>
+      ${doc.help ? `<p class="why">${esc(doc.help)}</p>` : ''}
+      <div class="key">${esc(sec)}.${esc(key)}${
+        doc.default ? ` · default ${esc(doc.default)}` : ''}</div>
+    </div>
+    <div class="ctl">${ctl}${doc.unit ? `<span class="unit">${esc(doc.unit)}</span>` : ''}</div>
+  </div>`;
+}
+function markDirty(path){
+  settingsUi.dirty.set(path, true);
+  const row = $(`.field[data-path="${path}"]`);
+  if(row) row.classList.add('dirty');
+  paintSaveBar();
+}
+function paintSaveBar(){
+  const host = $('#savebar'); if(!host) return;
+  const n = settingsUi.dirty.size;
+  document.body.classList.toggle('hasbar', n > 0);
+  host.innerHTML = n ? `<div class="actionbar armed">
+    <b>${n} unsaved change${n === 1 ? '' : 's'}</b>
+    <span class="hint">Nothing is written to proxdex.toml until you save.</span>
+    <span class="ms-auto d-flex gap-2">
+      <button class="btn btn-sm btn-outline-secondary" onclick="revertConfig()">Revert</button>
+      <button class="btn btn-sm btn-primary" onclick="saveConfig()">Save changes</button>
+    </span></div>` : '';
+}
+function revertConfig(){ state.cfg = null; settingsUi.dirty.clear(); renderSettings(); }
+/* Only the sections that actually changed are sent, so a save never rewrites a
+   value the user did not touch. */
+async function saveConfig(){
+  const sections = {};
+  for(const path of settingsUi.dirty.keys()){
+    const [sec, key] = path.split('.');
+    const val = state.cfg.sections[sec][key];
+    const el = $(`#cfg_${sec}_${key}`); if(!el) continue;
+    sections[sec] ||= {};
+    if(state.cfg.options?.[path]) sections[sec][key] = el.value;
+    else if(typeof val === 'boolean') sections[sec][key] = el.checked;
+    else if(typeof val === 'number') sections[sec][key] = parseFloat(el.value);
+    else if(Array.isArray(val)) sections[sec][key] = el.value.trim()
+      ? el.value.split(',').map(s => { const n = +s.trim(); return isNaN(n) ? s.trim() : n; }) : [];
+    else sections[sec][key] = el.value;
+  }
+  settingsUi.dirty.clear();
+  await act('/api/config', {_method:'PUT', sections}, 'Settings saved');
+}
+function backsPanel(){
+  const gopts = state.meta.games.map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('');
+  return `<div class="panel p-3">
+    <div class="eyebrow mb-2">Card backs</div>
+    <p class="hint">One back per game — a mixed library needs both. Magic downloads
+      from Scryfall; Pokémon has no back API, so upload your own scan. A two-sided
+      card ignores this and prints its own reverse.</p>
+    <div class="row g-2 align-items-end">
+      <div class="col-12 col-md-3">
+        <label class="eyebrow d-block mb-1" for="bk_game">game</label>
+        <select class="form-select form-select-sm" id="bk_game">${gopts}</select></div>
+      <div class="col-12 col-md-4">
+        <label class="eyebrow d-block mb-1" for="bk_url">image URL (optional)</label>
+        <input class="form-control form-control-sm" id="bk_url" placeholder="https://…"></div>
+      <div class="col-6 col-md-2 d-grid">
+        <button class="btn btn-sm btn-outline-secondary" onclick="setBack()">Download back</button></div>
+      <div class="col-6 col-md-3">
+        <label class="eyebrow d-block mb-1" for="bk_file">or upload a scan</label>
+        <input class="form-control form-control-sm" type="file" id="bk_file"
+          accept="image/*" onchange="uploadBack(this)"></div>
+    </div></div>`;
+}
+/* The frame specs, and which of them this library's cards actually resolve to.
+   The same two tables `proxdex frames` prints — a spec is only honest if you can
+   see whether it was measured or guessed, and which of your cards ride on it. */
+function framesPanel(){
+  const specs = state.meta.frames || [];
+  const rows = specs.map(g => `<tr>
+      <td class="mono">${esc(g.id)}</td>
+      <td>${esc(g.name)}</td>
+      <td class="mono">${g.inset.map(v => (v * 100).toFixed(2)).join(' / ')}</td>
+      <td>${g.measured ? '<span class="chip good">measured</span>'
+                       : '<span class="chip warn">estimated</span>'}</td>
+    </tr>`).join('');
+
+  // one row per (set, override) — a borderless print inside a bordered set
+  // resolves differently from its neighbours, and hiding that would claim a fit
+  // that is not the one that runs
+  const groups = new Map();
+  for(const c of state.cards){
+    const key = `${c.game}|${c.set}|${c.frame || ''}`;
+    const g = groups.get(key) || {game:c.game, set:c.set, frame:c.frame,
+                                  spec:c.frame_spec, measured:c.frame_measured, n:0};
+    g.n++; groups.set(key, g);
+  }
+  const mine = [...groups.values()].sort((a, b) => a.set.localeCompare(b.set));
+  const unmeasured = mine.filter(g => !g.measured).length;
+
+  return `<div class="panel p-3 mb-3">
+    <div class="eyebrow mb-2">Frame specs</div>
+    <p class="hint">Where each era's printed border sits, as a percentage of the card
+      per edge (top / right / bottom / left). The border step reshapes a card until its
+      border matches — so a spec nobody has measured makes the fit a guess, and says so.</p>
+    <div class="tblwrap"><table class="tbl">
+      <thead><tr><th>Spec</th><th>Frame</th><th>T / R / B / L %</th><th>Confidence</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+  </div>
+  <div class="panel p-3">
+    <div class="eyebrow mb-2">Sets in this library</div>
+    ${mine.length ? `<div class="tblwrap"><table class="tbl">
+      <thead><tr><th>Set</th><th>Game</th><th>Cards</th><th>Resolves to</th><th>From</th><th>Confidence</th></tr></thead>
+      <tbody>${mine.map(g => `<tr>
+        <td class="mono">${esc(g.set)}</td>
+        <td>${esc(g.game)}</td>
+        <td class="mono">${g.n}</td>
+        <td class="mono">${esc(g.spec || '')}</td>
+        <td class="faint">${g.frame ? 'the printing' : 'its era'}</td>
+        <td>${g.measured ? '<span class="chip good">measured</span>'
+                         : '<span class="chip warn">estimated</span>'}</td>
+      </tr>`).join('')}</tbody></table></div>`
+      : '<p class="hint mb-0">No cards yet.</p>'}
+    ${unmeasured ? `<p class="hint mb-0 mt-2" style="color:var(--hold)">${unmeasured} set(s)
+      fall back to an estimated spec. Measure a real card and add a guide in
+      <code class="mono">frames.py</code> to fix it.</p>` : ''}
+  </div>`;
 }
 async function setBack(){
-  const tcg=$('#bk_tcg').value, url=$('#bk_url').value;
-  await act('/api/back', tcg?{tcg}:{url}, 'card back set');
+  await act('/api/back', {game: $('#bk_game').value, url: $('#bk_url').value || null}, 'Card back set');
 }
 async function uploadBack(inp){
-  if(!inp.files[0]) return; const fd=new FormData(); fd.append('file',inp.files[0]);
+  if(!inp.files[0]) return;
+  const fd = new FormData();
+  fd.append('file', inp.files[0]); fd.append('game', $('#bk_game').value);
   $('#busy').classList.add('on');
-  const r=await fetch('/api/back/upload',{method:'POST',body:fd}); const j=await r.json();
-  $('#busy').classList.remove('on'); toast(j.ok?'card back set':'failed:\n'+j.log);
+  const r = await fetch('/api/back/upload', {method:'POST', body:fd});
+  const j = await r.json();
+  $('#busy').classList.remove('on');
+  toast(j.ok ? 'Card back set' : 'Failed\n' + tail(j.log || JSON.stringify(j)));
 }
 async function loadCal(){
-  const cals=await get('/api/calibrate');
-  const profs=state.meta.profiles;
-  $('#calwrap').innerHTML = `<div class="row" style="margin-bottom:8px">
-    <select id="cal_prof">${profs.map(p=>`<option>${p}</option>`).join('')}</select>
-    <a id="cal_dl" href="#" onclick="dlChart(false)">download chart</a> ·
-    <a href="#" onclick="dlChart(true)">corrected chart</a>
-    <label>fit scan <input type="file" id="cal_scan" accept="image/*" onchange="calFit(this,false)"></label>
-    <label>check scan <input type="file" id="cal_scan2" accept="image/*" onchange="calFit(this,true)"></label></div>
-    ${cals.length?cals.map(c=>`<div class="tag">• ${c.profile}: raw err ${(c.error.mean||0).toFixed?c.error.mean.toFixed(1):c.error.mean} / ${c.error.max?.toFixed?.(1)??''}</div>`).join(''):'<div class="tag">no calibrations yet</div>'}`;
+  const cals = await get('/api/calibrate');
+  const host = $('#calwrap'); if(!host) return;
+  host.innerHTML = `
+    <div class="eyebrow mb-2">Calibration</div>
+    <p class="hint">Print a chart on the medium, scan it with auto-correction off,
+      then fit — <code>sheet</code> applies the measured correction from then on.</p>
+    <div class="row g-2 align-items-end">
+      <div class="col-12 col-md-3">
+        <label class="eyebrow d-block mb-1" for="cal_prof">medium</label>
+        <select class="form-select form-select-sm" id="cal_prof">
+        ${state.meta.profiles.map(p => `<option>${esc(p)}</option>`).join('')}</select></div>
+      <div class="col-6 col-md-2 d-grid"><button class="btn btn-sm btn-outline-secondary"
+        onclick="dlChart(false)">Get chart</button></div>
+      <div class="col-6 col-md-2 d-grid"><button class="btn btn-sm btn-outline-secondary"
+        onclick="dlChart(true)">Corrected chart</button></div>
+      <div class="col-6 col-md-2">
+        <label class="eyebrow d-block mb-1" for="cal_scan">fit from scan</label>
+        <input class="form-control form-control-sm" type="file" id="cal_scan"
+          accept="image/*" onchange="calFit(this,false)"></div>
+      <div class="col-6 col-md-2">
+        <label class="eyebrow d-block mb-1" for="cal_scan2">check corrected</label>
+        <input class="form-control form-control-sm" type="file" id="cal_scan2"
+          accept="image/*" onchange="calFit(this,true)"></div>
+    </div>
+    ${cals.length ? `<div class="eyebrow mt-3 mb-1">Measured error, mean / max</div>
+      <dl class="readout mb-0" style="max-width:22rem">${cals.map(c => `<dt>${esc(c.profile)}</dt>
+        <dd>${(c.error.mean ?? 0).toFixed(1)} / ${(c.error.max ?? 0).toFixed(1)} RGB</dd>`).join('')}</dl>`
+      : '<p class="hint mt-3 mb-0">No mediums calibrated yet.</p>'}`;
 }
-function dlChart(corr){ const p=$('#cal_prof').value; window.open(`/api/calibrate/chart?profile=${encodeURIComponent(p)}&corrected=${corr}`,'_blank'); return false; }
-async function calFit(inp,check){
-  if(!inp.files[0])return; const fd=new FormData(); fd.append('file',inp.files[0]);
-  fd.append('profile',$('#cal_prof').value); fd.append('check',check);
-  $('#busy').classList.add('on'); const r=await fetch('/api/calibrate/fit',{method:'POST',body:fd}); const j=await r.json();
-  $('#busy').classList.remove('on'); toast(j.ok?tail(j.log):'failed:\n'+j.log, 9000); loadCal();
+function dlChart(corrected){
+  const p = $('#cal_prof').value;
+  window.open(`/api/calibrate/chart?profile=${encodeURIComponent(p)}&corrected=${corrected}`, '_blank');
+}
+async function calFit(inp, check){
+  if(!inp.files[0]) return;
+  const fd = new FormData();
+  fd.append('file', inp.files[0]); fd.append('profile', $('#cal_prof').value); fd.append('check', check);
+  $('#busy').classList.add('on');
+  const r = await fetch('/api/calibrate/fit', {method:'POST', body:fd});
+  const j = await r.json();
+  $('#busy').classList.remove('on');
+  toast(j.ok ? tail(j.log) : 'Failed\n' + (j.log || JSON.stringify(j)), 9000);
+  loadCal();
 }
 
-/* ---------- sheet dialog ---------- */
+/* ---------- sheet dialog -------------------------------------------------
+   Two-sided cards are the one thing you have to decide before imposing: which
+   side goes on the paper. They are listed here with a flip control, so the
+   choice is made where the consequence is. */
+let _sheet;
 function sheetDialog(){
-  const opt=(arr,sel)=>arr.map(x=>`<option ${x===sel?'selected':''}>${x}</option>`).join('');
-  $('#sd_faces').innerHTML=opt(state.meta.faces); $('#sd_page').innerHTML=opt(state.meta.pages);
-  $('#sd_profile').innerHTML='<option value="">config default</option>'+opt(state.meta.profiles);
-  sheetdlg.showModal();
+  const opt = arr => arr.map(x => `<option>${esc(x)}</option>`).join('');
+  $('#sd_faces').innerHTML = opt(state.meta.faces);
+  $('#sd_page').innerHTML = opt(state.meta.pages);
+  $('#sd_profile').innerHTML = '<option value="">Config default</option>' + opt(state.meta.profiles);
+  // a selection on the contact sheet is the obvious thing to impose, but never
+  // silently: the scope is a stated choice, defaulting to it when one exists
+  sheetUi.selected = state.sel.size > 0;
+  paintScope();
+  paintPicks();
+  (_sheet ||= new bootstrap.Modal($('#sheetdlg'))).show();
+}
+/* Which cards go in. `proxdex sheet <name> <ids...>` takes the same list. */
+const sheetUi = {selected:false};
+function sheetIds(){ return sheetUi.selected ? [...state.sel] : []; }
+function paintScope(){
+  const host = $('#sd_scope'), blurb = $('#sd_blurb');
+  if(!host) return;
+  const n = state.sel.size;
+  host.innerHTML = n ? `
+    <div class="eyebrow mb-1">Which cards</div>
+    <div class="seg" role="group" aria-label="Which cards">
+      <button class="${sheetUi.selected ? 'on' : ''}" onclick="setSheetScope(true)">
+        ${n} selected</button>
+      <button class="${sheetUi.selected ? '' : 'on'}" onclick="setSheetScope(false)">
+        Whole library</button>
+    </div>` : '';
+  paintSizes();
+  if(blurb) blurb.textContent = (sheetUi.selected && n
+    ? `Imposing the ${n} selected card${n === 1 ? '' : 's'}. `
+    : 'Imposing every ready card. ')
+    + 'A card is ready once its grade is settled; it is then scaled to trim, '
+    + 'colour-corrected for the medium, and given cut bleed outside the trim.';
+}
+function setSheetScope(on){ sheetUi.selected = on; paintScope(); paintPicks(); }
+
+/* Every card is imposed at its own real size, so a batch with an oversized card
+   in it produces two sets of pages with two different grids. That is a page count
+   nobody asked for, so it is stated here rather than discovered in the PDF. */
+function paintSizes(){
+  const host = $('#sd_sizes'); if(!host) return;
+  const scope = sheetIds();
+  const cards = state.cards.filter(c =>
+    sheetReady(c) && (!scope.length || scope.includes(c.id)));
+  const groups = [
+    {trim: trimOf('standard'),  cards: cards.filter(c => !c.oversized)},
+    {trim: trimOf('oversized'), cards: cards.filter(c => c.oversized)},
+  ].filter(g => g.cards.length && g.trim);
+  // one size is the ordinary case and needs no explaining
+  if(groups.length < 2){ host.innerHTML = ''; return; }
+  host.innerHTML = `
+    <div class="eyebrow mb-1">Two card sizes</div>
+    <div class="rels">${groups.map(g => `
+      <div class="rel">
+        <span class="chip">${esc(trimMm(g.trim))}mm</span>
+        <span class="nm">${g.cards.length} card${g.cards.length === 1 ? '' : 's'}</span>
+        <span class="mono faint">${esc(trimGrid(g.trim))}</span>
+      </div>`).join('')}</div>
+    <p class="hint mb-0 mt-1">Each size is imposed at its own size, on its own
+      pages — an oversized card is never shrunk to fit the standard grid.</p>`;
+}
+
+function paintPicks(){
+  const host = $('#sd_sides'); if(!host) return;
+  const scope = sheetIds();
+  const inScope = c => !scope.length || scope.includes(c.id);
+  const dfc = state.cards.filter(c => twoSided(c) && sheetReady(c) && inScope(c));
+  if(!dfc.length){ host.innerHTML = ''; return; }
+  const duplex = $('#sd_faces').value === 'duplex';
+  host.innerHTML = `
+    <div class="eyebrow mb-1">Two-sided cards</div>
+    <p class="hint">${duplex
+      ? 'The chosen side prints on the front; the other prints on the reverse.'
+      : 'Only the chosen side is in this sheet. Switch to duplex to print both.'}</p>
+    <div class="picklist">${dfc.map(c => `
+      <div class="pickrow">
+        <img alt="" src="${thumbsrc(c, c.front_face)}">
+        <span class="nm">${esc(c.name)}</span>
+        <span class="mono faint" style="font-size:.625rem">${esc(c.faces[c.front_face].name)}</span>
+        <button class="btn btn-sm btn-ghost" onclick="flipInDialog('${esc(c.id)}')">Swap ⇄</button>
+      </div>`).join('')}</div>`;
+}
+async function flipInDialog(id){
+  $('#busy').classList.add('on');
+  await fetch('/api/flip', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ids:[id]})});
+  state.cards = await get('/api/cards');
+  $('#busy').classList.remove('on');
+  paintPicks();
 }
 async function makeSheet(){
-  sheetdlg.close();
-  await act('/api/sheet',{name:$('#sd_name').value||'deck',faces:$('#sd_faces').value,
-    page:$('#sd_page').value,dpi:$('#sd_dpi').value?+$('#sd_dpi').value:null,
-    profile:$('#sd_profile').value||null},'sheet written');
+  _sheet.hide();
+  await act('/api/sheet', {
+    name: $('#sd_name').value || 'deck',
+    ids: sheetIds(),
+    faces: $('#sd_faces').value,
+    page: $('#sd_page').value,
+    dpi: $('#sd_dpi').value ? +$('#sd_dpi').value : null,
+    profile: $('#sd_profile').value || null,
+  }, 'Sheet written');
+}
+
+/* ---------- keyboard ------------------------------------------------------
+   One table, so the sheet and the handler can never drift: every binding is
+   listed with where it applies, and `?` shows it from anywhere. */
+const KEYS = [
+  {keys:['?'],              where:'anywhere', what:'Show this sheet'},
+  {keys:['G','then','L'],   where:'anywhere', what:'Go to the library'},
+  {keys:['G','then','S'],   where:'anywhere', what:'Go to search'},
+  {keys:['G','then',','],   where:'anywhere', what:'Go to settings'},
+  {keys:['Esc'],            where:'card',     what:'Back to the library'},
+  {keys:['←','→'],          where:'card',     what:'Previous / next card'},
+  {keys:['↑','↓'],          where:'card',     what:'Previous / next step'},
+  {keys:['F'],              where:'card',     what:'Other side of a two-sided card'},
+  {keys:['C'],              where:'card',     what:'Cycle the compare tool'},
+  {keys:['Enter'],          where:'card',     what:'Run the focused step'},
+  {keys:['←','→','↑','↓'],  where:'a selected align mark', what:'Nudge it (Shift = coarse)'},
+];
+let _keys;
+function showKeys(){
+  $('#keysbody').innerHTML = `<div class="keys">${KEYS.map(k => `
+    <div class="keyrow">
+      <span class="d-flex align-items-center gap-1">${
+        k.keys.map(x => x === 'then' ? '<span style="font-size:.6875rem">then</span>'
+                                     : `<kbd>${esc(x)}</kbd>`).join('')}</span>
+      <span class="flex-fill">${esc(k.what)}</span>
+      <span class="mono faint" style="font-size:.625rem">${esc(k.where)}</span>
+    </div>`).join('')}</div>`;
+  (_keys ||= new bootstrap.Modal($('#keysdlg'))).show();
 }
 
 /* ---------- boot ---------- */
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{state.view=b.dataset.view;render();});
-document.addEventListener('keydown',e=>{ if(state.view!=='card')return;
-  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
-  if(align.on){ if(e.key==='Escape')exitAlign(); return; }
-  if(e.key==='ArrowRight')stepCard(1); else if(e.key==='ArrowLeft')stepCard(-1);
-  else if(e.key==='ArrowUp'){e.preventDefault();cycleFocus(-1);} else if(e.key==='ArrowDown'){e.preventDefault();cycleFocus(1);}
-  else if(e.key==='Escape'){state.view='library';render();}});
-const _origRender=render; render=function(){ _origRender(); if(state.view==='library') loadBatches(); };
-get('/api/config').then(c=>$('#lib').textContent=c.root);
-refresh();
+$$('.navlink').forEach(b => { b.onclick = () => go(b.dataset.view); b.title = `/${b.dataset.view}`; });
+/* `G` then a letter jumps between screens, the way every console app does it. */
+let _goto = 0;
+document.addEventListener('keydown', e => {
+  if(['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName)) return;
+  if(document.querySelector('.modal.show')) return;
+  if(e.key === '?'){ e.preventDefault(); showKeys(); return; }
+  if(e.key === 'g' || e.key === 'G'){ _goto = Date.now(); return; }
+  if(Date.now() - _goto < 1200){
+    const dest = {l:'library', s:'search', ',':'settings'}[e.key.toLowerCase()];
+    _goto = 0;
+    if(dest){ e.preventDefault(); go(dest); return; }
+  }
+  if(state.view !== 'card') return;
+  if(e.key === 'Enter'){
+    const c = card();
+    if(!c) return;
+    e.preventDefault();
+    // the first step is the source: running it means fetching it again
+    if(state.step === PIPE()[0].key) refetch();
+    else if(runnable(c, state.step)) runStep(state.step);
+    return;
+  }
+  // an align mark has focus: the arrows are a nudge, not navigation
+  if(align.on && align.sel && e.target.classList?.contains('al-line')){
+    const fine = e.shiftKey ? 0.005 : 0.0015;
+    if(e.key === 'ArrowUp' || e.key === 'ArrowLeft'){ e.preventDefault(); nudge(-fine); return; }
+    if(e.key === 'ArrowDown' || e.key === 'ArrowRight'){ e.preventDefault(); nudge(fine); return; }
+  }
+  if(e.key === 'ArrowRight') stepCard(1);
+  else if(e.key === 'ArrowLeft') stepCard(-1);
+  else if(e.key === 'ArrowUp'){ e.preventDefault(); cycleFocus(-1); }
+  else if(e.key === 'ArrowDown'){ e.preventDefault(); cycleFocus(1); }
+  else if(e.key === 'f' || e.key === 'F') flipFace();
+  else if(e.key === 'c' || e.key === 'C') cycleCompare();
+  else if(e.key === 'Escape') go('library');
+});
+/* C cycles the compare tool — off, wipe, fade — but only where there is
+   something to compare, so the key never silently does nothing. */
+function cycleCompare(){
+  const c = card(); if(!c) return;
+  if(stStatus(c, SPEC(state.step).stage) !== 'done' || !stepInput(c, state.step)) return;
+  const i = COMPARE_MODES.findIndex(m => m.key === state.compare);
+  setCompare(COMPARE_MODES[(i + 1) % COMPARE_MODES.length].key);
+}
+function showLibPath(root){
+  const parts = root.split('/').filter(Boolean);
+  $('#lib').textContent = (parts.length > 2 ? '…/' : '/') + parts.slice(-2).join('/');
+  $('#lib').title = root;
+}
+
+/* Start from whatever URL we were opened at (deep link, reload, bookmark). The
+   route is re-read after /api/meta lands, because a step name in the path can
+   only be validated against the pipeline the server declares. */
+refresh().then(() => {
+  Object.assign(state, routeFromUrl());
+  history.replaceState(routeState(), '', currentUrl());
+  render();
+  showLibPath(state.meta.root);
+});
+setInterval(pollHealth, 60000);   // clears itself once the API recovers
 </script>
 </body>
 </html>

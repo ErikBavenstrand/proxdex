@@ -14,8 +14,9 @@ import tomllib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
+from enum import Enum, StrEnum
 from pathlib import Path
-from typing import TypeVar, cast
+from typing import Any, TypeVar, cast
 
 import numpy as np
 import rich_click as click
@@ -31,26 +32,50 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from . import bleed, borders, frames, media, report, sources
-from . import calibrate as calibrate_mod
-from . import grade as grade_mod
-from . import sheet as sheet_mod
-from . import upscale as upscale_mod
-from ._version import __version__
-from .config import Config
-from .errors import FileError, ProxdexError
-from .library import Card, Library, Stage, slugify
+from proxdex import bleed, borders, frames, games, media, net, report, sources, steps
+from proxdex import calibrate as calibrate_mod
+from proxdex import grade as grade_mod
+from proxdex import sheet as sheet_mod
+from proxdex import upscale as upscale_mod
+from proxdex._version import __version__
+from proxdex.config import (
+    MARKER,
+    Config,
+    Faces,
+    PageSize,
+    UpscaylModel,
+    UpscaylScale,
+)
+from proxdex.errors import FileError, ProxdexError
+from proxdex.frames import FrameGuide, GuideId
+from proxdex.games import GameId
+from proxdex.library import (
+    FRONT,
+    STAGE_BY_LABEL,
+    Card,
+    Library,
+    Stage,
+    Status,
+    Step,
+    slugify,
+)
 
 click.rich_click.USE_RICH_MARKUP = True
 click.rich_click.SHOW_ARGUMENTS = True
 click.rich_click.STYLE_OPTIONS_TABLE_LEADING = 0
 click.rich_click.COMMAND_GROUPS = {
     "proxdex": [
-        {"name": "Library", "commands": ["init", "where", "ls", "index", "ui"]},
+        {
+            "name": "Library",
+            "commands": ["init", "where", "ls", "show", "rm", "config", "index", "ui"],
+        },
         {"name": "Acquire", "commands": ["search", "fetch", "import"]},
-        {"name": "Prepare", "commands": ["border", "upscale", "grade"]},
+        {"name": "Prepare", "commands": ["border", "upscale", "grade", "frames"]},
         {"name": "Pipeline", "commands": ["skip", "unskip", "reset"]},
-        {"name": "Produce", "commands": ["back", "sheet", "printed"]},
+        {
+            "name": "Produce",
+            "commands": ["back", "flip", "sheet", "batches", "printed"],
+        },
         {"name": "Calibrate", "commands": ["calibrate"]},
     ]
 }
@@ -60,17 +85,44 @@ err = Console(stderr=True, highlight=False)
 
 T = TypeVar("T")
 
-_STAGES = (Stage.ORIGINAL, Stage.BORDERED, Stage.UPSCALED, Stage.EDITED)
-_STAGE_BY_LABEL = {s.label: s for s in Stage}
+#: the stage order, read from the one place it is declared
+_STAGES = steps.STAGES
 
-# the three optional/skippable processing steps, by the name you type
-# (`proxdex skip upscale`) → the stage they produce. original is the source, not
-# a step, so it is not skippable.
-_STEPS: dict[str, Stage] = {
-    "border": Stage.BORDERED,
-    "upscale": Stage.UPSCALED,
-    "grade": Stage.EDITED,
-}
+_GAME_CHOICE = click.Choice([g.value for g in GameId])
+_STEP_CHOICE = click.Choice([s.value for s in Step])
+
+#: how far `fetch --related` follows the provider's links. Two rounds reach both
+#: meld halves and the melded card from any of the three; a bound is what stops a
+#: cycle of "related to each other" from fetching a whole set.
+_RELATED_ROUNDS = 2
+#: which relations `--related` actually fetches. A meld half needs its partner and
+#: the melded card, and a card that makes tokens needs the tokens; a "combo piece"
+#: is as loose as a set's checklist card, so those are named and left alone.
+_FOLLOWED = frozenset(
+    {
+        sources.Relation.MELD_PART,
+        sources.Relation.MELD_RESULT,
+        sources.Relation.TOKEN,
+    }
+)
+
+#: shared `--game`; unset means "the library default, then the other games"
+_GAME = click.option(
+    "--game",
+    type=_GAME_CHOICE,
+    default=None,
+    help="Which TCG to use (default: [cyan][library] game[/] in proxdex.toml).",
+)
+#: shared `--face`; unset means every face the card has. A two-sided card's back
+#: is its own picture with its own pipeline state, so a step can target one side.
+_FACE = click.option(
+    "--face",
+    type=int,
+    default=None,
+    metavar="N",
+    help="Only this side of a two-sided card ([cyan]1[/] = front, [cyan]2[/] = "
+    "back). Default: every side.",
+)
 
 DEFAULT_TOML = """\
 # proxdex library config — tune here, no code edits needed.
@@ -79,6 +131,12 @@ DEFAULT_TOML = """\
 # step is one you run or skip — nothing is automatic. `proxdex border` reshapes
 # to the exact card size (mark the frame with --inner-*, or the UI align tool),
 # `upscale` and `grade` follow; `proxdex skip <step> <id>` bypasses one.
+
+[library]
+# Which game a bare `search`/`fetch` means. Every card also records its own
+# game in a `.game` file, so one library can hold both — this is just the
+# default for new lookups. "pokemon" | "mtg"
+game = "pokemon"
 
 [grade]
 # 1) normalize: pull each card to a common baseline first (so scans and
@@ -103,6 +161,11 @@ h_mm = 88.0
 
 [sources]
 bleed_mm = 2.5              # cut bleed added to every edge by cardbleed
+# Where each game's metadata and images come from. Pokémon splits the two
+# (pokemontcg.io for data, scrydex for the scan); Scryfall serves both for MTG.
+# api_url     = "https://api.pokemontcg.io/v2/cards/{id}"
+# scrydex_url = "https://images.scrydex.com/pokemon/{id}/large"
+# mtg_api_url = "https://api.scryfall.com"
 
 [sheet]
 # proxdex imposes the trim-size masters into the print PDF: each card is sized
@@ -164,23 +227,88 @@ profile = "foil"
 [tools]
 # Upscayl (the upscale stage). On macOS the bundled binary and models are
 # auto-detected; set explicit paths on other platforms.
-upscayl_model = "digital-art-4x"  # or ultrasharp-4x, remacri-4x, high-fidelity-4x, ...
-upscayl_scale = 2                 # 1, 2, 3, or 4
+# One of Upscayl's built-in models: upscayl-standard-4x | upscayl-lite-4x |
+# high-fidelity-4x | remacri-4x | ultramix-balanced-4x | ultrasharp-4x |
+# digital-art-4x. Anything else fails at load, naming these.
+upscayl_model = "digital-art-4x"
+upscayl_scale = 2                 # 1 | 2 | 3 | 4
 upscayl_double = true             # run the model twice (2x doubled = 4x, up to 16x)
 # upscayl_bin    = "/Applications/Upscayl.app/Contents/Resources/bin/upscayl-bin"
 # upscayl_models = "/Applications/Upscayl.app/Contents/Resources/models"
 """
 
 
+class UserPath(click.Path):  # pyright: ignore[reportMissingTypeArgument]
+    """A :class:`click.Path` that expands ``~`` before its own checks.
+
+    The shell expands a bare ``~/x`` but not a quoted ``"~/x"`` — and a library
+    path with a space in it (``"~/Documents/Pokémon Proxies"``) has to be
+    quoted, so a literal ``~`` reaches us and would resolve against the cwd.
+    """
+
+    def convert(
+        self,
+        value: str | os.PathLike[str],
+        param: click.Parameter | None,
+        ctx: click.Context | None,
+    ) -> Any:
+        return super().convert(Path(value).expanduser(), param, ctx)
+
+
 # --------------------------------------------------------------- helpers -----
 def _lib(ctx: click.Context) -> Library:
+    return Library.discover(explicit=_root_opt(ctx))
+
+
+def _root_opt(ctx: click.Context) -> Path | None:
+    """The group's ``--root``, already ``~``-expanded by :class:`UserPath`."""
     root = ctx.obj.get("root")
-    return Library.discover(explicit=Path(root) if root else None)
+    return Path(root) if root else None
 
 
-def _dots(card: Card) -> str:
-    glyph = {"done": "[green]✓[/]", "skipped": "[yellow]⤳[/]", "pending": "[dim]·[/]"}
-    return " ".join(glyph[card.status(s)] for s in _STAGES)
+_STATUS_GLYPH: dict[Status, str] = {
+    Status.DONE: "[green]✓[/]",
+    Status.SKIPPED: "[yellow]⤳[/]",
+    Status.PENDING: "[dim]·[/]",
+}
+
+
+def _dots(card: Card, face: int = FRONT) -> str:
+    return " ".join(_STATUS_GLYPH[card.status(s, face)] for s in _STAGES)
+
+
+def _faces(card: Card, face: int | None) -> tuple[int, ...]:
+    """Which sides of a card a command should act on.
+
+    ``--face`` is 1-based because that is how the sides are labelled everywhere
+    else; out of range is an error rather than a silent fall-back to the front.
+    """
+    if face is None:
+        return card.faces
+    if face - 1 not in card.faces:
+        raise FileError(f"{card.id}: no side {face} — this card has {len(card.faces)}")
+    return (face - 1,)
+
+
+def _some_faces(card: Card, face: int | None) -> tuple[int, ...]:
+    """:func:`_faces`, but a card that simply hasn't got that side is passed over.
+
+    ``proxdex skip border --face 2`` over a whole library means "the back of
+    every two-sided card"; a one-sided card is not an error there.
+    """
+    try:
+        return _faces(card, face)
+    except FileError:
+        console.print(f"[dim]· {card.id}: one side, no side {face}[/]")
+        return ()
+
+
+def _label(card: Card, face: int) -> str:
+    """``neo-136`` for a one-sided card, ``neo-136 · back`` for a side of two."""
+    if len(card.faces) < 2:
+        return card.id
+    name = card.face_names()[face] or ("front" if face == FRONT else "back")
+    return f"{card.id} · {name}"
 
 
 def _reindex(lib: Library) -> None:
@@ -189,26 +317,35 @@ def _reindex(lib: Library) -> None:
         report.write_index(lib)
 
 
-def _cascade(card: Card, stage: Stage) -> None:
+def _api_note() -> None:
+    """Say when a card API misbehaved during this command, so a slow or partly
+    empty result reads as "the API is flaky", not "proxdex is broken"."""
+    for host in net.incidents():
+        err.print(
+            f"[yellow]⚠[/] {host.message} [dim](retried; cached where possible)[/]"
+        )
+
+
+def _cascade(card: Card, stage: Stage, face: int = FRONT) -> None:
     """Drop downstream outputs made stale by a change to ``stage``, and say so."""
-    removed = card.invalidate_downstream(stage)
+    removed = card.invalidate_downstream(stage, face)
     if removed:
         names = ", ".join(s.label for s in removed)
         console.print(f"  [dim]↳ removed stale downstream: {names}[/]")
 
 
-def _master(card: Card) -> Path | None:
+def _master(card: Card, face: int = FRONT) -> Path | None:
     """The furthest-along image to print — the graded master, or the best
     earlier stage when a later step was skipped."""
-    return card.best(Stage.EDITED, Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL)
+    return card.best(*steps.BEST, face=face)
 
 
-def _sheet_ready(card: Card) -> bool:
-    """A card is ready to impose once grade is settled — done, or skipped so an
+def _sheet_ready(card: Card, face: int = FRONT) -> bool:
+    """A side is ready to impose once grade is settled — done, or skipped so an
     earlier stage stands as the master."""
-    return (card.has(Stage.EDITED) or card.skipped(Stage.EDITED)) and _master(
-        card
-    ) is not None
+    return (
+        card.has(Stage.EDITED, face) or card.skipped(Stage.EDITED, face)
+    ) and _master(card, face) is not None
 
 
 def _each(items: Sequence[T], fn: Callable[[T], None], verb: str) -> int:
@@ -241,11 +378,12 @@ def _each(items: Sequence[T], fn: Callable[[T], None], verb: str) -> int:
     "--root",
     default=None,
     metavar="DIR",
+    type=UserPath(file_okay=False, path_type=Path),
     help="Library folder (default: search up from the current directory).",
 )
 @click.version_option(__version__, "-V", "--version")
 @click.pass_context
-def cli(ctx: click.Context, root: str | None) -> None:
+def cli(ctx: click.Context, root: Path | None) -> None:
     """[bold]proxdex[/] — organize and drive your Pokémon proxy pipeline.
 
     A card flows through four stages: [cyan]original[/] → [cyan]bordered[/] →
@@ -264,14 +402,11 @@ def cli(ctx: click.Context, root: str | None) -> None:
 
 
 @cli.command()
-@click.argument(
-    "path", required=False, type=click.Path(file_okay=False, path_type=Path)
-)
+@click.argument("path", required=False, type=UserPath(file_okay=False, path_type=Path))
 @click.pass_context
 def init(ctx: click.Context, path: Path | None) -> None:
     """Create a new library here (or at PATH): cards/, print-batches/, config."""
-    root_opt = ctx.obj.get("root")
-    root = (path or (Path(root_opt) if root_opt else Path.cwd())).resolve()
+    root = (path or _root_opt(ctx) or Path.cwd()).resolve()
     (root / "cards").mkdir(parents=True, exist_ok=True)
     (root / "print-batches").mkdir(parents=True, exist_ok=True)
     marker = root / "proxdex.toml"
@@ -287,56 +422,180 @@ def _card_from_meta(lib: Library, meta: sources.CardMeta) -> Card:
     card = lib.find(meta.id)
     if card is not None:
         return card
-    set_dir = lib.set_dir(meta.set_id, meta.set_name)
+    set_dir = lib.set_dir(meta.set_id, meta.set_name, meta.game)
     card_dir = set_dir / f"{meta.id}_{slugify(meta.name)}"
     card_dir.mkdir(parents=True, exist_ok=True)
-    return Card(id=meta.id, dir=card_dir, set_id=meta.set_id)
+    card = Card(id=meta.id, dir=card_dir, set_id=meta.set_id)
+    card.write_game(meta.game)
+    return card
 
 
-def _ensure_card(lib: Library, cfg: Config, cid: str) -> Card:
+def _ensure_card(lib: Library, cfg: Config, cid: str, game: GameId | None) -> Card:
     """Find the card, or look up its metadata and create the folder."""
     card = lib.find(cid)
     if card is not None:
         return card
-    return _card_from_meta(lib, sources.lookup(cid, cfg))
+    return _card_from_meta(lib, sources.lookup_any(cid, cfg, game))
 
 
-def _acquire(lib: Library, cfg: Config, meta: sources.CardMeta, force: bool) -> None:
-    """Create the card folder if needed and download its stage-1 original."""
+def _resolve_meta(
+    lib: Library, cfg: Config, cid: str, game: GameId | None
+) -> sources.CardMeta:
+    """Metadata for an id, preferring the game an already-filed card records."""
+    known = lib.find(cid)
+    return sources.lookup_any(cid, cfg, game or (known.game if known else None))
+
+
+def _kind_note(card: Card, meta: sources.CardMeta) -> None:
+    """Say out loud when a printing is not an ordinary one-sided 63×88 card.
+
+    Three things change what goes on paper — two sides, a meld pair, an oversized
+    card — and one changes how the border is fitted (a borderless print has no
+    frame to match). Silence here would mean finding out at ``sheet`` time.
+    """
+    if meta.layout is not games.Layout.SINGLE:
+        console.print(
+            f"  [cyan]{meta.layout.label.lower()}[/] [dim]{meta.layout.note}[/]"
+        )
+    if meta.oversized:
+        err.print(
+            f"[yellow]⚠[/] {card.id} is an oversized card "
+            f"({games.OVERSIZED_W_MM:g}×{games.OVERSIZED_H_MM:g}mm). [dim]`sheet` "
+            "imposes at the \\[card] trim size, so it would print at standard "
+            "size — set \\[card] w_mm/h_mm for a sheet of these.[/]"
+        )
+    if meta.frame is not None:
+        console.print(
+            f"  [dim]frame:[/] {frames.GUIDES[meta.frame].name} "
+            "[dim](from the printing, not its set)[/]"
+        )
+
+
+def _related_ids(lib: Library, cfg: Config, cid: str, game: GameId | None) -> list[str]:
+    """The ids of cards printed alongside ``cid``, reported as they are found.
+
+    A meld pair is three physical cards; a card that makes tokens is printed with
+    them. Fetching one and not the others leaves a deck you cannot play, so
+    ``fetch --related`` follows the provider's own links.
+    """
+    known = lib.find(cid)
+    try:
+        detail = sources.details(cid, cfg, game or (known.game if known else None))
+    except ProxdexError as exc:
+        err.print(f"[yellow]⚠[/] {cid}: could not read related cards ({exc})")
+        return []
+    found: list[str] = []
+    for rel in detail.related:
+        label = rel.relation.label.lower()
+        if rel.relation not in _FOLLOWED:
+            # a checklist card is a "combo piece" of every meld card in its set;
+            # naming it is useful, fetching it is not what anyone meant
+            console.print(f"  [dim]· {label} {rel.name} ({rel.id or 'no id'})[/]")
+        elif rel.id:
+            found.append(rel.id)
+            console.print(f"  [dim]↳ {label}[/] {rel.name} [dim]({rel.id})[/]")
+        else:
+            err.print(
+                f"[yellow]↳[/] {label} {rel.name} [dim](the API gave no id for "
+                "that printing — find it with `proxdex search`)[/]"
+            )
+    return found
+
+
+def _acquire(
+    lib: Library, meta: sources.CardMeta, force: bool, face: int | None = None
+) -> None:
+    """Create the card folder if needed and download each side's stage-1 original.
+
+    A two-sided card downloads both sides — they are one card with one id, and
+    each side then runs its own pipeline.
+    """
     card = _card_from_meta(lib, meta)
-    dst = card.stage_path(Stage.ORIGINAL)
-    if dst.exists() and not force:
-        console.print(f"[dim]· {meta.id} {meta.name}: original exists[/]")
-        return
-    sources.download_large(meta.id, cfg).save(dst)
-    _cascade(card, Stage.ORIGINAL)
-    console.print(
-        f"[green]✓[/] {meta.id:<9} {meta.name:<18} → {dst.relative_to(lib.root)}"
-    )
+    card.write_faces(meta.face_names)
+    # what kind of printing this is — recorded now so the border step, `sheet`
+    # and the card page can act on it without asking the API again
+    card.write_kind(meta.layout, oversized=meta.oversized, frame=meta.frame)
+    _kind_note(card, meta)
+    wanted = card.faces if face is None else _faces(card, face)
+    for f in wanted:
+        dst = card.stage_path(Stage.ORIGINAL, f)
+        if dst.exists() and not force:
+            console.print(f"[dim]· {_label(card, f)} {meta.name}: original exists[/]")
+            continue
+        sources.download(meta, f).save(dst)
+        _cascade(card, Stage.ORIGINAL, f)
+        console.print(
+            f"[green]✓[/] {_label(card, f):<9} {meta.name:<18} → "
+            f"{dst.relative_to(lib.root)}"
+        )
 
 
 @cli.command()
 @click.argument("ids", nargs=-1, required=True, metavar="ID...")
+@_GAME
+@_FACE
 @click.option("--force", is_flag=True, help="Re-download even if the original exists.")
+@click.option(
+    "--related",
+    "with_related",
+    is_flag=True,
+    help="Also fetch the cards this one is printed alongside — both meld halves "
+    "and the melded card, the tokens it makes.",
+)
 @click.pass_context
-def fetch(ctx: click.Context, ids: tuple[str, ...], force: bool) -> None:
-    """Download originals by id from scrydex + names/sets from the TCG API.
+def fetch(
+    ctx: click.Context,
+    ids: tuple[str, ...],
+    game: str | None,
+    face: int | None,
+    force: bool,
+    with_related: bool,
+) -> None:
+    """Download originals by id, with names/sets from that game's API.
 
-    IDs are canonical TCG ids, e.g. [cyan]ex3-90[/] or [cyan]ex15-94[/]. Don't
-    know the id? Use [cyan]proxdex search[/] instead.
+    IDs are canonical TCG ids — [cyan]ex3-90[/] for Pokémon, [cyan]neo-136[/]
+    for MTG. Without [cyan]--game[/] each id is looked up in the library's
+    default game first, then the others. A two-sided MTG card downloads both
+    sides, each with its own pipeline. Don't know the id? Use
+    [cyan]proxdex search[/] instead.
+
+    A meld pair is three separate cards, so [cyan]--related[/] follows the API's
+    own links and fetches the partner and the melded card too (and any tokens the
+    card makes):
+
+    [dim]  proxdex fetch --related inr-14[/]
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    _each(
-        ids, lambda cid: _acquire(lib, cfg, sources.lookup(cid, cfg), force), "fetching"
-    )
+    want = games.parse(game)
+    queue = list(ids)
+    seen: set[str] = set()
+    for round_no in range(_RELATED_ROUNDS):
+        batch = [cid for cid in queue if cid.lower() not in seen]
+        if not batch:
+            break
+        seen.update(cid.lower() for cid in batch)
+        _each(
+            batch,
+            lambda cid: _acquire(lib, _resolve_meta(lib, cfg, cid, want), force, face),
+            "fetching",
+        )
+        # nothing found in the last round could be fetched, so don't spend the
+        # requests (or the noise) looking it up
+        last = round_no == _RELATED_ROUNDS - 1
+        queue = (
+            [rel for cid in batch for rel in _related_ids(lib, cfg, cid, want)]
+            if with_related and not last
+            else []
+        )
     _reindex(lib)
 
 
 @cli.command()
 @click.argument("query", nargs=-1, required=True, metavar="QUERY...")
+@_GAME
 @click.option(
-    "--set", "set_filter", metavar="SET", help="Set id (ex4) or name substring."
+    "--set", "set_filter", metavar="SET", help="Set id (ex4, neo) or name substring."
 )
 @click.option("--rarity", metavar="TEXT", help="Keep only rarities containing TEXT.")
 @click.option("--year", metavar="YYYY", help="Keep only cards released that year.")
@@ -356,6 +615,7 @@ def fetch(ctx: click.Context, ids: tuple[str, ...], force: bool) -> None:
 def search(
     ctx: click.Context,
     query: tuple[str, ...],
+    game: str | None,
     set_filter: str | None,
     rarity: str | None,
     year: str | None,
@@ -365,32 +625,37 @@ def search(
     open_images: bool,
     force: bool,
 ) -> None:
-    """Search cards by name, then pick which to fetch.
+    """Search one game's cards by name, then pick which to fetch.
 
     Shows matches with set, year, collector number, rarity and artist so you
-    can tell prints apart, then downloads the ones you choose.
+    can tell prints apart, then downloads the ones you choose. Searching is
+    per-game (the APIs are different); [cyan]--game[/] picks which.
 
     [dim]Examples:[/]
 
     [dim]  proxdex search entei ex[/]
 
-    [dim]  proxdex search charizard --set base1 --rarity holo[/]
+    [dim]  proxdex search --game mtg delver of secrets --set isd[/]
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
+    want = games.coerce(game, cfg.library_game)
     text = " ".join(query)
     results = sources.search(
-        text, cfg, set_filter=set_filter, rarity=rarity, year=year, limit=limit
+        text, cfg, want, set_filter=set_filter, rarity=rarity, year=year, limit=limit
     )
     if not results:
-        console.print(f"[yellow]no matches for[/] {text!r}")
+        console.print(
+            f"[yellow]no {games.get(want).name} matches for[/] {text!r} "
+            "[dim](--game switches TCG)[/]"
+        )
         return
     _print_results(results)
     if open_images:
         import webbrowser
 
         for result in results[:12]:
-            webbrowser.open(cfg.scrydex_url.format(id=result.id))
+            webbrowser.open(result.image_url)
 
     if fetch_all:
         chosen = results
@@ -409,7 +674,7 @@ def search(
     if not chosen:
         console.print("[dim]nothing selected.[/]")
         return
-    _each(chosen, lambda r: _acquire(lib, cfg, r.to_meta(), force), "fetching")
+    _each(chosen, lambda r: _acquire(lib, r.to_meta(), force), "fetching")
     _reindex(lib)
 
 
@@ -474,6 +739,7 @@ def _parse_selection(
     help="Assign this TCG id to the file(s); looks up name/set and creates the "
     "card folder if missing. Use when the filename has no id.",
 )
+@_GAME
 @click.option(
     "--stage",
     type=click.Choice([s.label for s in Stage]),
@@ -481,13 +747,16 @@ def _parse_selection(
     help="Target stage (default: guessed — 'upscayl' in the name → upscaled, "
     "else original).",
 )
+@_FACE
 @click.option("--move", is_flag=True, help="Move files instead of copying them.")
 @click.pass_context
 def import_(
     ctx: click.Context,
     paths: tuple[str, ...],
     cid: str | None,
+    game: str | None,
     stage: str | None,
+    face: int | None,
     move: bool,
 ) -> None:
     """File loose images (e.g. an Upscayl output folder) into card stages.
@@ -500,7 +769,8 @@ def import_(
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    forced_stage = _STAGE_BY_LABEL[stage] if stage else None
+    want = games.parse(game)
+    forced_stage = STAGE_BY_LABEL[stage] if stage else None
     files: list[Path] = [
         Path(match)
         for pattern in paths
@@ -512,7 +782,7 @@ def import_(
         file_cid = cid or _card_id_from(f.stem)
         if file_cid is None:
             raise FileError(f"{f.name}: no card id in filename (pass --id)")
-        card = _ensure_card(lib, cfg, file_cid) if cid else lib.find(file_cid)
+        card = _ensure_card(lib, cfg, file_cid, want) if cid else lib.find(file_cid)
         if card is None:
             raise FileError(
                 f"{file_cid}: no card folder — pass --id to create it, or "
@@ -521,10 +791,12 @@ def import_(
         target = forced_stage or (
             Stage.UPSCALED if "upscayl" in f.name.lower() else Stage.ORIGINAL
         )
-        dst = card.stage_path(target)
+        # one file is one side; without --face it replaces the front
+        side = _faces(card, face)[0] if face is not None else FRONT
+        dst = card.stage_path(target, side)
         (shutil.move if move else shutil.copy2)(str(f), str(dst))
-        card.clear_skip(target)
-        _cascade(card, target)
+        card.clear_skip(target, side)
+        _cascade(card, target, side)
         console.print(
             f"[green]✓[/] {f.name} → {dst.relative_to(lib.root)} "
             f"[dim](stage {target.value} {target.label})[/]"
@@ -537,14 +809,23 @@ def import_(
 
 
 @cli.command()
+@click.option(
+    "--clear-cache", is_flag=True, help="Drop the cached API responses and re-fetch."
+)
 @click.pass_context
-def where(ctx: click.Context) -> None:
+def where(ctx: click.Context, clear_cache: bool) -> None:
     """Show the active library root and config (which one am I operating on?)."""
     lib = _lib(ctx)
-    cfg_file = lib.root / "proxdex.toml"
+    cfg_file = lib.root / MARKER
     mark = "[green]✓[/]" if cfg_file.exists() else "[red]missing[/]"
     console.print(f"[bold]library[/]  {lib.root}")
     console.print(f"config    {cfg_file} {mark}")
+    console.print(f"game      {games.get(lib.default_game).name} [dim](default)[/]")
+    console.print(f"cache     {net.cache_dir()}")
+    if clear_cache:
+        console.print(f"[green]✓[/] cleared {net.clear_cache()} cached response(s)")
+    for host in net.health():
+        console.print(f"[yellow]⚠[/] {host.message} [dim]({host.age:.0f}s ago)[/]")
     if env := os.environ.get("PROXDEX_ROOT"):
         console.print(f"[dim]PROXDEX_ROOT={env}[/]")
 
@@ -565,7 +846,7 @@ def ui(ctx: click.Context, host: str, port: int, no_open: bool, reload: bool) ->
     try:
         import uvicorn
 
-        from .webui import create_app
+        from proxdex.webui import create_app
     except ModuleNotFoundError as exc:
         raise ProxdexError(
             "the web UI needs extra deps — install with "
@@ -592,64 +873,496 @@ def ui(ctx: click.Context, host: str, port: int, no_open: bool, reload: bool) ->
         uvicorn.run(create_app(lib), host=host, port=port, log_level="warning")
 
 
+class LsOnly(StrEnum):
+    """The library filters, the same set the web UI's contact sheet offers."""
+
+    TODO = "todo"
+    READY = "ready"
+    PRINTED = "printed"
+    TWOSIDED = "twosided"
+    OVERSIZED = "oversized"
+
+
+class LsSort(StrEnum):
+    NAME = "name"
+    ID = "id"
+    SET = "set"
+    RECENT = "recent"
+
+
+def _newest(card: Card) -> float:
+    """When this card's pixels last changed — the ``recent`` sort key."""
+    stamps = [
+        p.stat().st_mtime
+        for f in card.faces
+        for s in _STAGES
+        if (p := card.stage_path(s, f)).exists()
+    ]
+    return max(stamps) if stamps else 0.0
+
+
+def _matches(
+    card: Card,
+    printed: bool,
+    *,
+    match: str | None,
+    game: GameId | None,
+    set_id: str | None,
+    only: LsOnly | None,
+) -> bool:
+    text = match.lower() if match else ""
+    if text and text not in card.id.lower() and text not in card.name.lower():
+        return False
+    if game is not None and card.game is not game:
+        return False
+    if set_id is not None and card.set_id.lower() != set_id.lower():
+        return False
+    ready = _sheet_ready(card, card.front_face)
+    return {
+        None: True,
+        LsOnly.TODO: not ready,
+        LsOnly.READY: ready and not printed,
+        LsOnly.PRINTED: printed,
+        LsOnly.TWOSIDED: len(card.faces) > 1,
+        LsOnly.OVERSIZED: card.oversized,
+    }[only]
+
+
 @cli.command()
+@click.argument("match", required=False, metavar="[TEXT]")
+@_GAME
+@click.option("--set", "set_id", metavar="SET", help="Only this set id.")
+@click.option(
+    "--only",
+    type=click.Choice([o.value for o in LsOnly]),
+    default=None,
+    help="[cyan]todo[/] not ready to print · [cyan]ready[/] ready, not printed · "
+    "[cyan]printed[/] · [cyan]twosided[/] · [cyan]oversized[/].",
+)
+@click.option(
+    "--sort",
+    type=click.Choice([s.value for s in LsSort]),
+    default=LsSort.SET.value,
+    show_default=True,
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Machine-readable output: one object per card, sides included.",
+)
 @click.pass_context
-def ls(ctx: click.Context) -> None:
-    """List every card with its stage progress and print status."""
+def ls(
+    ctx: click.Context,
+    match: str | None,
+    game: str | None,
+    set_id: str | None,
+    only: str | None,
+    sort: str,
+    as_json: bool,
+) -> None:
+    """List cards with their stage progress and print status.
+
+    TEXT filters by card id or name. The filters and sorts are the same ones the
+    web UI's contact sheet offers, so a view you found there can be spelled here:
+
+    [dim]  proxdex ls --only ready --sort recent[/]
+
+    [dim]  proxdex ls charizard --game pokemon[/]
+    """
     lib = _lib(ctx)
     by_card = report.card_batch_index(lib)
+    want_only = LsOnly(only) if only else None
+    cards = [
+        card
+        for card in lib.cards()
+        if _matches(
+            card,
+            bool((b := by_card.get(card.id)) and b.printed),
+            match=match,
+            game=games.parse(game),
+            set_id=set_id,
+            only=want_only,
+        )
+    ]
+    key: dict[LsSort, Callable[[Card], Any]] = {
+        LsSort.NAME: lambda c: c.name.lower(),
+        LsSort.ID: lambda c: c.id,
+        LsSort.SET: lambda c: (c.set_id, c.id),
+        LsSort.RECENT: lambda c: -_newest(c),
+    }
+    cards.sort(key=key[LsSort(sort)])
+
+    if as_json:
+        console.print_json(
+            json.dumps(
+                [_card_json(card, by_card.get(card.id)) for card in cards], indent=2
+            )
+        )
+        return
+    if not cards:
+        console.print("[dim]no cards match[/]")
+        return
+
     table = Table(box=None, pad_edge=False, header_style="bold")
-    table.add_column("Card")
-    table.add_column("Name")
-    table.add_column("Set")
+    for col in ("Card", "Name", "Game", "Set", "Kind", "Side"):
+        table.add_column(col)
     table.add_column("O B U E", justify="center")
     table.add_column("Batch")
     table.add_column("Printed", justify="center")
-    for card in lib.cards():
+    for card in cards:
         batch = by_card.get(card.id)
-        table.add_row(
-            card.id,
-            card.name.title(),
-            card.set_id,
-            _dots(card),
-            batch.name if batch else "",
-            "[green]✓[/]" if batch and batch.printed else "",
-        )
+        names = card.face_names()
+        for f in card.faces:
+            first = f == 0
+            side = "" if len(names) < 2 else (names[f] or f"side {f + 1}")
+            if f == card.front_face and len(names) > 1:
+                side = f"[cyan]{side}[/] ↑"  # the side that prints on the front
+            table.add_row(
+                card.id if first else "",
+                card.name.title() if first else "",
+                card.game.value if first else "",
+                card.set_id if first else "",
+                _kind_tag(card) if first else "",
+                side,
+                _dots(card, f),
+                (batch.name if batch else "") if first else "",
+                ("[green]✓[/]" if batch and batch.printed else "") if first else "",
+            )
     console.print(table)
     console.print(
         "[dim]stages: O original · B bordered · U upscaled · E edited   "
-        "([green]✓[/] done · [yellow]⤳[/] skipped · · pending)[/]"
+        "([green]✓[/] done · [yellow]⤳[/] skipped · · pending)   "
+        "↑ = the side printed on the front[/]"
+    )
+    _tally(cards)
+
+
+def _kind_tag(card: Card) -> str:
+    """The short "this is not an ordinary card" column for ``ls``."""
+    tags: list[str] = []
+    if card.layout is not games.Layout.SINGLE:
+        tags.append(f"[cyan]{card.layout.value}[/]")
+    if card.oversized:
+        tags.append("[yellow]oversized[/]")
+    if card.frame is not None:
+        tags.append(f"[dim]{card.frame.value}[/]")
+    return " ".join(tags)
+
+
+def _card_json(card: Card, batch: report.Batch | None) -> dict[str, Any]:
+    """One card as data — the same shape ``/api/cards`` serves the web UI."""
+    names = card.face_names()
+    return {
+        "id": card.id,
+        "name": card.name.title(),
+        "game": card.game.value,
+        "set": card.set_id,
+        "layout": card.layout.value,
+        "oversized": card.oversized,
+        "frame": card.frame.value if card.frame else None,
+        "front_face": card.front_face,
+        "faces": [
+            {
+                "index": f,
+                "name": names[f] or ("front" if f == FRONT else "back"),
+                "status": {s.label: card.status(s, f).value for s in _STAGES},
+            }
+            for f in card.faces
+        ],
+        "status": {s.label: card.rollup(s).value for s in _STAGES},
+        "batch": batch.name if batch else None,
+        "printed": bool(batch and batch.printed),
+    }
+
+
+def _tally(cards: Sequence[Card]) -> None:
+    """Where this listing stands, per stage — counted over sides, because a
+    two-sided card is two jobs, not one."""
+    sides = [(card, f) for card in cards for f in card.faces]
+    if not sides:
+        return
+    parts: list[str] = []
+    for stage in _STAGES:
+        done = sum(1 for c, f in sides if c.status(stage, f) is Status.DONE)
+        parts.append(f"{stage.label} [green]{done}[/]/{len(sides)}")
+    ready = sum(1 for c in cards if _sheet_ready(c, c.front_face))
+    console.print(
+        f"[dim]{len(cards)} cards · {len(sides)} sides · "
+        + " · ".join(parts)
+        + f" · [/][bold]{ready}[/] [dim]ready to print[/]"
     )
 
 
 @cli.command()
+@click.argument("cid", metavar="ID")
+@_GAME
+@click.pass_context
+def show(ctx: click.Context, cid: str, game: str | None) -> None:
+    """Everything the card's API says about one card, plus its local state.
+
+    The terminal twin of the card page's data sheet: every field of the response
+    worth reading, the links the provider hands out, and the other cards this one
+    is printed alongside — a meld partner, the melded card, the tokens it makes.
+
+    [dim]  proxdex show inr-14[/]
+    """
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    known = lib.find(cid)
+    detail = sources.details(
+        cid, cfg, games.parse(game) or (known.game if known else None)
+    )
+    meta = detail.meta
+    console.print(
+        f"[bold]{meta.name}[/]  [dim]{meta.id}[/]\n"
+        f"{meta.set_name} [dim]({meta.set_id})[/] · {games.get(meta.game).name} "
+        f"[dim]· {detail.source}[/]"
+    )
+    kind = [meta.layout.label] + (["oversized"] if meta.oversized else [])
+    console.print(
+        f"[cyan]{' · '.join(kind)}[/] [dim]{meta.layout.note}[/]\n"
+        + (
+            "[dim]frame: [/]"
+            + frames.GUIDES[meta.frame].name
+            + " [dim](from the printing)[/]\n"
+            if meta.frame is not None
+            else ""
+        )
+        + (
+            "[dim]sides: [/]" + " · ".join(f.name or "front" for f in meta.faces) + "\n"
+            if len(meta.faces) > 1
+            else ""
+        ),
+        end="",
+    )
+    if known is not None:
+        console.print(
+            f"[dim]in this library:[/] {known.dir.relative_to(lib.root)}  "
+            + "  ".join(f"{_label(known, f)} {_dots(known, f)}" for f in known.faces)
+        )
+    else:
+        console.print(f"[dim]not in this library — `proxdex fetch {meta.id}`[/]")
+
+    for group in detail.groups:
+        console.print(f"\n[bold]{group.title}[/]")
+        table = Table(box=None, pad_edge=False, show_header=False)
+        table.add_column("", style="dim", no_wrap=True)
+        table.add_column("")
+        for fact in group.facts:
+            table.add_row(fact.label, fact.value)
+        console.print(table)
+    if detail.related:
+        console.print("\n[bold]Printed alongside[/]")
+        table = Table(box=None, pad_edge=False, show_header=False)
+        table.add_column("", style="dim", no_wrap=True)
+        table.add_column("")
+        table.add_column("", style="dim")
+        for rel in detail.related:
+            have = "✓ in library" if rel.id and lib.find(rel.id) else ""
+            table.add_row(rel.relation.label, rel.name, f"{rel.id} {have}".strip())
+        console.print(table)
+        console.print(f"[dim]`proxdex fetch --related {meta.id}` adds them all[/]")
+    if detail.links:
+        console.print("\n[bold]Links[/]")
+        for link in detail.links:
+            console.print(f"  [dim]{link.label}[/]  {link.url}")
+
+
+@cli.command("rm")
+@click.argument("ids", nargs=-1, required=True, metavar="ID...")
+@click.option("-y", "--yes", is_flag=True, help="Delete without confirming.")
+@click.pass_context
+def rm(ctx: click.Context, ids: tuple[str, ...], yes: bool) -> None:
+    """Delete cards from the library — every stage image and marker they own.
+
+    This removes work, not just state, so it lists what would go and asks first.
+    Nothing else in proxdex deletes a folder.
+    """
+    lib = _lib(ctx)
+    cards = [c for c in (lib.find(cid) for cid in ids) if c is not None]
+    unknown = [cid for cid in ids if lib.find(cid) is None]
+    for cid in unknown:
+        err.print(f"[yellow]SKIPPED[/] {cid}: not in this library")
+    if not cards:
+        return
+    for card in cards:
+        stages = sum(1 for f in card.faces for s in _STAGES if card.has(s, f))
+        console.print(
+            f"  [red]-[/] {card.id} {card.name.title()} "
+            f"[dim]({stages} stage image(s), {card.dir.relative_to(lib.root)})[/]"
+        )
+    if not yes:
+        if not sys.stdin.isatty():
+            raise click.UsageError("not a terminal — pass --yes to delete these")
+        if not click.confirm(f"Delete {len(cards)} card(s)?", default=False):
+            console.print("[dim]nothing deleted.[/]")
+            return
+    for card in cards:
+        shutil.rmtree(card.dir, ignore_errors=True)
+        console.print(f"[green]✓[/] deleted {card.id}")
+    _reindex(lib)
+
+
+@cli.command()
+@click.pass_context
+def batches(ctx: click.Context) -> None:
+    """List the print batches in this library and whether they're printed."""
+    lib = _lib(ctx)
+    found = report.batches(lib)
+    if not found:
+        console.print("[dim]no batches yet — `proxdex sheet <name>` makes one[/]")
+        return
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for col in ("Batch", "Date", "Faces", "Cards", "PDF", "Printed"):
+        table.add_column(col)
+    for batch in found:
+        table.add_row(
+            batch.name,
+            batch.date,
+            batch.faces.value,
+            str(len(batch.cards)),
+            ", ".join(p.name for p in batch.pdfs),
+            f"[green]✓ {batch.printed_date}[/]" if batch.printed else "[dim]queued[/]",
+        )
+    console.print(table)
+    console.print("[dim]mark one printed with `proxdex printed <name>`[/]")
+
+
+@cli.group("config")
+def config_cmd() -> None:
+    """Read and write this library's [cyan]proxdex.toml[/].
+
+    The same settings the web UI's settings screen edits, spelled as
+    ``[section] key``. Every value is coerced through the option's own declared
+    type before it is written, so a typo fails here rather than at print time.
+    """
+
+
+@config_cmd.command("show")
+@click.argument("match", required=False, metavar="[TEXT]")
+@click.pass_context
+def config_show(ctx: click.Context, match: str | None) -> None:
+    """Print every setting with its value, what it means and its default."""
+    lib = _lib(ctx)
+    docs = Config.describe()
+    text = (match or "").lower()
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for col in ("Setting", "Value", "Default", "Means"):
+        table.add_column(col)
+    shown = 0
+    for section, key, value in _config_rows(lib):
+        path = f"{section}.{key}"
+        field_name = Config.field_name(section, key)
+        doc = docs.get(field_name or "", {})
+        label = doc.get("label", "").lower()
+        if text and text not in path.lower() and text not in label:
+            continue
+        shown += 1
+        unit = f" {doc['unit']}" if doc.get("unit") else ""
+        table.add_row(
+            path,
+            f"{_toml_text(value)}{unit}",
+            f"[dim]{doc.get('default', '')}[/]",
+            doc.get("label", "[dim]—[/]"),
+        )
+    if not shown:
+        console.print("[dim]no settings match[/]")
+        return
+    console.print(table)
+    console.print(
+        f"[dim]{lib.root / MARKER} — change one with "
+        "`proxdex config set sheet.dpi=1200`[/]"
+    )
+
+
+@config_cmd.command("set")
+@click.argument("assignments", nargs=-1, required=True, metavar="SECTION.KEY=VALUE...")
+@click.pass_context
+def config_set(ctx: click.Context, assignments: tuple[str, ...]) -> None:
+    """Write settings into proxdex.toml, keeping its comments.
+
+    [dim]  proxdex config set sheet.dpi=1200 sheet.faces=duplex[/]
+    """
+    import tomlkit
+
+    lib = _lib(ctx)
+    path = lib.root / MARKER
+    doc = tomlkit.parse(path.read_text() if path.exists() else "")
+    for raw in assignments:
+        path_part, sep, value = raw.partition("=")
+        if not sep:
+            raise click.UsageError(f"{raw!r}: expected SECTION.KEY=VALUE")
+        section, dot, key = path_part.strip().partition(".")
+        if not dot:
+            raise click.UsageError(f"{path_part!r}: expected SECTION.KEY")
+        field_name = Config.field_name(section, key)
+        if field_name is None:
+            raise click.UsageError(
+                f"[{section}] {key} is not a proxdex setting — "
+                "`proxdex config show` lists every one"
+            )
+        # coerced through the field's own annotation, so the file only ever holds
+        # the declared type and a bad value names the valid options right here
+        clean = Config.coerce(field_name, _toml_value(value.strip()))
+        if section not in doc:
+            doc[section] = tomlkit.table()
+        doc[section][key] = clean.value if isinstance(clean, Enum) else clean
+        console.print(f"[green]✓[/] \\[{section}] {key} = {_toml_text(clean)}")
+    path.write_text(tomlkit.dumps(doc))
+    console.print(f"[dim]wrote {path}[/]")
+
+
+def _config_rows(lib: Library) -> list[tuple[str, str, Any]]:
+    """Every ``[section] key`` in this library's TOML, in file order."""
+    path = lib.root / MARKER
+    if not path.exists():
+        return []
+    doc = tomllib.loads(path.read_text())
+    return [
+        (section, key, value)
+        for section, table in doc.items()
+        if isinstance(table, dict)
+        for key, value in table.items()
+    ]
+
+
+def _toml_value(text: str) -> Any:
+    """A CLI word as the TOML scalar it spells — Config.coerce types it after."""
+    lowered = text.lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    for cast_to in (int, float):
+        try:
+            return cast_to(text)
+        except ValueError:
+            continue
+    return text
+
+
+def _toml_text(value: Any) -> str:
+    if isinstance(value, Enum):
+        return str(value.value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_text(v) for v in cast("list[Any]", value)) + "]"
+    return str(value)
+
+
+@cli.command()
 @click.argument("ids", nargs=-1, metavar="[ID...]")
-@click.option(
-    "--model",
-    type=click.Choice(upscale_mod.MODELS),
-    default=None,
-    help="Upscayl model (default from config: [cyan]digital-art-4x[/]).",
-)
-@click.option(
-    "--scale",
-    type=click.IntRange(1, 4),
-    default=None,
-    help="Output scale 1-4 (default from config: [cyan]2[/]).",
-)
-@click.option(
-    "--double/--no-double",
-    "double",
-    default=None,
-    help="Double Upscayl: run the model twice (2× → 4×, up to 16×).",
-)
+@steps.click_options("upscale")
+@_FACE
 @click.option("--force", is_flag=True, help="Re-upscale even if it exists.")
 @click.pass_context
 def upscale(
     ctx: click.Context,
     ids: tuple[str, ...],
     model: str | None,
-    scale: int | None,
+    scale: str | None,
     double: bool | None,
+    face: int | None,
     force: bool,
 ) -> None:
     """Upscale with Upscayl → stage 3 (upscaled), after any border fix.
@@ -661,28 +1374,32 @@ def upscale(
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    use_model = model or cfg.upscayl_model
-    use_scale = cfg.upscayl_scale if scale is None else scale
-    use_double = cfg.upscayl_double if double is None else double
-    tag = f"{use_model} ×{use_scale}{' ×2' if use_double else ''}"
+    # the registry coerces each flag into its enum, or falls back to this
+    # library's config — so only well-typed values reach upscayl-bin
+    opts = steps.resolve("upscale", cfg, model=model, scale=scale, double=double)
+    use_model = cast("UpscaylModel", opts["model"])
+    use_scale = cast("UpscaylScale", opts["scale"])
+    use_double = bool(opts["double"])
+    tag = f"{use_model.value} ×{use_scale.value}{' ×2' if use_double else ''}"
 
     def one(card: Card) -> None:
-        src = card.best(Stage.BORDERED, Stage.ORIGINAL)
-        if src is None:
-            raise FileError(f"{card.id}: no original yet (fetch it first)")
-        dst = card.stage_path(Stage.UPSCALED)
-        if dst.exists() and not force:
-            console.print(f"[dim]· {card.id}: already upscaled[/]")
-            return
-        upscale_mod.run(
-            src, dst, cfg, model=use_model, scale=use_scale, double=use_double
-        )
-        card.clear_skip(Stage.UPSCALED)
-        _cascade(card, Stage.UPSCALED)
-        console.print(
-            f"[green]✓[/] {card.id}: upscaled [dim]({tag})[/] → "
-            f"{dst.relative_to(lib.root)}"
-        )
+        for f in _faces(card, face):
+            src = card.best(Stage.BORDERED, Stage.ORIGINAL, face=f)
+            if src is None:
+                raise FileError(f"{_label(card, f)}: no original yet (fetch it first)")
+            dst = card.stage_path(Stage.UPSCALED, f)
+            if dst.exists() and not force:
+                console.print(f"[dim]· {_label(card, f)}: already upscaled[/]")
+                continue
+            upscale_mod.run(
+                src, dst, cfg, model=use_model, scale=use_scale, double=use_double
+            )
+            card.clear_skip(Stage.UPSCALED, f)
+            _cascade(card, Stage.UPSCALED, f)
+            console.print(
+                f"[green]✓[/] {_label(card, f)}: upscaled [dim]({tag})[/] → "
+                f"{dst.relative_to(lib.root)}"
+            )
 
     _each(lib.select(ids), one, "upscaling")
     _reindex(lib)
@@ -690,16 +1407,16 @@ def upscale(
 
 @cli.command()
 @click.argument("ids", nargs=-1, metavar="[ID...]")
-@click.option(
-    "--normalize/--no-normalize",
-    "normalize",
-    default=None,
-    help="Pull each card to a common baseline before the recipe (default on).",
-)
+@steps.click_options("grade")
+@_FACE
 @click.option("--force", is_flag=True, help="Re-grade even if stage 3 exists.")
 @click.pass_context
 def grade(
-    ctx: click.Context, ids: tuple[str, ...], normalize: bool | None, force: bool
+    ctx: click.Context,
+    ids: tuple[str, ...],
+    normalize: bool | None,
+    face: int | None,
+    force: bool,
 ) -> None:
     """Normalize each card to a common baseline, then apply the uniform look.
 
@@ -711,81 +1428,128 @@ def grade(
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    do_norm = cfg.grade_normalize if normalize is None else normalize
+    do_norm = bool(steps.resolve("grade", cfg, normalize=normalize)["normalize"])
     # dynamic target: the collection's own median frame colour (unless pinned)
     frame_target = None
     if do_norm and not cfg.match_border_target:
         frame_target = _library_frame_target(lib)
 
     def one(card: Card) -> None:
-        dst = card.stage_path(Stage.EDITED)
-        if dst.exists() and not force:
-            console.print(f"[dim]· {card.id}: already graded[/]")
-            return
-        src = card.best(Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL)
-        if src is None:
-            raise FileError(f"{card.id}: nothing to grade yet")
-        out = grade_mod.grade(
-            Image.open(src), cfg, frame_target=frame_target, normalize=do_norm
-        )
-        out.save(dst)
-        card.clear_skip(Stage.EDITED)
-        console.print(f"[green]✓[/] {card.id}: graded → {dst.relative_to(lib.root)}")
+        for f in _faces(card, face):
+            dst = card.stage_path(Stage.EDITED, f)
+            if dst.exists() and not force:
+                console.print(f"[dim]· {_label(card, f)}: already graded[/]")
+                continue
+            src = card.best(Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL, face=f)
+            if src is None:
+                raise FileError(f"{_label(card, f)}: nothing to grade yet")
+            out = grade_mod.grade(
+                Image.open(src), cfg, frame_target=frame_target, normalize=do_norm
+            )
+            out.save(dst)
+            card.clear_skip(Stage.EDITED, f)
+            console.print(
+                f"[green]✓[/] {_label(card, f)}: graded → {dst.relative_to(lib.root)}"
+            )
 
     _each(lib.select(ids), one, "grading")
     _reindex(lib)
 
 
 @cli.command()
-@click.argument("step", type=click.Choice(list(_STEPS)))
+@click.argument("step", type=_STEP_CHOICE)
 @click.argument("ids", nargs=-1, metavar="[ID...]")
+@_FACE
 @click.pass_context
-def skip(ctx: click.Context, step: str, ids: tuple[str, ...]) -> None:
+def skip(ctx: click.Context, step: str, ids: tuple[str, ...], face: int | None) -> None:
     """Bypass a processing step: drop its output and mark it skipped.
 
     A skipped step contributes nothing — the next step reads the earlier stage
     instead. Undo with [cyan]unskip[/], or just run the step again to redo it.
     """
     lib = _lib(ctx)
-    stage = _STEPS[step]
+    stage = Step(step).stage
     cards = lib.select(ids)
     for card in cards:
-        card.mark_skip(stage)
-        console.print(f"[yellow]⤳[/] {card.id}: {step} skipped")
-        _cascade(card, stage)
+        for f in _some_faces(card, face):
+            card.mark_skip(stage, f)
+            console.print(f"[yellow]⤳[/] {_label(card, f)}: {step} skipped")
+            _cascade(card, stage, f)
     if not cards:
         console.print("[dim]no cards[/]")
     _reindex(lib)
 
 
 @cli.command()
-@click.argument("step", type=click.Choice(list(_STEPS)))
+@click.argument("step", type=_STEP_CHOICE)
 @click.argument("ids", nargs=-1, metavar="[ID...]")
+@_FACE
 @click.pass_context
-def unskip(ctx: click.Context, step: str, ids: tuple[str, ...]) -> None:
+def unskip(
+    ctx: click.Context, step: str, ids: tuple[str, ...], face: int | None
+) -> None:
     """Clear a step's skip mark → pending (the output is not restored)."""
     lib = _lib(ctx)
-    stage = _STEPS[step]
+    stage = Step(step).stage
     for card in lib.select(ids):
-        if card.skipped(stage):
-            card.clear_skip(stage)
-            console.print(f"[green]○[/] {card.id}: {step} no longer skipped")
+        for f in _some_faces(card, face):
+            if card.skipped(stage, f):
+                card.clear_skip(stage, f)
+                console.print(
+                    f"[green]○[/] {_label(card, f)}: {step} no longer skipped"
+                )
     _reindex(lib)
 
 
 @cli.command()
-@click.argument("step", type=click.Choice(list(_STEPS)))
+@click.argument("step", type=_STEP_CHOICE)
 @click.argument("ids", nargs=-1, metavar="[ID...]")
+@_FACE
 @click.pass_context
-def reset(ctx: click.Context, step: str, ids: tuple[str, ...]) -> None:
+def reset(
+    ctx: click.Context, step: str, ids: tuple[str, ...], face: int | None
+) -> None:
     """Return a step to pending: delete its output and clear any skip mark."""
     lib = _lib(ctx)
-    stage = _STEPS[step]
+    stage = Step(step).stage
     for card in lib.select(ids):
-        if card.has(stage) or card.skipped(stage):
-            card.reset(stage)
-            console.print(f"[green]○[/] {card.id}: {step} reset to pending")
-            _cascade(card, stage)
+        for f in _some_faces(card, face):
+            if card.has(stage, f) or card.skipped(stage, f):
+                card.reset(stage, f)
+                console.print(f"[green]○[/] {_label(card, f)}: {step} reset to pending")
+                _cascade(card, stage, f)
+    _reindex(lib)
+
+
+@cli.command()
+@click.argument("ids", nargs=-1, metavar="[ID...]")
+@click.option(
+    "--face",
+    type=int,
+    default=None,
+    metavar="N",
+    help="Print side N on the front ([cyan]1[/] or [cyan]2[/]). Default: swap.",
+)
+@click.pass_context
+def flip(ctx: click.Context, ids: tuple[str, ...], face: int | None) -> None:
+    """Choose which side of a two-sided card prints on the front of a sheet.
+
+    A transform card has two real fronts and no back of its own, so which one
+    goes on the paper is your call. [cyan]sheet --faces duplex[/] then prints the
+    other side on the reverse; a one-sided card keeps the configured card back.
+    """
+    lib = _lib(ctx)
+    for card in lib.select(ids):
+        if len(card.faces) < 2:
+            console.print(f"[dim]· {card.id}: one side, nothing to flip[/]")
+            continue
+        want = _faces(card, face)[0] if face is not None else card.back_face or FRONT
+        card.set_front_face(want)
+        names = card.face_names()
+        console.print(
+            f"[green]✓[/] {card.id}: printing [bold]{names[want] or want + 1}[/] "
+            "on the front"
+        )
     _reindex(lib)
 
 
@@ -800,6 +1564,75 @@ def _library_frame_target(lib: Library) -> tuple[float, float, float] | None:
         return None
     median = np.median(np.stack(colors), axis=0)
     return (float(median[0]), float(median[1]), float(median[2]))
+
+
+def _warn_unmeasured(card: Card, guide: FrameGuide) -> None:
+    """Say out loud when a reshape is running against a guessed frame spec."""
+    if guide.measured:
+        return
+    err.print(
+        f"[yellow]⚠[/] {card.id}: no measured frame spec for "
+        f"[bold]{card.set_id}[/] ({games.get(card.game).name}) — using "
+        f"'{guide.id.value}'. [dim]{guide.note} See `proxdex frames`.[/]"
+    )
+
+
+@cli.command(name="frames")
+@click.pass_context
+def frames_cmd(ctx: click.Context) -> None:
+    """List the frame specs and which of your sets have a measured one.
+
+    [cyan]border --inner-*[/] reshapes each card to its set's real border
+    widths, so a set with no measured spec is fitted against an *estimate*.
+    This shows which is which; override per run with
+    [cyan]border --frame <id>[/].
+    """
+    lib = _lib(ctx)
+    known = Table(box=None, pad_edge=False, header_style="bold")
+    for col in ("Spec", "Game", "Border T/R/B/L (mm)", "Confidence"):
+        known.add_column(col)
+    for guide in frames.GUIDES.values():
+        top, right, bottom, left = guide.mm()
+        known.add_row(
+            guide.id.value,
+            games.get(guide.game).name if guide.game else "any",
+            f"{top:.2f} / {right:.2f} / {bottom:.2f} / {left:.2f}",
+            "[green]measured[/]" if guide.measured else "[yellow]estimated[/]",
+        )
+    console.print(known)
+
+    cards = lib.cards()
+    if not cards:
+        return
+    # keyed by the card's own override too: a borderless print inside a bordered
+    # set resolves differently from its neighbours, and hiding that would make the
+    # table claim a fit that isn't what runs
+    seen: dict[tuple[GameId, str, str], tuple[FrameGuide, int]] = {}
+    for card in cards:
+        guide = frames.resolve(card.set_id, card.game, card.frame)
+        key = (card.game, card.set_id, card.frame.value if card.frame else "")
+        _, count = seen.get(key, (guide, 0))
+        seen[key] = (guide, count + 1)
+    mine = Table(box=None, pad_edge=False, header_style="bold")
+    for col in ("Set", "Game", "Cards", "Resolves to", "From", "Confidence"):
+        mine.add_column(col)
+    for (game, set_id, override), (guide, count) in sorted(seen.items()):
+        mine.add_row(
+            set_id,
+            games.get(game).name,
+            str(count),
+            guide.id.value,
+            "the printing" if override else "its era",
+            "[green]measured[/]" if guide.measured else "[yellow]estimated[/]",
+        )
+    console.print("\n[bold]Sets in this library[/]")
+    console.print(mine)
+    unmeasured = sum(1 for guide, _ in seen.values() if not guide.measured)
+    if unmeasured:
+        console.print(
+            f"[yellow]{unmeasured}[/] set(s) fall back to an estimated spec — "
+            "measure a real card and add a guide in [cyan]frames.py[/] to fix."
+        )
 
 
 @cli.command()
@@ -817,10 +1650,14 @@ def _library_frame_target(lib: Library) -> tuple[float, float, float] | None:
 @click.option("--inner-bottom", type=float, default=None, help="Inner frac (bottom).")
 @click.option("--inner-left", type=float, default=None, help="Inner frac (left).")
 @click.option(
-    "--stretch/--no-stretch",
-    default=False,
-    help="With --inner-*: un-distort the art so borders land exactly on spec.",
+    "--auto",
+    "auto",
+    is_flag=True,
+    help="Measure where the border currently sits from the image itself instead "
+    "of marking it by hand. Reports how much the measurement can be trusted.",
 )
+@steps.click_options("border")
+@_FACE
 @click.option("--force", is_flag=True, help="Re-run even if a bordered image exists.")
 @click.option("--dry-run", is_flag=True, help="Report the plan; don't write.")
 @click.pass_context
@@ -835,18 +1672,28 @@ def border(
     inner_right: float | None,
     inner_bottom: float | None,
     inner_left: float | None,
-    stretch: bool,
+    auto: bool,
+    stretch: bool | None,
+    frame: str | None,
+    face: int | None,
     force: bool,
     dry_run: bool,
 ) -> None:
     """Reshape a card → stage 2 (bordered), before upscaling.
 
-    Never auto-detects — you say what to do. Two modes:
+    Three ways to say where the border is:
 
     • [cyan]--inner-top/-right/-bottom/-left[/] <fraction 0-1>: where the card's
-    inner border edge currently sits. From the set's era spec [cyan]cardbleed[/]
-    reshapes to the exact card aspect with the correct border widths (add
-    [cyan]--stretch[/] to hit the borders exactly by un-distorting the art).
+    inner border edge currently sits. From the card's frame spec (its game +
+    era, see [cyan]proxdex frames[/]) [cyan]cardbleed[/] reshapes to the exact
+    card aspect with the correct border widths (add [cyan]--stretch[/] to hit
+    the borders exactly by un-distorting the art). Sets whose spec has not been
+    measured are called out — the fit still runs, but on an estimate.
+
+    • [cyan]--auto[/]: measure those four numbers off the image instead of typing
+    them. Each edge reports how much its scan lines agreed, so a card the
+    measurement does not suit says which edge to check. Pair it with
+    [cyan]--dry-run[/] to measure and write nothing.
 
     • [cyan]--top/--bottom/--left/--right[/] <mm>: just add that much border to
     each edge — no fit, no distortion.
@@ -860,23 +1707,60 @@ def border(
     if use_inner and not all(v is not None for v in inner):
         raise click.UsageError("give all four --inner-top/-right/-bottom/-left or none")
     grow_mm = {"top": top_mm, "right": right_mm, "bottom": bottom_mm, "left": left_mm}
+    if auto and use_inner:
+        raise click.UsageError(
+            "--auto measures the inner border itself — drop --inner-*, or drop "
+            "--auto to keep your own numbers"
+        )
+    if auto and max(grow_mm.values()) > 0:
+        raise click.UsageError(
+            "--auto fits to the frame spec; --top/--bottom/--left/--right only "
+            "add millimetres. Pick one."
+        )
+    override = frames.parse(frame)
+    do_stretch = bool(stretch)
 
-    def one(card: Card) -> None:
-        dst = card.stage_path(Stage.BORDERED)
+    def one_face(card: Card, f: int) -> None:
+        dst = card.stage_path(Stage.BORDERED, f)
+        name = _label(card, f)
         if dst.exists() and not force and not dry_run:
-            console.print(f"[dim]· {card.id}: already bordered[/]")
+            console.print(f"[dim]· {name}: already bordered[/]")
             return
-        src = card.stage_path(Stage.ORIGINAL)
+        src = card.stage_path(Stage.ORIGINAL, f)
         if not src.exists():
-            raise FileError(f"{card.id}: no original yet (fetch it first)")
+            raise FileError(f"{name}: no original yet (fetch it first)")
         w, h = borders.size(src)
-        if use_inner:
-            guide = frames.for_set(card.set_id)
-            inner_t = cast("tuple[float, float, float, float]", inner)
-            plan = bleed.fit_plan(w, h, guide, inner_t, cfg, stretch=stretch)
+        marks = cast("tuple[float, float, float, float]", inner) if use_inner else None
+        # the card's own frame beats its set's era: a borderless print has no
+        # frame to fit whatever era the rest of its set belongs to
+        recorded = override or card.frame
+        if auto:
+            spec = frames.resolve(card.set_id, card.game, recorded)
+            if not any(spec.inset):
+                # a borderless print has no frame to match, so there is nothing to
+                # measure: the marks are the image edges and the fit is pure
+                # aspect correction. Measuring anyway would find the art's own
+                # edge and crop the card to it.
+                marks = (0.0, 0.0, 0.0, 0.0)
+                console.print(
+                    f"  [dim]⌖ {name}: {spec.name} — nothing to measure, "
+                    "reshaping to the card aspect only[/]"
+                )
+            else:
+                found = borders.detect_inset(src)
+                tone = "green" if found.reliable else "yellow"
+                console.print(f"  [{tone}]⌖[/] {name}: {found.note}")
+                marks = found.inset
+                if found.frameless:
+                    recorded = GuideId.BORDERLESS
+        if marks is not None:
+            guide = frames.resolve(card.set_id, card.game, recorded)
+            _warn_unmeasured(card, guide)
+            inner_t = marks
+            plan = bleed.fit_plan(w, h, guide, inner_t, cfg, stretch=do_stretch)
             tw, th = round(plan.trim_w), round(plan.trim_h)
             bd = plan.borders
-            tag = f"{guide.name}{', stretch' if stretch else ''}"
+            tag = f"{guide.name}{', stretch' if do_stretch else ''}"
             note = (
                 f"fit → {tw}×{th}px  "
                 f"T{bd['top'] * 100:.2f} R{bd['right'] * 100:.2f} "
@@ -885,22 +1769,25 @@ def border(
             if plan.cropped:
                 note += f" [yellow](cropped {', '.join(plan.cropped)})[/]"
             if dry_run:
-                console.print(f"[cyan]{card.id}[/]: {note}")
+                console.print(f"[cyan]{name}[/]: {note}")
                 return
-            bleed.fit(src, dst, guide, inner_t, cfg, stretch=stretch)
+            bleed.fit(src, dst, guide, inner_t, cfg, stretch=do_stretch)
         else:
             if max(grow_mm.values()) <= 0:
-                console.print(f"[dim]· {card.id}: nothing to expand[/]")
+                console.print(f"[dim]· {name}: nothing to expand[/]")
                 return
             note = " ".join(f"+{e[0].upper()}{v:g}" for e, v in grow_mm.items()) + "mm"
             if dry_run:
-                console.print(f"[cyan]{card.id}[/]: {note}")
+                console.print(f"[cyan]{name}[/]: {note}")
                 return
             bleed.grow(src, dst, cfg, **grow_mm)
-        card.clear_skip(Stage.BORDERED)
-        _cascade(card, Stage.BORDERED)
-        rel = dst.relative_to(lib.root)
-        console.print(f"[green]✓[/] {card.id}: {note} → {rel}")
+        card.clear_skip(Stage.BORDERED, f)
+        _cascade(card, Stage.BORDERED, f)
+        console.print(f"[green]✓[/] {name}: {note} → {dst.relative_to(lib.root)}")
+
+    def one(card: Card) -> None:
+        for f in _faces(card, face):
+            one_face(card, f)
 
     _each(lib.select(ids), one, "bordering")
     if not dry_run:
@@ -917,36 +1804,72 @@ def index(ctx: click.Context) -> None:
 
 
 def _write_batch(path: Path, data: dict[str, object]) -> None:
-    def s(v: object) -> str:
-        return '"' + str(v).replace('"', '\\"') + '"'
+    """Write a batch manifest.
+
+    Through tomlkit rather than by hand: a note or printer name can contain a
+    quote, a backslash or a newline, and a manifest that no longer parses would
+    lose the record of what was printed.
+    """
+    import tomlkit
 
     cards = data.get("cards", [])
-    card_ids = cards if isinstance(cards, list) else []
-    lines = [
-        f"name = {s(data.get('name', ''))}",
-        f"date = {s(data.get('date', ''))}",
-        f"faces = {s(data.get('faces', 'fronts'))}",
-        f"printed = {'true' if data.get('printed') else 'false'}",
-        f"printed_date = {s(data.get('printed_date', ''))}",
-        f"paper = {s(data.get('paper', ''))}",
-        f"printer = {s(data.get('printer', ''))}",
-        f"notes = {s(data.get('notes', ''))}",
-        f"pdf = {s(data.get('pdf', 'fronts.pdf'))}",
-        "cards = [",
-    ]
-    lines += [f"  {s(cid)}," for cid in card_ids]
-    lines.append("]")
-    path.write_text("\n".join(lines) + "\n")
+    doc = tomlkit.document()
+    doc["name"] = str(data.get("name", ""))
+    doc["date"] = str(data.get("date", ""))
+    doc["faces"] = str(data.get("faces", Faces.FRONTS.value))
+    doc["printed"] = bool(data.get("printed"))
+    for key in ("printed_date", "paper", "printer", "notes"):
+        doc[key] = str(data.get(key, ""))
+    doc["pdf"] = str(data.get("pdf", "fronts.pdf"))
+    doc["cards"] = [str(cid) for cid in (cards if isinstance(cards, list) else [])]
+    path.write_text(tomlkit.dumps(doc))
+
+
+def _back_path(root: Path, game: GameId) -> Path:
+    """Where `proxdex back --game <g>` stores that game's shared back.
+
+    A mixed library needs one per game — Pokémon and MTG backs are different
+    pictures — so they can't share a single ``back.png``.
+    """
+    return root / f"back-{game.value}.png"
 
 
 def _resolve_back_path(card: Card, cfg: Config, lib: Library) -> Path | None:
-    """Per-card <id>_back.png, then [sheet] back_image, then <lib>/back.png."""
+    """Per-card ``<id>_back.png``, then ``[sheet] back_image``, then the card
+    game's shared back, then the legacy single ``back.png``."""
     candidates = [card.dir / f"{card.id}_back.png"]
     if cfg.sheet_back_image:
         shared = Path(cfg.sheet_back_image)
         candidates.append(shared if shared.is_absolute() else lib.root / shared)
+    candidates.append(_back_path(lib.root, card.game))
     candidates.append(lib.root / "back.png")
     return next((p for p in candidates if p.exists()), None)
+
+
+def _reverse_path(card: Card, cfg: Config, lib: Library) -> Path | None:
+    """What goes on the reverse of this card in a duplex sheet.
+
+    A two-sided card's other side is a real card face, so it prints there — that
+    is the whole point of a transform card. Anything else takes the shared card
+    back, which is what a Pokémon card or a normal MTG card wants.
+    """
+    reverse = card.back_face
+    if reverse is not None and _sheet_ready(card, reverse):
+        return _master(card, reverse)
+    return _resolve_back_path(card, cfg, lib)
+
+
+def _trim_mm(card: Card, cfg: Config) -> tuple[float, float]:
+    """The physical size this card prints at.
+
+    Ordinary cards are the configured trim; an oversized card is its own real
+    size, because a planar card imposed into a 63×88 cell is not that card — it
+    is a small, wrong one. Nothing has to be configured for this: the size came
+    from the provider at fetch time and lives in the card's own marker.
+    """
+    if card.oversized:
+        return (games.OVERSIZED_W_MM, games.OVERSIZED_H_MM)
+    return (cfg.card_w_mm, cfg.card_h_mm)
 
 
 @dataclass(slots=True)
@@ -960,11 +1883,11 @@ class _Repro:
     cal: calibrate_mod.Stage | None
     tmpdir: Path
 
-    def cell(self, master: Image.Image) -> Image.Image:
+    def cell(self, master: Image.Image, trim: tuple[float, float]) -> Image.Image:
         cfg = self.cfg
         ppm = cfg.sheet_dpi / 25.4
-        trim_w, trim_h = round(cfg.card_w_mm * ppm), round(cfg.card_h_mm * ppm)
-        im = sheet_mod.fit(master, trim_w, trim_h, cfg.sheet_fit.lower())
+        trim_w, trim_h = round(trim[0] * ppm), round(trim[1] * ppm)
+        im = sheet_mod.fit(master, trim_w, trim_h, cfg.sheet_fit)
         if self.cal is not None:
             im = calibrate_mod.apply_to_image(im, self.cal)
         elif self.profile != "none":
@@ -979,75 +1902,74 @@ class _Repro:
         return Image.open(dst).convert("RGB")
 
 
-_SCRYFALL_BACK = "https://cards.scryfall.io/back.png"
-
-
 @cli.command()
 @click.option("--url", default=None, help="Download the back image from this URL.")
 @click.option(
     "--file",
     "file_path",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    type=UserPath(exists=True, dir_okay=False, path_type=Path),
     default=None,
     help="Use a local image as the back.",
 )
-@click.option(
-    "--tcg",
-    type=click.Choice(["mtg", "pokemon"]),
-    default=None,
-    help="Preset source: [cyan]mtg[/] = Scryfall's standard back.",
-)
+@_GAME
 @click.option(
     "-o",
     "--out",
     "out",
-    type=click.Path(path_type=Path),
+    type=UserPath(path_type=Path),
     default=None,
-    help="Where to save (default: <lib>/back.png).",
+    help="Where to save (default: [cyan]<lib>/back-<game>.png[/]).",
 )
 @click.pass_context
 def back(
     ctx: click.Context,
     url: str | None,
     file_path: Path | None,
-    tcg: str | None,
+    game: str | None,
     out: Path | None,
 ) -> None:
-    """Set the shared card back — a trim-size master.
+    """Set a game's shared card back — a trim-size master.
 
-    Just fetches/imports and stores the image; colour correction and cut bleed
-    are applied at [cyan]sheet[/] time (exactly like the fronts), so front and
-    back match on the medium. Source: [cyan]--file[/], [cyan]--url[/], or
-    [cyan]--tcg mtg[/] (Scryfall's standard back). There's no reliable
-    Pokémon-back API — supply your own scan. A per-card [cyan]<id>_back.png[/]
-    overrides this shared one.
+    Backs are per game (a mixed library needs both), stored as
+    [cyan]back-<game>.png[/] and picked automatically by each card's game.
+    This just fetches/imports and stores the image; colour correction and cut
+    bleed are applied at [cyan]sheet[/] time (exactly like the fronts), so
+    front and back match on the medium.
+
+    With no [cyan]--file[/]/[cyan]--url[/] the game's own source is used —
+    Scryfall's standard back for MTG. There is no reliable Pokémon-back API
+    (the back is one image owned by TPC), so supply your own scan there. A
+    per-card [cyan]<id>_back.png[/] overrides the shared one.
     """
     lib = _lib(ctx)
-    if not url and not file_path and tcg == "mtg":
-        url = _SCRYFALL_BACK
+    cfg = Config.load(lib.root)
+    want = games.coerce(game, cfg.library_game)
     if not url and not file_path:
-        raise click.UsageError(
-            "give --file, --url, or --tcg mtg — there's no Pokémon back API, "
-            "so supply your own scan"
-        )
+        url = games.get(want).back_url
     if file_path:
         im = Image.open(file_path).convert("RGB")
+    elif not url:
+        raise click.UsageError(
+            f"no downloadable back for {games.get(want).name} — give --file or "
+            "--url with your own scan"
+        )
     else:
         import io
 
-        import requests
-
-        headers = {"User-Agent": f"proxdex/{__version__}", "Accept": "image/*"}
-        resp = requests.get(url, headers=headers, timeout=60)  # type: ignore[arg-type]
+        try:
+            resp = net.get(url, accept="image/*")
+        except net.NetworkError as exc:
+            raise ProxdexError(f"download failed: {exc}") from exc
         if not resp.ok:
-            raise ProxdexError(f"download failed ({resp.status_code}) for {url}")
-        im = Image.open(io.BytesIO(resp.content)).convert("RGB")
+            raise ProxdexError(f"download failed ({resp.status}) for {url}")
+        im = Image.open(io.BytesIO(resp.body)).convert("RGB")
 
-    dst = out or lib.root / "back.png"
+    dst = out or _back_path(lib.root, want)
     im.save(dst)
     console.print(
-        f"[green]✓[/] card back → {dst.relative_to(lib.root)} "
-        "[dim](colour + bleed applied at sheet time)[/]"
+        f"[green]✓[/] {games.get(want).name} card back → "
+        f"{dst.relative_to(lib.root)} [dim](colour + bleed applied at sheet "
+        "time)[/]"
     )
 
 
@@ -1056,11 +1978,16 @@ def back(
 @click.argument("ids", nargs=-1, metavar="[ID...]")
 @click.option(
     "--faces",
-    type=click.Choice(["fronts", "backs", "duplex"]),
+    type=click.Choice([f.value for f in Faces]),
     default=None,
     help="What to impose (default from [sheet]).",
 )
-@click.option("--page", default=None, help="Page size override (a4 | letter).")
+@click.option(
+    "--page",
+    type=click.Choice([p.value for p in PageSize]),
+    default=None,
+    help="Page size override.",
+)
 @click.option("--dpi", type=int, default=None, help="Render resolution override.")
 @click.option(
     "--profile", default=None, help="Medium colour profile (default from [print])."
@@ -1082,20 +2009,25 @@ def sheet(
     Each card is scaled to the exact configured card size at sheet DPI, colour-
     corrected for the medium, then given cut bleed *outside* the trim via
     cardbleed — the individual masters stay bleed-free. Cut guides sit at the
-    card edge. Fronts, backs, or duplex (back pages mirrored + offset). proxdex
-    owns the PDF — print with colour management OFF for calibration to hold.
+    card edge. Fronts, backs, or duplex (back pages mirrored + offset).
+
+    A two-sided card contributes the side [cyan]proxdex flip[/] points at, and in
+    a duplex sheet its *other* side prints on the reverse instead of the shared
+    card back. proxdex owns the PDF — print with colour management OFF for
+    calibration to hold.
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     if page:
-        cfg.sheet_page = page
+        cfg.sheet_page = PageSize(page)
     if faces:
-        cfg.sheet_faces = faces
+        cfg.sheet_faces = Faces(faces)
     if dpi:
         cfg.sheet_dpi = dpi
     cards = lib.select(ids) if ids else lib.cards()
-    ready = [c for c in cards if _sheet_ready(c)]
-    missing = [c.id for c in cards if not _sheet_ready(c)]
+    # each card contributes the side it is flipped to; `proxdex flip` chooses
+    ready = [c for c in cards if _sheet_ready(c, c.front_face)]
+    missing = [c.id for c in cards if not _sheet_ready(c, c.front_face)]
     if missing:
         err.print(
             f"[yellow]not ready, skipping:[/] {', '.join(missing)} "
@@ -1104,6 +2036,26 @@ def sheet(
     if not ready:
         raise click.UsageError(
             "no card masters to impose — run upscale/grade, or skip them"
+        )
+    # an oversized card prints at its own size, on its own pages — say which and
+    # how many fit, because that is a page count the user did not ask for
+    big = [c for c in ready if c.oversized]
+    if big:
+        cols, rows = sheet_mod.grid_for(
+            cfg, (games.OVERSIZED_W_MM, games.OVERSIZED_H_MM)
+        )
+        console.print(
+            f"[cyan]⬗[/] {len(big)} oversized card(s) — "
+            f"{', '.join(c.id for c in big)} — print at "
+            f"{games.OVERSIZED_W_MM:g}×{games.OVERSIZED_H_MM:g}mm on their own "
+            f"pages [dim]({cols}×{rows} per page)[/]"
+        )
+    two_sided = [c for c in ready if c.back_face is not None]
+    if two_sided and cfg.sheet_faces is not Faces.DUPLEX:
+        err.print(
+            f"[yellow]⚠[/] {len(two_sided)} two-sided card(s) — only the flipped-to "
+            "side is in this sheet. [dim]`--faces duplex` prints the reverse too; "
+            "`proxdex flip` swaps which side is the front.[/]"
         )
 
     prof_name, recipe = media.resolve(cfg, profile)
@@ -1114,31 +2066,46 @@ def sheet(
     tmpdir = Path(tempfile.mkdtemp(prefix="proxdex-sheet-"))
     try:
         repro = _Repro(cfg, prof_name, recipe, cal, tmpdir)
-        fronts = [
-            repro.cell(Image.open(cast("Path", _master(c))).convert("RGB"))
-            for c in ready
-        ]
+        trims = [_trim_mm(c, cfg) for c in ready]
+        # the back of a card is reproduced at that card's own size, so the cache is
+        # keyed by both — one shared back image serves two trims in a mixed batch
+        cache: dict[tuple[Path, tuple[float, float]], Image.Image] = {}
         backs: list[Image.Image | None] = [None] * len(ready)
         if cfg.sheet_faces in ("backs", "duplex"):
-            cache: dict[Path, Image.Image] = {}
-            paths = [_resolve_back_path(c, cfg, lib) for c in ready]
+            # a two-sided card's reverse IS its back; everything else takes the
+            # shared card back for its game
+            paths = [_reverse_path(c, cfg, lib) for c in ready]
             no_back = [c.id for c, p in zip(ready, paths, strict=True) if p is None]
             if no_back:
                 raise click.UsageError(
                     f"{cfg.sheet_faces} needs backs, none for: {', '.join(no_back)}"
                     " — `proxdex back ...`, [sheet] back_image, or <id>_back.png"
                 )
-            for i, p in enumerate(paths):
-                if p is not None and p not in cache:
-                    cache[p] = repro.cell(Image.open(p).convert("RGB"))
-                backs[i] = cache[p] if p is not None else None
+            for i, (path, trim) in enumerate(zip(paths, trims, strict=True)):
+                if path is None:
+                    continue
+                key = (path, trim)
+                if key not in cache:
+                    cache[key] = repro.cell(Image.open(path).convert("RGB"), trim)
+                backs[i] = cache[key]
+        cells = [
+            sheet_mod.Cell(
+                front=repro.cell(
+                    Image.open(cast("Path", _master(c, c.front_face))).convert("RGB"),
+                    trim,
+                ),
+                back=back,
+                trim=trim,
+            )
+            for c, trim, back in zip(ready, trims, backs, strict=True)
+        ]
 
         slug = slugify(name)
         today = date.today().isoformat()
         bdir = lib.batches_dir / f"{today}_{slug}"
         bdir.mkdir(parents=True, exist_ok=True)
         pdf = bdir / f"{cfg.sheet_faces}.pdf"
-        n_pages = sheet_mod.impose_to_pdf(fronts, backs, cfg, pdf)
+        n_pages = sheet_mod.impose_to_pdf(cells, cfg, pdf)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
     _write_batch(
@@ -1196,7 +2163,7 @@ _SCAN = click.option(
     "--scan",
     "scan_path",
     required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    type=UserPath(exists=True, dir_okay=False, path_type=Path),
     help="The scanned chart image.",
 )
 _PROFILE = click.option(
@@ -1232,7 +2199,7 @@ def calibrate() -> None:
     "-o",
     "--out",
     "out",
-    type=click.Path(path_type=Path),
+    type=UserPath(path_type=Path),
     default=None,
     help="Output path (default: <lib>/calibration/<profile>_chart.png).",
 )
@@ -1336,16 +2303,49 @@ def cal_show(ctx: click.Context) -> None:
 
 
 def _card_id_from(stem: str) -> str | None:
-    m = re.match(r"[a-z]+\d*-\d+", stem, re.IGNORECASE)
+    """The card id a filename starts with — ``ex3-90``, ``neo-136``, ``bw11-1a``.
+
+    MTG collector numbers can carry a letter suffix, so one is allowed; ids
+    with anything stranger in them need an explicit ``--id``.
+    """
+    m = re.match(r"[a-z]+\d*-\d+[a-z]?", stem, re.IGNORECASE)
     return m.group(0) if m else None
+
+
+def _hoist_root(args: Sequence[str]) -> list[str]:
+    """Move ``--root DIR`` to the front so it works after the subcommand too.
+
+    ``--root`` belongs to the group, so click would only accept it before the
+    command name — but ``proxdex fetch ex3-90 --root DIR`` is the spelling
+    people reach for (and the one the "no library here" error suggests).
+    """
+    root: list[str] = []
+    rest: list[str] = []
+    skip = False
+    for i, arg in enumerate(args):
+        if skip:
+            skip = False
+        elif arg == "--":  # everything past it is a literal argument
+            rest.extend(args[i:])
+            break
+        elif arg == "--root" and i + 1 < len(args):
+            root = ["--root", args[i + 1]]
+            skip = True
+        elif arg.startswith("--root="):
+            root = [arg]
+        else:
+            rest.append(arg)
+    return root + rest
 
 
 def main() -> None:
     try:
-        cli()
+        cli(args=_hoist_root(sys.argv[1:]))
     except ProxdexError as e:
         err.print(f"[bold red]error:[/] {e}")
         raise SystemExit(1) from e
+    finally:
+        _api_note()
 
 
 if __name__ == "__main__":

@@ -107,6 +107,7 @@ def create_app(lib: Library) -> FastAPI:
                     "name": card.name.title(),
                     "set": card.set_id,
                     "stages": {s.label: card.has(s) for s in _STAGES},
+                    "status": {s.label: card.status(s) for s in _STAGES},
                     "batch": batch.name if batch else None,
                     "printed": bool(batch and batch.printed),
                 }
@@ -234,12 +235,21 @@ def create_app(lib: Library) -> FastAPI:
     @app.post("/api/step")
     def api_step(body: Annotated[dict[str, Any], Body()]) -> Any:
         cmd = str(body.get("cmd", ""))
+        ids = _safe_ids(body.get("ids") or [])
+        opts = body.get("opts") or {}
+        # pipeline-state verbs: `<cmd> <step> <ids...>`
+        if cmd in {"skip", "unskip", "reset"}:
+            step = str(opts.get("step", ""))
+            if step not in {"border", "upscale", "grade"}:
+                return JSONResponse(
+                    {"ok": False, "log": f"bad step {step}"}, status_code=400
+                )
+            return run_cli([cmd, step, *ids])
         if cmd not in {"border", "upscale", "grade", "build"}:
             return JSONResponse(
                 {"ok": False, "log": f"bad step {cmd}"}, status_code=400
             )
-        args = [cmd, *_safe_ids(body.get("ids") or [])]
-        opts = body.get("opts") or {}
+        args = [cmd, *ids]
         if cmd == "border":
             inner = opts.get("inner")
             if inner:  # marked inner-border edges (fractions) → era-based solve

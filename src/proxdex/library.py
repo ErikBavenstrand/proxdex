@@ -64,6 +64,34 @@ class Card:
                 return self.stage_path(stage)
         return None
 
+    # -- per-step pipeline state: pending → done | skipped -------------------
+    def skip_marker(self, stage: Stage) -> Path:
+        return self.dir / f".skip-{stage.label}"
+
+    def skipped(self, stage: Stage) -> bool:
+        return self.skip_marker(stage).exists()
+
+    def status(self, stage: Stage) -> str:
+        """``done`` (output exists) · ``skipped`` (bypassed) · ``pending``."""
+        if self.has(stage):
+            return "done"
+        if self.skipped(stage):
+            return "skipped"
+        return "pending"
+
+    def mark_skip(self, stage: Stage) -> None:
+        """Bypass this step: drop any output and record the skip."""
+        self.stage_path(stage).unlink(missing_ok=True)
+        self.skip_marker(stage).touch()
+
+    def clear_skip(self, stage: Stage) -> None:
+        self.skip_marker(stage).unlink(missing_ok=True)
+
+    def reset(self, stage: Stage) -> None:
+        """Back to pending: remove the output and any skip marker."""
+        self.stage_path(stage).unlink(missing_ok=True)
+        self.clear_skip(stage)
+
 
 @dataclass(slots=True)
 class Library:

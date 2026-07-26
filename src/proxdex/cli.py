@@ -49,6 +49,7 @@ click.rich_click.COMMAND_GROUPS = {
         {"name": "Library", "commands": ["init", "where", "ls", "index", "ui"]},
         {"name": "Acquire", "commands": ["search", "fetch", "import"]},
         {"name": "Prepare", "commands": ["border", "upscale", "grade"]},
+        {"name": "Pipeline", "commands": ["skip", "unskip", "reset"]},
         {"name": "Produce", "commands": ["build", "back", "sheet", "printed"]},
         {"name": "Calibrate", "commands": ["calibrate"]},
     ]
@@ -62,12 +63,22 @@ T = TypeVar("T")
 _STAGES = (Stage.ORIGINAL, Stage.BORDERED, Stage.UPSCALED, Stage.EDITED)
 _STAGE_BY_LABEL = {s.label: s for s in Stage}
 
+# the three optional/skippable processing steps, by the name you type
+# (`proxdex skip upscale`) → the stage they produce. original is the source, not
+# a step, so it is not skippable.
+_STEPS: dict[str, Stage] = {
+    "border": Stage.BORDERED,
+    "upscale": Stage.UPSCALED,
+    "grade": Stage.EDITED,
+}
+
 DEFAULT_TOML = """\
 # proxdex library config — tune here, no code edits needed.
 
-# `proxdex border` only EXPANDS edges (via cardbleed) — no auto edge detection,
-# no auto aspect fix. Give the growth per edge: `proxdex border <id>
-# --top/--bottom/--left/--right <mm>`, or use the UI frame-align tool.
+# Each card runs an ordered, optional pipeline: border → upscale → grade. Every
+# step is one you run or skip — nothing is automatic. `proxdex border` reshapes
+# to the exact card size (mark the frame with --inner-*, or the UI align tool),
+# `upscale` and `grade` follow; `proxdex skip <step> <id>` bypasses one.
 
 [grade]
 # 1) normalize: pull each card to a common baseline first (so scans and
@@ -107,11 +118,11 @@ margin_mm   = 5.0
 spacing_mm  = 0.0          # gap between cards, x
 spacing_y_mm = 0.0
 # How the trim master maps to the exact card cell (see [card]) at this dpi.
-# stretch = force to the exact cell (default): the border step sized the card
-# per-axis to 63x88mm, so its pixels may not be exactly 63:88 and must fill the
-# cell 1:1. cover = fill preserving aspect (center-crops overflow); contain =
-# whole image + white pad. Use cover/contain only for raw imports, not masters.
-fit = "stretch"
+# cover = fill preserving aspect (default): the bordered master is already
+# exactly 63:88, so cover neither crops nor distorts. contain = whole image +
+# white pad. Never stretch — it re-introduces the print-time rescale the border
+# step exists to avoid.
+fit = "cover"
 
 # what to output
 faces       = "fronts"     # fronts | backs | duplex
@@ -168,7 +179,8 @@ def _lib(ctx: click.Context) -> Library:
 
 
 def _dots(card: Card) -> str:
-    return " ".join("[green]✓[/]" if card.has(s) else "[dim]·[/]" for s in _STAGES)
+    glyph = {"done": "[green]✓[/]", "skipped": "[yellow]⤳[/]", "pending": "[dim]·[/]"}
+    return " ".join(glyph[card.status(s)] for s in _STAGES)
 
 
 def _reindex(lib: Library) -> None:
@@ -579,7 +591,10 @@ def ls(ctx: click.Context) -> None:
             "[green]✓[/]" if batch and batch.printed else "",
         )
     console.print(table)
-    console.print("[dim]stages: O original · B bordered · U upscaled · E edited[/]")
+    console.print(
+        "[dim]stages: O original · B bordered · U upscaled · E edited   "
+        "([green]✓[/] done · [yellow]⤳[/] skipped · · pending)[/]"
+    )
 
 
 @cli.command()
@@ -637,6 +652,7 @@ def upscale(
         upscale_mod.run(
             src, dst, cfg, model=use_model, scale=use_scale, double=use_double
         )
+        card.clear_skip(Stage.UPSCALED)
         console.print(
             f"[green]✓[/] {card.id}: upscaled [dim]({tag})[/] → "
             f"{dst.relative_to(lib.root)}"
@@ -687,9 +703,62 @@ def grade(
             Image.open(src), cfg, frame_target=frame_target, normalize=do_norm
         )
         out.save(dst)
+        card.clear_skip(Stage.EDITED)
         console.print(f"[green]✓[/] {card.id}: graded → {dst.relative_to(lib.root)}")
 
     _each(lib.select(ids), one, "grading")
+    _reindex(lib)
+
+
+@cli.command()
+@click.argument("step", type=click.Choice(list(_STEPS)))
+@click.argument("ids", nargs=-1, metavar="[ID...]")
+@click.pass_context
+def skip(ctx: click.Context, step: str, ids: tuple[str, ...]) -> None:
+    """Bypass a processing step: drop its output and mark it skipped.
+
+    A skipped step contributes nothing — the next step reads the earlier stage
+    instead — and [cyan]build[/] leaves it alone. Undo with [cyan]unskip[/], or
+    just run the step again to redo it.
+    """
+    lib = _lib(ctx)
+    stage = _STEPS[step]
+    cards = lib.select(ids)
+    for card in cards:
+        card.mark_skip(stage)
+        console.print(f"[yellow]⤳[/] {card.id}: {step} skipped")
+    if not cards:
+        console.print("[dim]no cards[/]")
+    _reindex(lib)
+
+
+@cli.command()
+@click.argument("step", type=click.Choice(list(_STEPS)))
+@click.argument("ids", nargs=-1, metavar="[ID...]")
+@click.pass_context
+def unskip(ctx: click.Context, step: str, ids: tuple[str, ...]) -> None:
+    """Clear a step's skip mark → pending (the output is not restored)."""
+    lib = _lib(ctx)
+    stage = _STEPS[step]
+    for card in lib.select(ids):
+        if card.skipped(stage):
+            card.clear_skip(stage)
+            console.print(f"[green]○[/] {card.id}: {step} no longer skipped")
+    _reindex(lib)
+
+
+@cli.command()
+@click.argument("step", type=click.Choice(list(_STEPS)))
+@click.argument("ids", nargs=-1, metavar="[ID...]")
+@click.pass_context
+def reset(ctx: click.Context, step: str, ids: tuple[str, ...]) -> None:
+    """Return a step to pending: delete its output and clear any skip mark."""
+    lib = _lib(ctx)
+    stage = _STEPS[step]
+    for card in lib.select(ids):
+        if card.has(stage) or card.skipped(stage):
+            card.reset(stage)
+            console.print(f"[green]○[/] {card.id}: {step} reset to pending")
     _reindex(lib)
 
 
@@ -801,6 +870,7 @@ def border(
                 console.print(f"[cyan]{card.id}[/]: {note}")
                 return
             bleed.grow(src, dst, cfg, **grow_mm)
+        card.clear_skip(Stage.BORDERED)
         rel = dst.relative_to(lib.root)
         console.print(f"[green]✓[/] {card.id}: {note} → {rel}")
 
@@ -823,21 +893,26 @@ def index(ctx: click.Context) -> None:
 @click.option("--force", is_flag=True, help="Redo stages even if they exist.")
 @click.pass_context
 def build(ctx: click.Context, ids: tuple[str, ...], force: bool) -> None:
-    """Prepare cards into trim-size masters: border → upscale → grade.
+    """Run the non-interactive steps in order: upscale → grade.
 
-    Skips stages already present (unless [cyan]--force[/]). Bleed and colour
-    reproduction are not baked in here — they're applied at [cyan]sheet[/] time.
+    A convenience batch — it only ever runs steps you haven't done and haven't
+    skipped (unless [cyan]--force[/]). [cyan]border[/] is a per-card step (it
+    needs your frame marks), so it isn't run here; do it in the UI or with
+    [cyan]proxdex border[/] first if you want it. Bleed and colour reproduction
+    are added at [cyan]sheet[/] time, not baked in.
     """
     lib = _lib(ctx)
     cards = lib.select(ids)
     if not cards:
         console.print("[dim]no cards[/]")
         return
-    # border + upscale run on cards not yet upscaled (border self-skips if fine)
-    to_upscale = [c.id for c in cards if force or not c.has(Stage.UPSCALED)]
-    if to_upscale:
-        console.print(f"[bold]border[/] ({len(to_upscale)})")
-        ctx.invoke(border, ids=tuple(to_upscale), force=force)
+
+    def due(stage: Stage) -> list[str]:
+        return [
+            c.id for c in cards if not c.skipped(stage) and (force or not c.has(stage))
+        ]
+
+    if to_upscale := due(Stage.UPSCALED):
         console.print(f"[bold]upscale[/] ({len(to_upscale)})")
         ctx.invoke(
             upscale,
@@ -847,8 +922,7 @@ def build(ctx: click.Context, ids: tuple[str, ...], force: bool) -> None:
             double=None,
             force=force,
         )
-    to_grade = [c.id for c in cards if force or not c.has(Stage.EDITED)]
-    if to_grade:
+    if to_grade := due(Stage.EDITED):
         console.print(f"[bold]grade[/] ({len(to_grade)})")
         ctx.invoke(grade, ids=tuple(to_grade), normalize=None, force=force)
     console.print("[green]build complete[/]")

@@ -3167,6 +3167,10 @@ function calibrationPanel(p){
   const res = p.residual;
   return `
     <div class="panel p-3 mb-3">
+      ${p.unreadable ? `<p class="hint mb-2" style="color:var(--hold)">
+        ${p.unreadable} round(s) in this profile's file could not be read and are
+        not in the fit — the chart has ${p.patches} patches now, and a round
+        measured against a different one cannot be compared to it.</p>` : ''}
       <div class="d-flex align-items-baseline gap-2 mb-1">
         <div class="eyebrow">Calibration</div>
         ${res ? `<span class="ms-auto mono">off by mean

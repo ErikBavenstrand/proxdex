@@ -129,6 +129,11 @@ class Profile:
     inherited: Correction | None = None
     #: False for a built-in preset that has never been saved
     stored: bool = False
+    #: rounds in the file that could not be read back — a damaged entry, or one
+    #: measured against a chart of a different size. Counted rather than dropped
+    #: in silence: a calibration quietly losing half its evidence would leave the
+    #: error trend lying about what it is made of.
+    unreadable: int = 0
 
     # ---------------------------------------------------------------- state --
     @property
@@ -266,6 +271,8 @@ class Profile:
             "grid": list(self.grid),
             "stored": self.stored,
             "preset": preset(self.name) is not None,
+            "unreadable": self.unreadable,
+            "patches": len(calibrate.chart_patches()),
         }
 
     def detail(self) -> dict[str, Any]:
@@ -345,9 +352,12 @@ def read(root: Path, name: str) -> Profile | None:
         raise ProxdexError(f"{path.name} is not a profile")
     raw: dict[str, Any] = data
     rounds: list[Round] = []
+    unreadable = 0
     for i, item in enumerate(raw.get("rounds") or []):
         rnd = Round.read(item, i + 1)
-        if rnd is not None:
+        if rnd is None:
+            unreadable += 1
+        else:
             rounds.append(rnd)
     pending = raw.get("pending")
     return Profile(
@@ -360,6 +370,7 @@ def read(root: Path, name: str) -> Profile | None:
         pending=None if pending is None else Slot.read(pending),
         inherited=Correction.read(raw.get("inherited")),
         stored=True,
+        unreadable=unreadable,
     )
 
 

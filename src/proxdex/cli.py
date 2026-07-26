@@ -2415,6 +2415,7 @@ def _stored(lib: Library, name: str | None) -> profiles.Profile:
 
 def _profile_note(prof: profiles.Profile) -> None:
     """Say what the sheet is being corrected by, and how well it is known."""
+    _unreadable_note(prof)
     residual = prof.residual
     if residual is not None:
         console.print(
@@ -2503,6 +2504,7 @@ def profile_show(ctx: click.Context, name: str | None) -> None:
         f"saturation {recipe.saturation:g} · contrast {recipe.contrast:g} · "
         f"brightness {recipe.brightness:g} · gamma {recipe.gamma:g}"
     )
+    _unreadable_note(prof)
     if prof.inherited is not None:
         console.print(
             "\n[cyan]◐[/] carrying a correction measured before 0.5. [dim]Its "
@@ -2686,6 +2688,24 @@ def profile_use(ctx: click.Context, name: str) -> None:
     _write_setting(lib, "print", "profile", prof.name)
     console.print(f"[green]✓[/] \\[print] profile = [bold]{prof.name}[/]")
     _profile_note(prof)
+
+
+def _unreadable_note(prof: profiles.Profile) -> None:
+    """Say when a profile's file holds rounds that cannot be read back.
+
+    The usual cause is a chart of a different size — the patch arrays no longer
+    match — and the honest thing is to name it, because the error trend is only
+    as good as the rounds behind it.
+    """
+    if not prof.unreadable:
+        return
+    err.print(
+        f"[yellow]⚠[/] {prof.unreadable} round(s) in {prof.name}.json could not "
+        f"be read and are not in the fit. [dim]The chart has "
+        f"{len(calibrate_mod.chart_patches())} patches now; a round measured "
+        "against a different one cannot be compared to it. Re-measure, or keep "
+        "the file for the record.[/]"
+    )
 
 
 def _pick(value: float | None, current: float) -> float:

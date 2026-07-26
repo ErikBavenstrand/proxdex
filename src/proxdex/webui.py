@@ -1,7 +1,7 @@
 """Local web UI: a FastAPI app with full parity to the CLI.
 
 Display + light queries (cards, search, frame, config) are computed in-process
-from the library; mutating actions (fetch, border/upscale/grade/build, sheet,
+from the library; mutating actions (fetch, border/upscale/grade, skip/reset, sheet,
 back, import, printed, calibrate) shell out to the real ``proxdex`` CLI so the
 UI and terminal share exactly one implementation. Served on localhost only.
 """
@@ -245,7 +245,7 @@ def create_app(lib: Library) -> FastAPI:
                     {"ok": False, "log": f"bad step {step}"}, status_code=400
                 )
             return run_cli([cmd, step, *ids])
-        if cmd not in {"border", "upscale", "grade", "build"}:
+        if cmd not in {"border", "upscale", "grade"}:
             return JSONResponse(
                 {"ok": False, "log": f"bad step {cmd}"}, status_code=400
             )

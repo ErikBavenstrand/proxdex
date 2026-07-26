@@ -50,7 +50,7 @@ click.rich_click.COMMAND_GROUPS = {
         {"name": "Acquire", "commands": ["search", "fetch", "import"]},
         {"name": "Prepare", "commands": ["border", "upscale", "grade"]},
         {"name": "Pipeline", "commands": ["skip", "unskip", "reset"]},
-        {"name": "Produce", "commands": ["build", "back", "sheet", "printed"]},
+        {"name": "Produce", "commands": ["back", "sheet", "printed"]},
         {"name": "Calibrate", "commands": ["calibrate"]},
     ]
 }
@@ -197,6 +197,20 @@ def _cascade(card: Card, stage: Stage) -> None:
         console.print(f"  [dim]↳ removed stale downstream: {names}[/]")
 
 
+def _master(card: Card) -> Path | None:
+    """The furthest-along image to print — the graded master, or the best
+    earlier stage when a later step was skipped."""
+    return card.best(Stage.EDITED, Stage.UPSCALED, Stage.BORDERED, Stage.ORIGINAL)
+
+
+def _sheet_ready(card: Card) -> bool:
+    """A card is ready to impose once grade is settled — done, or skipped so an
+    earlier stage stands as the master."""
+    return (card.has(Stage.EDITED) or card.skipped(Stage.EDITED)) and _master(
+        card
+    ) is not None
+
+
 def _each(items: Sequence[T], fn: Callable[[T], None], verb: str) -> int:
     """Run ``fn`` over items with a progress bar; skip per-item FileErrors."""
     failed = 0
@@ -236,15 +250,15 @@ def cli(ctx: click.Context, root: str | None) -> None:
 
     A card flows through four stages: [cyan]original[/] → [cyan]bordered[/] →
     [cyan]upscaled[/] → [cyan]edited[/] (the trim master); bleed and colour are
-    added at [cyan]sheet[/] time. proxdex fetches sources, files each
-    stage in a predictable place, corrects thin frames, and tracks what you've
-    actually printed.
+    added at [cyan]sheet[/] time. Each step is one you run or skip — nothing is
+    automatic. proxdex fetches sources, files each stage in a predictable place,
+    corrects thin frames, and tracks what you've actually printed.
 
     [dim]Examples:[/]
 
     [dim]  proxdex fetch ex3-90 ex6-105[/]
 
-    [dim]  proxdex build && proxdex sheet my-deck[/]
+    [dim]  proxdex upscale ex3-90 && proxdex grade ex3-90 && proxdex sheet my-deck[/]
     """
     ctx.obj = {"root": root}
 
@@ -546,7 +560,7 @@ def where(ctx: click.Context) -> None:
 )
 @click.pass_context
 def ui(ctx: click.Context, host: str, port: int, no_open: bool, reload: bool) -> None:
-    """Launch the local web UI (card gallery, build/sheet, previews)."""
+    """Launch the local web UI (card gallery, per-step pipeline, sheet)."""
     lib = _lib(ctx)
     try:
         import uvicorn
@@ -730,8 +744,7 @@ def skip(ctx: click.Context, step: str, ids: tuple[str, ...]) -> None:
     """Bypass a processing step: drop its output and mark it skipped.
 
     A skipped step contributes nothing — the next step reads the earlier stage
-    instead — and [cyan]build[/] leaves it alone. Undo with [cyan]unskip[/], or
-    just run the step again to redo it.
+    instead. Undo with [cyan]unskip[/], or just run the step again to redo it.
     """
     lib = _lib(ctx)
     stage = _STEPS[step]
@@ -901,46 +914,6 @@ def index(ctx: click.Context) -> None:
     lib = _lib(ctx)
     dst = report.write_index(lib)
     console.print(f"[green]wrote[/] {dst}")
-
-
-@cli.command()
-@click.argument("ids", nargs=-1, metavar="[ID...]")
-@click.option("--force", is_flag=True, help="Redo stages even if they exist.")
-@click.pass_context
-def build(ctx: click.Context, ids: tuple[str, ...], force: bool) -> None:
-    """Run the non-interactive steps in order: upscale → grade.
-
-    A convenience batch — it only ever runs steps you haven't done and haven't
-    skipped (unless [cyan]--force[/]). [cyan]border[/] is a per-card step (it
-    needs your frame marks), so it isn't run here; do it in the UI or with
-    [cyan]proxdex border[/] first if you want it. Bleed and colour reproduction
-    are added at [cyan]sheet[/] time, not baked in.
-    """
-    lib = _lib(ctx)
-    cards = lib.select(ids)
-    if not cards:
-        console.print("[dim]no cards[/]")
-        return
-
-    def due(stage: Stage) -> list[str]:
-        return [
-            c.id for c in cards if not c.skipped(stage) and (force or not c.has(stage))
-        ]
-
-    if to_upscale := due(Stage.UPSCALED):
-        console.print(f"[bold]upscale[/] ({len(to_upscale)})")
-        ctx.invoke(
-            upscale,
-            ids=tuple(to_upscale),
-            model=None,
-            scale=None,
-            double=None,
-            force=force,
-        )
-    if to_grade := due(Stage.EDITED):
-        console.print(f"[bold]grade[/] ({len(to_grade)})")
-        ctx.invoke(grade, ids=tuple(to_grade), normalize=None, force=force)
-    console.print("[green]build complete[/]")
 
 
 def _write_batch(path: Path, data: dict[str, object]) -> None:
@@ -1121,15 +1094,17 @@ def sheet(
     if dpi:
         cfg.sheet_dpi = dpi
     cards = lib.select(ids) if ids else lib.cards()
-    ready = [c for c in cards if c.has(Stage.EDITED)]
-    missing = [c.id for c in cards if not c.has(Stage.EDITED)]
+    ready = [c for c in cards if _sheet_ready(c)]
+    missing = [c.id for c in cards if not _sheet_ready(c)]
     if missing:
         err.print(
-            f"[yellow]no master, skipping:[/] {', '.join(missing)} "
-            "[dim](run `proxdex build`)[/]"
+            f"[yellow]not ready, skipping:[/] {', '.join(missing)} "
+            "[dim](finish grade, or `proxdex skip grade`)[/]"
         )
     if not ready:
-        raise click.UsageError("no card masters to impose — run `proxdex build`")
+        raise click.UsageError(
+            "no card masters to impose — run upscale/grade, or skip them"
+        )
 
     prof_name, recipe = media.resolve(cfg, profile)
     cal = calibrate_mod.load(_cal_dir(lib), prof_name) if prof_name != "none" else None
@@ -1140,7 +1115,7 @@ def sheet(
     try:
         repro = _Repro(cfg, prof_name, recipe, cal, tmpdir)
         fronts = [
-            repro.cell(Image.open(c.stage_path(Stage.EDITED)).convert("RGB"))
+            repro.cell(Image.open(cast("Path", _master(c))).convert("RGB"))
             for c in ready
         ]
         backs: list[Image.Image | None] = [None] * len(ready)

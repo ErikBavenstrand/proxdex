@@ -189,6 +189,14 @@ def _reindex(lib: Library) -> None:
         report.write_index(lib)
 
 
+def _cascade(card: Card, stage: Stage) -> None:
+    """Drop downstream outputs made stale by a change to ``stage``, and say so."""
+    removed = card.invalidate_downstream(stage)
+    if removed:
+        names = ", ".join(s.label for s in removed)
+        console.print(f"  [dim]↳ removed stale downstream: {names}[/]")
+
+
 def _each(items: Sequence[T], fn: Callable[[T], None], verb: str) -> int:
     """Run ``fn`` over items with a progress bar; skip per-item FileErrors."""
     failed = 0
@@ -287,6 +295,7 @@ def _acquire(lib: Library, cfg: Config, meta: sources.CardMeta, force: bool) -> 
         console.print(f"[dim]· {meta.id} {meta.name}: original exists[/]")
         return
     sources.download_large(meta.id, cfg).save(dst)
+    _cascade(card, Stage.ORIGINAL)
     console.print(
         f"[green]✓[/] {meta.id:<9} {meta.name:<18} → {dst.relative_to(lib.root)}"
     )
@@ -500,6 +509,8 @@ def import_(
         )
         dst = card.stage_path(target)
         (shutil.move if move else shutil.copy2)(str(f), str(dst))
+        card.clear_skip(target)
+        _cascade(card, target)
         console.print(
             f"[green]✓[/] {f.name} → {dst.relative_to(lib.root)} "
             f"[dim](stage {target.value} {target.label})[/]"
@@ -653,6 +664,7 @@ def upscale(
             src, dst, cfg, model=use_model, scale=use_scale, double=use_double
         )
         card.clear_skip(Stage.UPSCALED)
+        _cascade(card, Stage.UPSCALED)
         console.print(
             f"[green]✓[/] {card.id}: upscaled [dim]({tag})[/] → "
             f"{dst.relative_to(lib.root)}"
@@ -727,6 +739,7 @@ def skip(ctx: click.Context, step: str, ids: tuple[str, ...]) -> None:
     for card in cards:
         card.mark_skip(stage)
         console.print(f"[yellow]⤳[/] {card.id}: {step} skipped")
+        _cascade(card, stage)
     if not cards:
         console.print("[dim]no cards[/]")
     _reindex(lib)
@@ -759,6 +772,7 @@ def reset(ctx: click.Context, step: str, ids: tuple[str, ...]) -> None:
         if card.has(stage) or card.skipped(stage):
             card.reset(stage)
             console.print(f"[green]○[/] {card.id}: {step} reset to pending")
+            _cascade(card, stage)
     _reindex(lib)
 
 
@@ -871,6 +885,7 @@ def border(
                 return
             bleed.grow(src, dst, cfg, **grow_mm)
         card.clear_skip(Stage.BORDERED)
+        _cascade(card, Stage.BORDERED)
         rel = dst.relative_to(lib.root)
         console.print(f"[green]✓[/] {card.id}: {note} → {rel}")
 

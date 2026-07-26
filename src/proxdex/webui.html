@@ -267,6 +267,18 @@ function defaultStep(c){
   for(let i=STEPS.length-1;i>=0;i--){ if(stStatus(c,STEPS[i].stage)==='done') return STEPS[i].key; }
   return 'original';
 }
+/* changing a stage invalidates everything downstream (the CLI removes those
+   stale files). Warn before that throws away a done upscale — it's slow. */
+function cascadeVictims(c,key){
+  const i=STEPS.findIndex(s=>s.key===key);
+  return STEPS.slice(i+1).filter(s=>stStatus(c,s.stage)==='done');
+}
+function okCascade(c,key){
+  const v=cascadeVictims(c,key); if(!v.some(s=>s.key==='upscale')) return true;
+  return confirm(`This rebuilds from the new ${STEP[key].label.toLowerCase()} and `
+    +`removes the existing ${v.map(s=>s.label.toLowerCase()).join(' + ')} — the upscale `
+    +`is slow to regenerate. Continue?`);
+}
 
 function renderCard(){
   align.on=false;
@@ -359,18 +371,22 @@ const stepOpts=cmd=> cmd==='upscale' ? {model:$('#u_model').value,scale:+$('#u_s
   : cmd==='grade' ? {normalize:$('#g_norm').checked} : {};
 async function runStep(cmd){
   const c=state.cards[state.idx];
+  if(!okCascade(c,cmd)) return;
   await act('/api/step',{cmd, ids:[c.id], opts:stepOpts(cmd), force:true}, `${cmd} · ${c.id}`);
   afterStep(cmd);
 }
 async function pipe(cmd, key){
   const c=state.cards[state.idx];
+  if((cmd==='skip'||cmd==='reset') && !okCascade(c,key)) return;
   await act('/api/step',{cmd, ids:[c.id], opts:{step:key}}, `${cmd} ${key} · ${c.id}`);
   afterStep(cmd);
 }
 async function refetch(){ const c=state.cards[state.idx];
+  if(!okCascade(c,'original')) return;
   await act('/api/fetch',{ids:[c.id]}, `fetch · ${c.id}`); afterStep('run'); }
 async function importOriginal(inp){
   if(!inp.files[0])return; const c=state.cards[state.idx];
+  if(!okCascade(c,'original')){ inp.value=''; return; }
   const fd=new FormData(); fd.append('file',inp.files[0]); fd.append('id',c.id); fd.append('stage','original');
   $('#busy').classList.add('on');
   const r=await fetch('/api/import',{method:'POST',body:fd}); const j=await r.json();
@@ -488,7 +504,9 @@ function renderAlignPanel(){
       <button class="ghost" onclick="align.blue={t:0.08,r:0.08,b:0.08,l:0.08};positionLines();computeExtend()">reset</button></div></div>`;
 }
 async function applyAlign(){
-  const b={...align.blue}, stretch=align.stretch, c=state.cards[state.idx]; exitAlign();
+  const c=state.cards[state.idx];
+  if(!okCascade(c,'border')) return;   // keep the overlay open so they can cancel
+  const b={...align.blue}, stretch=align.stretch; exitAlign();
   await act('/api/step',{cmd:'border', ids:[c.id],   // send marks; the CLI does the real fit
     opts:{inner:{top:b.t,right:b.r,bottom:b.b,left:b.l},stretch}, force:true}, `border · ${c.id}`);
   afterStep('border');

@@ -92,6 +92,15 @@ class Card:
         self.stage_path(stage).unlink(missing_ok=True)
         self.clear_skip(stage)
 
+    def invalidate_downstream(self, stage: Stage) -> list[Stage]:
+        """Remove every output derived from ``stage`` (all later stages), which
+        went stale when ``stage`` changed. Skip markers — which record intent,
+        not derived pixels — are left in place. Returns the stages removed."""
+        removed = [s for s in Stage if s > stage and self.has(s)]
+        for s in removed:
+            self.stage_path(s).unlink(missing_ok=True)
+        return removed
+
 
 @dataclass(slots=True)
 class Library:

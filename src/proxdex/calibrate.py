@@ -353,32 +353,47 @@ class Error:
         )
 
 
-def in_gamut(scanned: Patches, sent: Patches, wanted: Patches) -> NDArray[np.bool_]:
-    """Which target patches this print could have reached.
+def reachable(
+    correction: Correction | None, wanted: Patches | None = None
+) -> NDArray[np.bool_]:
+    """Which target patches a medium with this response can print at all.
 
-    Reachability is decided by inverting *this print's own* response: fit
-    ``scanned -> sent`` over its pairs, ask what value each target would have to be
-    sent as, and call the target reachable when that value fits in 0..255. So it is
-    a measurement of this paper and ink, not an assumption about printers.
+    Reachability is decided by inverting the *measured* response: ask what value
+    each target would have to be sent as, and call it reachable when that value
+    fits in 0..255. So it is a measurement of this paper and ink, not an assumption
+    about printers.
 
     It has to be the response and not a range, because a gamut is a solid, not a
     box. Comparing each channel against the darkest and brightest the print
-    returned — which is what this did first — misses every colour that is inside
+    returned — which is what this did first — passes every colour that is inside
     the box on all three channels and still unprintable: a saturated blue at
     mid-lightness needs more cyan than exists, and no correction invents ink. Those
     patches counted as reachable and held a real profile's error at 17.7 mean RGB
-    while the colours it could actually hit sat at 8.7.
+    while the colours it could actually hit sat at 12.7.
+
+    Nothing measured means nothing ruled out.
     """
-    need = _features(wanted) @ fit(scanned, sent).coef
+    goal = target() if wanted is None else wanted
+    if correction is None:
+        return np.ones(len(goal), dtype=np.bool_)
+    need = _features(goal) @ correction.coef
     inside = (need >= 0.0) & (need <= _SEND_MAX)
     return np.asarray(inside.all(axis=1), dtype=np.bool_)
 
 
-def error(scanned: Patches, sent: Patches, wanted: Patches | None = None) -> Error:
-    """RGB distance from the target, over the patches the medium can reach."""
+def score(
+    scanned: Patches, reach: NDArray[np.bool_], wanted: Patches | None = None
+) -> Error:
+    """RGB distance from the target over ``reach`` — the patches that count.
+
+    The mask is an argument because *whose* gamut it is matters. A medium has one
+    gamut, so every round of a calibration is scored against the same one (see
+    :meth:`proxdex.profiles.Profile.gamut`); scoring each round against its own
+    scan compares means over different patch sets, and the trend then moves when
+    the set moves rather than when the print improves.
+    """
     goal = target() if wanted is None else wanted
     d = np.sqrt(((scanned - goal) ** 2).sum(axis=1))
-    reach = in_gamut(scanned, sent, goal)
     inside = d[reach]
     if not inside.size:  # nothing reachable — report the whole thing rather than
         inside = d  # claim a clean sheet on no evidence

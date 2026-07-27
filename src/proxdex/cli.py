@@ -2517,11 +2517,11 @@ def profile_show(ctx: click.Context, name: str | None) -> None:
         )
         return
     table = Table(box=None, pad_edge=False, header_style="bold")
-    cols = ("", "Round", "Slot", "Date", "Off by (mean/max)", "Reached", "Pull", "Note")
+    cols = ("", "Round", "Slot", "Date", "Off by (mean/max)", "Pull", "Note")
     for col in cols:
         table.add_column(col)
     for rnd in prof.rounds:
-        e = rnd.error
+        e = prof.score(rnd)
         pull = prof.influence(rnd.n)
         table.add_row(
             "✓" if rnd.enabled else "[dim]·[/]",
@@ -2529,7 +2529,6 @@ def profile_show(ctx: click.Context, name: str | None) -> None:
             rnd.slot.text,
             rnd.date,
             f"{e.mean:.1f} / {e.max:.1f}",
-            f"{e.measured}/{e.total}",
             f"{pull:.1f}" if pull is not None else "[dim]—[/]",
             _one_line(rnd.note),
         )
@@ -2542,22 +2541,26 @@ def profile_show(ctx: click.Context, name: str | None) -> None:
             "medium. [dim]`proxdex calibrate enable --round N` puts one back.[/]"
         )
         return
-    trend = " → ".join(f"{r.error.mean:.1f}" for r in live)
+    trend = " → ".join(f"{prof.score(r).mean:.1f}" for r in live)
     console.print(f"[dim]mean error by live round: {trend} (lower is truer)[/]")
     console.print(
         "[dim]✓ = in the fit, · = switched off. Pull is how far the correction "
         "moves if that round is left out — a round pulling much harder than its "
         "neighbours is either your most informative measurement or an outlier.[/]"
     )
-    last = live[-1].error
+    last = prof.score(live[-1])
+    console.print(
+        f"[dim]every round is scored over the same {last.measured} of {last.total} "
+        "patches — one medium, one gamut.[/]"
+    )
     if last.clipped:
         console.print(
-            f"[dim]{last.clipped} of {last.total} patches are outside what this "
-            "medium can print at all — paper is not 255, ink is not 0, and a "
-            "saturated colour can need more of one ink than exists — so the error "
-            "is measured over the rest. That floor is the paper's, not the "
+            f"[dim]the other {last.clipped} are outside what this medium can print "
+            "at all — paper is not 255, ink is not 0, and a saturated colour can "
+            "need more of one ink than exists. That floor is the paper's, not the "
             "calibration's.[/]"
         )
+    _converged(prof)
     free = len(prof.free_slots)
     console.print(
         f"[dim]next chart goes in slot {prof.next_slot.text} of "
@@ -3072,7 +3075,7 @@ def cal_add(
     before = prof.residual
     rnd = prof.add_round(scanned, sent, where, scan=scan_path.name, note=note.strip())
     profiles.save(lib.root, prof)
-    e = rnd.error
+    e = prof.score(rnd)
     trend = ""
     if before is not None:
         delta = before.mean - e.mean
@@ -3091,10 +3094,28 @@ def cal_add(
         )
     console.print(
         f"[dim]correction refitted over {len(prof.rounds)} round(s) — `sheet "
-        f"--profile {prof.name}` uses it. Another round: `proxdex calibrate chart "
-        f"{prof.name}` (slot {prof.next_slot.text})[/]"
+        f"--profile {prof.name}` uses it.[/]"
     )
+    if not _converged(prof):
+        console.print(
+            f"[dim]another round: `proxdex calibrate chart {prof.name}` "
+            f"(slot {prof.next_slot.text})[/]"
+        )
     _suspect_round(prof, rnd)
+
+
+def _converged(prof: profiles.Profile) -> bool:
+    """Say when the loop is done, instead of inviting a round that buys nothing."""
+    flat = prof.plateau
+    if flat is None:
+        return False
+    console.print(
+        f"[green]✓ this looks converged[/] — {flat.text}, so what is left is the "
+        "medium's gamut and the scanner's noise, not something another chart fixes. "
+        f"[dim]Print a card: `proxdex sheet check --profile {prof.name} <id>`. "
+        "Measure again when the ink, the paper or the driver changes.[/]"
+    )
+    return True
 
 
 #: how much worse than the best round so far still counts as ordinary variation.
@@ -3110,15 +3131,14 @@ def _suspect_round(prof: profiles.Profile, rnd: profiles.Round) -> None:
     others = [r for r in prof.rounds if r.n != rnd.n]
     if not others:
         return
-    best = min(others, key=lambda r: r.error.mean)
-    limit = max(
-        best.error.mean * _CAL_SUSPECT_RATIO, best.error.mean + _CAL_SUSPECT_FLOOR
-    )
-    if rnd.error.mean <= limit:
+    best = min(others, key=lambda r: prof.score(r).mean)
+    mine, theirs = prof.score(rnd).mean, prof.score(best).mean
+    limit = max(theirs * _CAL_SUSPECT_RATIO, theirs + _CAL_SUSPECT_FLOOR)
+    if mine <= limit:
         return
     err.print(
         f"[yellow]⚠[/] round {rnd.n} is much worse than round {best.n} "
-        f"({rnd.error.mean:.1f} vs {best.error.mean:.1f}) — check the scan is the "
+        f"({mine:.1f} vs {theirs:.1f}) — check the scan is the "
         "right slot, the right way up and unretouched. [dim]`proxdex calibrate "
         f"disable {prof.name} --round {rnd.n}` refits without it, and keeps it.[/]"
     )
@@ -3202,7 +3222,7 @@ def cal_proof(ctx: click.Context, name: str | None, out: Path | None) -> None:
     dst = out or default
     dst.parent.mkdir(parents=True, exist_ok=True)
     calibrate_mod.proof_sheet(last.scanned).save(dst)
-    e = last.error
+    e = prof.score(last)
     console.print(
         f"[green]wrote[/] {dst} [dim]— round {last.n}, off by mean {e.mean:.1f} / "
         f"max {e.max:.1f} RGB[/]"

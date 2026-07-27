@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
 
 from proxdex import calibrate
 from proxdex.calibrate import GRID, Coef, Correction, Error, Patches, Slot
@@ -51,6 +52,59 @@ DIR = "profiles"
 NONE = "none"
 #: a grid is exactly (cols, rows)
 _PAIR = 2
+#: how many rounds in a row have to stop buying anything before the loop is called
+#: done. One round can come back worse for reasons that are not the loop's — a
+#: slightly crooked scan, a sheet fed warm — so a single flat round is noise and
+#: three in a row is a floor.
+_FLAT_ROUNDS = 3
+#: mean RGB per round below which another sheet is not worth printing. This is a
+#: judgement about your paper and your afternoon, not a measurement error: read
+#: noise barely shows in a mean over ~70 patches (one level of noise per patch moves
+#: the scored mean by 0.1), so a round can be *measured* to have gained 0.3 and still
+#: not be worth having gained it.
+_FLAT_GAIN = 0.5
+
+
+@dataclass(frozen=True, slots=True)
+class Plateau:
+    """A run of rounds at the end of a calibration that improved nothing."""
+
+    first: int
+    last: int
+    #: mean RGB the best round in the run won over everything before it — below
+    #: what :data:`_FLAT_GAIN` asks of that many rounds, and negative if the run
+    #: came back worse than what it followed
+    gain: float
+
+    @property
+    def rounds(self) -> int:
+        return self.last - self.first + 1
+
+    @property
+    def per_round(self) -> float:
+        return max(self.gain, 0.0) / self.rounds
+
+    def json(self) -> dict[str, Any]:
+        return {
+            "first": self.first,
+            "last": self.last,
+            "gain": self.gain,
+            "per_round": self.per_round,
+        }
+
+    @property
+    def text(self) -> str:
+        span = (
+            f"round {self.first}"
+            if self.first == self.last
+            else f"rounds {self.first} to {self.last}"
+        )
+        return (
+            f"{span} improved the fit by {max(self.gain, 0.0):.1f} RGB in total, "
+            f"{self.per_round:.1f} a round"
+        )
+
+
 _NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,47}$")
 
 
@@ -85,11 +139,6 @@ class Round:
     #: switched off, so you can see what it was doing and put it back.
     enabled: bool = True
 
-    @property
-    def error(self) -> Error:
-        """How far this print landed from the target — the convergence measure."""
-        return calibrate.error(self.scanned, self.sent)
-
     def switched(self, *, on: bool) -> Round:
         return replace(self, enabled=on)
 
@@ -103,7 +152,6 @@ class Round:
             "enabled": self.enabled,
             "sent": _rows(self.sent),
             "scanned": _rows(self.scanned),
-            "error": self.error.json(),
         }
 
     @classmethod
@@ -205,10 +253,50 @@ class Profile:
         return float(np.sqrt(((base - other) ** 2).sum(axis=1)).mean())
 
     @property
+    def gamut(self) -> NDArray[np.bool_]:
+        """Which target patches this medium can print — one answer for the profile.
+
+        A gamut belongs to the paper and the inks, not to one sheet, so it is read
+        from every live round pooled (the same fit the correction uses). Scoring
+        each round against its own scan instead made the trend compare means over
+        different patch sets — 63 to 68 of 80 on a real matte — so the number moved
+        when the set moved rather than when the print got better.
+        """
+        return calibrate.reachable(self.correction)
+
+    def score(self, rnd: Round) -> Error:
+        """How far that round's print landed from the target, over this gamut."""
+        return calibrate.score(rnd.scanned, self.gamut)
+
+    @property
     def residual(self) -> Error | None:
         """How true the most recent live round printed — the number to watch fall."""
         live = self.live
-        return live[-1].error if live else None
+        return self.score(live[-1]) if live else None
+
+    @property
+    def plateau(self) -> Plateau | None:
+        """The tail of rounds that stopped buying anything, if there is one.
+
+        A loop that exists to be repeated has to say when repeating it is done.
+        Past this point another chart costs a sheet of your paper and an hour and
+        buys a fraction of a level: what is left is the medium's own gamut, and no
+        amount of measuring puts ink in the printer that is not there.
+
+        Judged on the *best* round either side rather than the last one, because a
+        single round coming back worse is ordinary and should not read as progress
+        having stopped, nor a single good one as progress continuing.
+        """
+        live = self.live
+        if len(live) <= _FLAT_ROUNDS:
+            return None
+        head, tail = live[:-_FLAT_ROUNDS], live[-_FLAT_ROUNDS:]
+        best_before = min(self.score(r).mean for r in head)
+        best_after = min(self.score(r).mean for r in tail)
+        gain = best_before - best_after
+        if gain >= _FLAT_GAIN * len(tail):
+            return None
+        return Plateau(first=tail[0].n, last=tail[-1].n, gain=gain)
 
     @property
     def used_slots(self) -> tuple[Slot, ...]:
@@ -300,6 +388,7 @@ class Profile:
     def summary(self) -> dict[str, Any]:
         """What a list or a settings screen shows — no patch arrays."""
         residual = self.residual
+        plateau = self.plateau
         return {
             "name": self.name,
             "notes": self.notes,
@@ -309,6 +398,7 @@ class Profile:
             "live": len(self.live),
             "calibrated": self.calibrated,
             "residual": None if residual is None else residual.json(),
+            "plateau": None if plateau is None else plateau.json(),
             "next_slot": self.next_slot.json(),
             "grid": list(self.grid),
             "stored": self.stored,
@@ -329,7 +419,7 @@ class Profile:
                 "date": r.date,
                 "scan": r.scan,
                 "note": r.note,
-                "error": r.error.json(),
+                "error": self.score(r).json(),
                 "enabled": r.enabled,
                 "influence": self.influence(r.n),
                 "target": _rows(calibrate.target()),

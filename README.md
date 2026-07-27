@@ -614,6 +614,21 @@ round after prints the target *through* what is known so far, which samples the
 space where your cards actually live. Against a simulated press it converges
 `16.1 → 2.2 → 1.6 → 1.5 → 1.4` mean RGB.
 
+**It also tells you when to stop.** A loop you are invited to repeat forever wastes
+paper: once three rounds in a row have improved the fit by under half a level each,
+`calibrate add` and `profile show` say so and stop suggesting the next chart —
+what is left is the medium's own gamut, and no amount of measuring puts ink in the
+printer that is not there. Measure again when the ink, the paper or the driver
+changes.
+
+**The error you are shown covers only colours this medium can reach.** White paper
+is not 255, ink is not 0, and a saturated blue at mid-lightness can need more cyan
+than exists — so those patches are named and excluded rather than averaged in,
+which would leave a floor that can never fall. Reachability is measured by
+inverting your print's own response, and it is a property of the *medium*, so every
+round is scored over the same patches: the trend moves when the print improves, not
+when the patch set does.
+
 **The chart is 80 patches: a 16-step neutral ramp, then a 4×4×4 lattice of the
 cube's interior.** Two decisions there are worth knowing, because both were
 measured rather than assumed:
@@ -679,6 +694,22 @@ The web UI has the same thing as a screen (`Sheet`): pick cards, set copies, and
 the page plan updates as you go. `Print` manages profiles and walks the
 calibration loop — the slot map shows which part of the sheet is used, and the
 round table shows the error falling.
+
+## Releasing
+
+One command, from a clean `main`:
+
+```bash
+scripts/release.sh 0.6.0 notes.md    # or omit the file and write the tag message
+```
+
+It runs the full gate (lint, format, typecheck, `node --check` on the web UI's
+script, and a wheel build that asserts the data files are in it), bumps
+`_version.py`, commits, writes an annotated tag, and pushes. Nothing is mutated
+until every check passes. Pushing the tag runs the `Release` workflow, which
+re-checks the gate, refuses a tag whose version does not match `_version.py`,
+publishes to PyPI by trusted publishing, and creates the GitHub release from the
+tag's own message with the artifacts attached.
 
 ## License
 

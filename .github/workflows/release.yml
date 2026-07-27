@@ -5,7 +5,27 @@ on:
     tags: ["v*"]
 
 jobs:
+  # The tag is what triggers a release, so the tag has to be checked, not trusted:
+  # a green CI run on main says nothing about a tag pointing somewhere else.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv run --group dev ruff check src
+      - run: uv run --group dev ruff format --check src
+      - run: uv run --group dev pyright
+      - name: The tag must match the version it claims to ship
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          built=$(uv run proxdex --version | awk '{print $NF}')
+          test "$tag" = "$built" || {
+            echo "tag $GITHUB_REF_NAME ships version $built — bump _version.py or move the tag"
+            exit 1
+          }
+
   build:
+    needs: check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,3 +48,26 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # The annotated tag message is the release notes: one text, written once, at the
+  # moment the release is cut — not a second copy to keep in step with the first.
+  github_release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gh needs the tag object to read its message
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --notes-from-tag \
+            --verify-tag

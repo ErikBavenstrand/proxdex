@@ -3256,11 +3256,12 @@ function calibrationPanel(p){
         ${p.unreadable} round(s) in this profile's file could not be read and are
         not in the fit — a damaged entry, or one measured on a chart proxdex no
         longer knows.</p>` : ''}
-      ${(p.charts || []).some(v => v !== p.chart) ? `<p class="hint mb-2">
-        Some rounds were measured on an earlier chart (this one has ${p.patches}
-        patches). They all still count toward the fit — the pairs are real
-        measurements either way — but their errors come from different patch sets,
-        so read the trend as a guide rather than like-for-like.</p>` : ''}
+      ${p.plateau ? `<p class="hint mb-2" style="color:var(--proof)">
+        <b>This looks converged.</b> Rounds ${p.plateau.first} to ${p.plateau.last}
+        improved the fit by ${Math.max(p.plateau.gain, 0).toFixed(1)} RGB in total,
+        ${p.plateau.per_round.toFixed(1)} a round — what is left is this medium's
+        gamut and the scanner's noise, not something another chart fixes. Print a
+        card, and measure again when the ink, the paper or the driver changes.</p>` : ''}
 
       <div class="calgrid">
         <div>
@@ -3271,8 +3272,9 @@ function calibrationPanel(p){
             : `${p.free_slots.length} slot(s) left. Next: <span class="mono">${p.next_slot[0] + 1},${p.next_slot[1] + 1}</span>.`}</p>
         </div>
         <div class="vstack gap-2">
-          <div class="eyebrow">Next round</div>
-          <button class="btn btn-sm btn-primary" onclick="getChart()">Get chart for round ${rounds.length + 1}</button>
+          <div class="eyebrow">Next round${p.plateau ? ' — optional now' : ''}</div>
+          <button class="btn btn-sm ${p.plateau ? 'btn-outline-secondary' : 'btn-primary'}"
+                  onclick="getChart()">Get chart for round ${rounds.length + 1}</button>
           <label class="eyebrow mb-0" for="pf_scan">then add the scan</label>
           <input class="form-control form-control-sm" type="file" id="pf_scan" accept="image/*">
           <div class="d-flex gap-2 align-items-center">
@@ -3297,14 +3299,13 @@ function calibrationPanel(p){
           </div>`).join('')}</div>
         <div class="tblwrap mt-2"><table class="tbl">
           <thead><tr><th>Round</th><th>Slot</th><th>Date</th><th>Mean / max RGB</th>
-            <th>Reached</th><th title="How far the correction moves if this round is left out">Pull</th>
+            <th title="How far the correction moves if this round is left out">Pull</th>
             <th>Note</th><th></th></tr></thead>
           <tbody>${rounds.map(r => `<tr class="${r.enabled ? '' : 'muted'}">
             <td class="mono">${r.enabled ? r.n : `${r.n} · off`}</td>
             <td class="mono">${esc(r.slot_text)}</td>
             <td class="faint">${esc(r.date)}</td>
             <td class="mono">${r.error.mean.toFixed(1)} / ${r.error.max.toFixed(1)}</td>
-            <td class="mono faint">${r.error.measured}/${r.error.measured + r.error.clipped}</td>
             <td class="mono faint">${r.influence === null || r.influence === undefined
               ? '—' : r.influence.toFixed(1)}</td>
             <td class="faint">${esc(r.note)}</td>
@@ -3325,10 +3326,12 @@ function calibrationPanel(p){
                src="/api/calibrate/proof/${encodeURIComponent(p.name)}/${state.proofOf}">
           <p class="hint mb-0 mt-1">Top of each pair is the target, bottom is the
             scan. This is where a cast or a crushed shadow shows itself.</p>` : ''}
-        ${res && res.clipped ? `<p class="hint mb-0 mt-2">${res.clipped} of
-          ${res.measured + res.clipped} patches are outside what this medium can print
-          at all — paper is not 255 and ink is not 0 — so the error is measured over
-          the rest. That floor is the paper's, not the calibration's.</p>` : ''}`
+        ${res ? `<p class="hint mb-0 mt-2">Every round is scored over the same
+          ${res.measured} of ${res.measured + res.clipped} patches — one medium, one
+          gamut.${res.clipped ? ` The other ${res.clipped} are outside what this
+          medium can print at all: paper is not 255, ink is not 0, and a saturated
+          colour can need more of one ink than exists. That floor is the paper's,
+          not the calibration's.` : ''}</p>` : ''}`
         : '<p class="hint mb-0 mt-2">No rounds yet. The first chart prints the raw target, which measures how far off the medium is.</p>'}
     </div>`;
 }

@@ -2697,15 +2697,24 @@ def _unreadable_note(prof: profiles.Profile) -> None:
     match — and the honest thing is to name it, because the error trend is only
     as good as the rounds behind it.
     """
-    if not prof.unreadable:
-        return
-    err.print(
-        f"[yellow]⚠[/] {prof.unreadable} round(s) in {prof.name}.json could not "
-        f"be read and are not in the fit. [dim]The chart has "
-        f"{len(calibrate_mod.chart_patches())} patches now; a round measured "
-        "against a different one cannot be compared to it. Re-measure, or keep "
-        "the file for the record.[/]"
-    )
+    if prof.unreadable:
+        err.print(
+            f"[yellow]⚠[/] {prof.unreadable} round(s) in {prof.name}.json could "
+            "not be read and are not in the fit. [dim]A damaged entry, or one "
+            "measured on a chart proxdex no longer knows. Re-measure, or keep the "
+            "file for the record.[/]"
+        )
+    older = [v for v in prof.charts if v != calibrate_mod.CHART_VERSION]
+    if older:
+        console.print(
+            f"[cyan]◐[/] {len(older)} of this profile's rounds were measured on "
+            f"chart v{', v'.join(str(v) for v in older)}; new ones use "
+            f"v{calibrate_mod.CHART_VERSION} "
+            f"({len(calibrate_mod.chart())} patches). [dim]Every round still "
+            "counts toward the fit — the pairs are real measurements either way — "
+            "but their errors come from different patch sets, so read the trend "
+            "as a guide rather than like-for-like.[/]"
+        )
 
 
 def _pick(value: float | None, current: float) -> float:
@@ -2871,7 +2880,7 @@ def cal_add(
     # what this print was asked to be: the chart was rendered through whatever was
     # known then, which is exactly the correction fitted over the rounds recorded
     # so far — the round being added is not in that fit yet
-    sent = calibrate_mod.sent_patches(prof.correction)
+    sent = calibrate_mod.sent_patches(prof.correction)  # the current chart
     scanned = calibrate_mod.read_scan(
         scan_path, cfg, slot=None if whole else where, grid=prof.grid
     )
@@ -2970,7 +2979,7 @@ def cal_proof(ctx: click.Context, name: str | None, out: Path | None) -> None:
     default = profiles.profiles_dir(lib.root) / f"{prof.name}_round{last.n}_proof.png"
     dst = out or default
     dst.parent.mkdir(parents=True, exist_ok=True)
-    calibrate_mod.proof_sheet(last.scanned).save(dst)
+    calibrate_mod.proof_sheet(last.scanned, last.chart).save(dst)
     e = last.error
     console.print(
         f"[green]wrote[/] {dst} [dim]— round {last.n}, off by mean {e.mean:.1f} / "

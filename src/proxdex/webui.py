@@ -988,7 +988,7 @@ def create_app(lib: Library) -> FastAPI:
         if rnd is None:
             return Response(status_code=404)
         buf = io.BytesIO()
-        calibrate.proof_sheet(rnd.scanned).save(buf, "PNG")
+        calibrate.proof_sheet(rnd.scanned, rnd.chart).save(buf, "PNG")
         return Response(
             buf.getvalue(),
             media_type="image/png",

@@ -73,11 +73,15 @@ class Round:
     date: str = ""
     scan: str = ""
     note: str = ""
+    #: which chart version this round was printed from. A round is only comparable
+    #: to its own target, but its (scanned, sent) pairs stay valid for the fit
+    #: whatever chart produced them — so an old round is never wasted.
+    chart: int = 1
 
     @property
     def error(self) -> Error:
         """How far this print landed from the target — the convergence measure."""
-        return calibrate.error(self.scanned)
+        return calibrate.error(self.scanned, calibrate.target(self.chart))
 
     def json(self) -> dict[str, Any]:
         return {
@@ -86,6 +90,7 @@ class Round:
             "date": self.date,
             "scan": self.scan,
             "note": self.note,
+            "chart": self.chart,
             "sent": _rows(self.sent),
             "scanned": _rows(self.scanned),
             "error": self.error.json(),
@@ -93,11 +98,21 @@ class Round:
 
     @classmethod
     def read(cls, data: object, n: int) -> Round | None:
+        """One stored round, or None if it cannot be trusted.
+
+        A file written before charts were versioned has no ``chart`` key and was
+        measured on version 1, which is why that is the default rather than the
+        current version.
+        """
         if not isinstance(data, dict):
             return None
         raw: dict[str, Any] = data
-        sent = _patches(raw.get("sent"))
-        scanned = _patches(raw.get("scanned"))
+        version = raw.get("chart")
+        version = version if isinstance(version, int) else 1
+        if version not in calibrate.CHARTS:
+            return None
+        sent = _patches(raw.get("sent"), version)
+        scanned = _patches(raw.get("scanned"), version)
         if sent is None or scanned is None:
             return None
         return cls(
@@ -108,6 +123,7 @@ class Round:
             date=_text(raw.get("date")),
             scan=_text(raw.get("scan")),
             note=_text(raw.get("note")),
+            chart=version,
         )
 
 
@@ -181,6 +197,16 @@ class Profile:
     def sheet_full(self) -> bool:
         return not self.free_slots
 
+    @property
+    def charts(self) -> tuple[int, ...]:
+        """Which chart versions this profile's rounds were measured on.
+
+        More than one is fine for the *fit* — the pairs are all real measurements
+        — but the per-round errors then come from different patch sets, so the
+        trend is not strictly like-for-like and says so.
+        """
+        return tuple(sorted({r.chart for r in self.rounds}))
+
     def round(self, n: int) -> Round | None:
         return next((r for r in self.rounds if r.n == n), None)
 
@@ -207,6 +233,7 @@ class Profile:
             date=date.today().isoformat(),
             scan=scan,
             note=note,
+            chart=calibrate.CHART_VERSION,
         )
         self.rounds.append(rnd)
         self.pending = None
@@ -229,6 +256,7 @@ class Profile:
                 date=r.date,
                 scan=r.scan,
                 note=r.note,
+                chart=r.chart,
             )
             for i, r in enumerate(self.rounds)
             if r.n != n
@@ -272,7 +300,9 @@ class Profile:
             "stored": self.stored,
             "preset": preset(self.name) is not None,
             "unreadable": self.unreadable,
-            "patches": len(calibrate.chart_patches()),
+            "patches": len(calibrate.chart()),
+            "chart": calibrate.CHART_VERSION,
+            "charts": list(self.charts),
         }
 
     def detail(self) -> dict[str, Any]:
@@ -287,7 +317,8 @@ class Profile:
                 "scan": r.scan,
                 "note": r.note,
                 "error": r.error.json(),
-                "target": _rows(calibrate.target()),
+                "chart": r.chart,
+                "target": _rows(calibrate.target(r.chart)),
                 "sent": _rows(r.sent),
                 "scanned": _rows(r.scanned),
             }
@@ -479,11 +510,11 @@ def _rows(arr: Patches) -> list[list[float]]:
     return [[round(float(v), 3) for v in row] for row in arr]
 
 
-def _patches(data: object) -> Patches | None:
+def _patches(data: object, version: int) -> Patches | None:
     if not isinstance(data, list) or not data:
         return None
     arr = np.asarray(data, dtype=np.float32)
-    want = (len(calibrate.chart_patches()), 3)
+    want = (len(calibrate.chart(version)), 3)
     if arr.shape != want or not np.isfinite(arr).all():
         return None
     return arr

@@ -582,8 +582,31 @@ Every round is **kept**, and the correction is refitted over all of them at once
 so each round makes it truer rather than replacing what you measured last time.
 Round 1 prints the raw target, which measures how far off the medium is; every
 round after prints the target *through* what is known so far, which samples the
-space where your cards actually live. A measured run converges fast — a simulated
-press went `21.5 → 5.0 → 4.0 → 3.7 → 3.3 → 2.9` mean RGB over six rounds.
+space where your cards actually live. Against a simulated press it converges
+`16.1 → 2.2 → 1.6 → 1.5 → 1.4` mean RGB.
+
+**The chart is 80 patches: a 16-step neutral ramp, then a 4×4×4 lattice of the
+cube's interior.** Two decisions there are worth knowing, because both were
+measured rather than assumed:
+
+- *The lattice is pulled inside the printable box on purpose.* Paper is not 255
+  and ink is not 0, so a patch at pure red or pure white measures nothing — it
+  clips, and gets dropped from the fit. The chart proxdex shipped through 0.5.0
+  spent 24 of its 36 patches that way, leaving ~12 usable samples to fit a
+  10-parameter model. Same press, same code: the old chart settled at 2.31 mean
+  RGB, this one at **1.36**.
+- *Denser is not better.* Patch area is the budget. At six charts per A4 these are
+  5.1 mm of ink with 1.1 mm gutters — 121 px across on a 600 dpi scan. Push to 228
+  patches and accuracy gets *worse*; a 512-patch near-continuous chart was worse
+  than the 36-patch one it would replace, because read noise and neighbour bleed
+  grow faster than coverage helps. A continuous gradient is worse again: there is
+  no flat area to average, and 1% of geometric error becomes a correlated 2.3
+  levels of error in every reading. (A 3-D LUT, which is what a dense lattice
+  would justify, also lost to the polynomial at every density tested.)
+
+Charts are **versioned**. Rounds measured on the old one keep working: each round
+scores against its own target, and its measurements still count toward the fit, so
+upgrading never discards a calibration you paid for in paper.
 
 The chart travels the same renderer as a card sheet, so the correction is
 measured on the exact path it is applied to. `proxdex sheet` then applies it, and

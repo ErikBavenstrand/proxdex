@@ -88,7 +88,7 @@ class Round:
     @property
     def error(self) -> Error:
         """How far this print landed from the target — the convergence measure."""
-        return calibrate.error(self.scanned)
+        return calibrate.error(self.scanned, self.sent)
 
     def switched(self, *, on: bool) -> Round:
         return replace(self, enabled=on)

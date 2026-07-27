@@ -2553,8 +2553,9 @@ def profile_show(ctx: click.Context, name: str | None) -> None:
     if last.clipped:
         console.print(
             f"[dim]{last.clipped} of {last.total} patches are outside what this "
-            "medium can print at all — paper is not 255 and ink is not 0 — so the "
-            "error is measured over the rest. That floor is the paper's, not the "
+            "medium can print at all — paper is not 255, ink is not 0, and a "
+            "saturated colour can need more of one ink than exists — so the error "
+            "is measured over the rest. That floor is the paper's, not the "
             "calibration's.[/]"
         )
     free = len(prof.free_slots)
@@ -3084,8 +3085,9 @@ def cal_add(
     )
     if e.clipped:
         console.print(
-            f"[dim]{e.clipped} patch(es) are outside this medium's gamut and are "
-            "not counted — no calibration can reach them.[/]"
+            f"[dim]{e.clipped} of {e.total} patch(es) are outside this medium's "
+            "gamut — too dark, too light, or more saturated than its inks reach — "
+            "so they are not counted. No calibration can hit them.[/]"
         )
     console.print(
         f"[dim]correction refitted over {len(prof.rounds)} round(s) — `sheet "

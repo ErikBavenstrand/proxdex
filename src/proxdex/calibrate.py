@@ -273,6 +273,8 @@ class Correction:
 _MIN_SAMPLES = 12
 #: what counts as pinned against the bottom or top of what can be sent
 _FLOOR, _CEILING = 0.5, 254.5
+#: the largest value a channel can be sent as — the edge of the reachable solid
+_SEND_MAX = 255.0
 
 
 def usable(sent: Patches) -> NDArray[np.bool_]:
@@ -312,11 +314,12 @@ def fit(scanned: Patches, sent: Patches) -> Correction:
 class Error:
     """How far a print landed from the target, over the colours it could reach.
 
-    Both halves matter. A medium has a *gamut*: white paper is not 255 and no ink
-    is 0, so some target patches are unreachable no matter how good the
-    calibration — averaging those in gives a number that can never fall and tells
-    you nothing about whether the loop is working. So ``mean``/``max`` cover the
-    patches this medium can actually hit, and ``clipped`` says how many it cannot.
+    Both halves matter. A medium has a *gamut*: white paper is not 255, no ink is
+    0, and a saturated colour can need more of one ink than exists — so some target
+    patches are unreachable no matter how good the calibration. Averaging those in
+    gives a number that can never fall and tells you nothing about whether the loop
+    is working. So ``mean``/``max`` cover the patches this medium can actually hit
+    (:func:`in_gamut`), and ``clipped`` says how many it cannot.
     """
 
     mean: float
@@ -350,24 +353,32 @@ class Error:
         )
 
 
-def in_gamut(scanned: Patches, wanted: Patches) -> NDArray[np.bool_]:
+def in_gamut(scanned: Patches, sent: Patches, wanted: Patches) -> NDArray[np.bool_]:
     """Which target patches this print could have reached.
 
-    The reachable range is read from the print itself — the darkest and brightest
-    each channel actually came back as — so it is a measurement of *this* paper
-    and ink, not an assumption about printers in general.
+    Reachability is decided by inverting *this print's own* response: fit
+    ``scanned -> sent`` over its pairs, ask what value each target would have to be
+    sent as, and call the target reachable when that value fits in 0..255. So it is
+    a measurement of this paper and ink, not an assumption about printers.
+
+    It has to be the response and not a range, because a gamut is a solid, not a
+    box. Comparing each channel against the darkest and brightest the print
+    returned — which is what this did first — misses every colour that is inside
+    the box on all three channels and still unprintable: a saturated blue at
+    mid-lightness needs more cyan than exists, and no correction invents ink. Those
+    patches counted as reachable and held a real profile's error at 17.7 mean RGB
+    while the colours it could actually hit sat at 8.7.
     """
-    lo = scanned.min(axis=0)
-    hi = scanned.max(axis=0)
-    inside = (wanted >= lo) & (wanted <= hi)
+    need = _features(wanted) @ fit(scanned, sent).coef
+    inside = (need >= 0.0) & (need <= _SEND_MAX)
     return np.asarray(inside.all(axis=1), dtype=np.bool_)
 
 
-def error(scanned: Patches, wanted: Patches | None = None) -> Error:
+def error(scanned: Patches, sent: Patches, wanted: Patches | None = None) -> Error:
     """RGB distance from the target, over the patches the medium can reach."""
     goal = target() if wanted is None else wanted
     d = np.sqrt(((scanned - goal) ** 2).sum(axis=1))
-    reach = in_gamut(scanned, goal)
+    reach = in_gamut(scanned, sent, goal)
     inside = d[reach]
     if not inside.size:  # nothing reachable — report the whole thing rather than
         inside = d  # claim a clean sheet on no evidence

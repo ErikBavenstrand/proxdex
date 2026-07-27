@@ -42,6 +42,7 @@ from proxdex import (
     net,
     profiles,
     report,
+    scratch,
     sources,
     steps,
 )
@@ -2143,8 +2144,8 @@ class _Repro:
         if cfg.bleed_mm <= 0:
             return im
         bp = round(cfg.bleed_mm * ppm)
-        src = Path(tempfile.mkstemp(suffix=".png", dir=self.tmpdir)[1])
-        dst = Path(tempfile.mkstemp(suffix=".png", dir=self.tmpdir)[1])
+        src = scratch.file(".png", self.tmpdir)
+        dst = scratch.file(".png", self.tmpdir)
         im.save(src)
         bleed.cut_bleed(src, dst, cfg, bp)
         return Image.open(dst).convert("RGB")

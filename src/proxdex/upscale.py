@@ -74,8 +74,12 @@ class Upscaler(Protocol):
 
     id: BackendId
     name: str
-    #: how it is obtained, for the "not installed" message
-    install: str
+
+    @property
+    def install(self) -> str:
+        """How to obtain it, for the "not installed" message. A property, not a
+        constant: the right advice depends on the platform asking."""
+        ...
 
     def probe(self, cfg: Config) -> Availability:
         """Can this backend run here? Never raises, never runs the tool."""
@@ -249,10 +253,19 @@ class _Upscayl:
 
     id = BackendId.UPSCAYL
     name = "Upscayl"
-    install = (
-        "install Upscayl from https://upscayl.org (or `brew install --cask "
-        "upscayl`), or set [tools] upscayl_bin in proxdex.toml"
-    )
+
+    @property
+    def install(self) -> str:
+        """How to get it *on this machine*.
+
+        Telling a Linux user to run `brew` is the kind of small lie that makes the
+        rest of the message untrustworthy, so the suggestion follows the platform.
+        """
+        how = {
+            "darwin": "`brew install --cask upscayl`, or from https://upscayl.org",
+            "win32": "the installer at https://upscayl.org",
+        }.get(platform(), "the AppImage, .deb or .rpm at https://upscayl.org")
+        return f"install Upscayl — {how} — or set [tools] upscayl_bin in proxdex.toml"
 
     def probe(self, cfg: Config) -> Availability:
         exe, models = _find_bin(cfg), _find_models(cfg)

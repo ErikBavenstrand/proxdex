@@ -47,6 +47,7 @@ from proxdex import (
     net,
     profiles,
     report,
+    scratch,
     sources,
     steps,
 )
@@ -1231,7 +1232,7 @@ def app_from_env() -> FastAPI:
 def _spool(file: UploadFile) -> Path:
     """Write an uploaded file to a temp path (sync — used in sync handlers)."""
     suffix = Path(file.filename or "upload.png").suffix or ".png"
-    tmp = Path(tempfile.mkstemp(suffix=suffix)[1])
+    tmp = scratch.file(suffix)
     tmp.write_bytes(file.file.read())
     return tmp
 

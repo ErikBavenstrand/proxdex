@@ -164,6 +164,21 @@ class TestWhereItLooks:
         exe, _ = upscale.installs()[0]
         assert exe.parts[-4:] == ("Upscayl", "resources", "bin", "upscayl-bin")
 
+    def test_the_install_advice_suits_the_platform(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Telling a Linux user to run `brew` is the kind of small lie that makes
+        the rest of the message untrustworthy."""
+        cfg = without_upscayl(tmp_path)
+        self.fake(monkeypatch, "darwin")
+        assert "brew" in upscale.availability(cfg).hint
+        self.fake(monkeypatch, "linux")
+        linux = upscale.availability(cfg).hint
+        assert "brew" not in linux
+        assert "AppImage" in linux
+        self.fake(monkeypatch, "win32")
+        assert "installer" in upscale.availability(cfg).hint
+
     def test_a_windows_shaped_install_is_actually_found(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

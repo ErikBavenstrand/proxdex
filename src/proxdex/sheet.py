@@ -19,8 +19,6 @@ other. A card's size is never silently changed to fit the sheet.
 from __future__ import annotations
 
 import contextlib
-import os
-import tempfile
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +27,7 @@ from typing import Any, cast
 import img2pdf
 from PIL import Image, ImageDraw
 
-from proxdex import games, steps
+from proxdex import games, scratch, steps
 from proxdex.config import (
     Config,
     DuplexFlip,
@@ -482,10 +480,9 @@ def _pages_to_pdf(pages: Iterator[Image.Image], dst: Path, cfg: Config) -> int:
     tmp: list[str] = []
     try:
         for page in pages:
-            fd, path = tempfile.mkstemp(suffix=".png")
-            os.close(fd)
+            path = scratch.file(".png")
             page.save(path, "PNG", dpi=(cfg.sheet_dpi, cfg.sheet_dpi))
-            tmp.append(path)
+            tmp.append(str(path))
         if not tmp:
             raise ValueError("no pages to write")
         dst.write_bytes(cast(bytes, img2pdf.convert(tmp)))

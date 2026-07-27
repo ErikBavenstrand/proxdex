@@ -164,6 +164,14 @@ uv tool install .              # from a local checkout
 uv tool upgrade proxdex        # later
 ```
 
+**macOS, Linux and Windows**, on Python 3.11–3.13. CI runs the suite *and* a real
+library end to end — init, import, border fit, imposed PDF — on all three, because
+the defects that only appear on one platform live in that path and not in a unit
+test. One caveat, inherited rather than ours: on **Linux arm64** (a Pi, Graviton,
+Docker on Apple Silicon) `cardbleed`'s `jpeglib` dependency has no prebuilt wheel,
+so `apt install build-essential` first. x86_64 Linux, macOS and Windows all
+install from wheels with no compiler.
+
 `cardbleed` ships as a dependency, so it's bundled in proxdex's own venv — no
 separate install, and proxdex finds it there even though it isn't on your PATH.
 

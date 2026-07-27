@@ -19,6 +19,7 @@ import contextlib
 import hashlib
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass
 from enum import StrEnum
@@ -182,9 +183,18 @@ def _sorted(states: dict[str, _HostState]) -> list[HostHealth]:
 
 
 def cache_dir() -> Path:
-    """Where cached bodies and host health live (``$PROXDEX_CACHE`` overrides)."""
+    """Where cached bodies and host health live (``$PROXDEX_CACHE`` overrides).
+
+    Each platform's own cache location: ``%LOCALAPPDATA%`` on Windows (a POSIX
+    ``~/.cache`` there works, but it is not where a Windows user or their disk
+    cleanup would ever look), ``$XDG_CACHE_HOME`` or ``~/.cache`` elsewhere.
+    Relocating this is safe by definition — it is a cache, and
+    ``proxdex where --clear-cache`` empties it.
+    """
     if env := os.environ.get("PROXDEX_CACHE"):
         return Path(env).expanduser()
+    if sys.platform == "win32" and (local := os.environ.get("LOCALAPPDATA")):
+        return Path(local) / "proxdex" / "cache"
     base = os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"
     return Path(base) / "proxdex"
 

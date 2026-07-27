@@ -15,11 +15,17 @@ jobs:
       - run: uv run --group dev ruff format --check src tests
       - run: uv run --group dev pyright
 
+  # Every platform proxdex claims to run on, on the oldest and newest Python it
+  # claims to support. Windows earns its place: it is the one platform whose
+  # *path* behaviour differs (a file with an open handle cannot be deleted, the
+  # separator is not "/", the install roots come from the environment), and none
+  # of that is exercised — or even typechecked — on a POSIX runner.
   smoke:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false # one platform failing should not hide the others
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
@@ -31,3 +37,35 @@ jobs:
       # the suite includes the UI/cardbleed fit parity check, which needs node —
       # every runner image ships one, and the test skips loudly if it doesn't
       - run: uv run --group dev pytest
+      # A real library, made and driven end to end on this platform: init, a card
+      # filed by `import`, a border fit, then a print PDF imposed. The unit suite
+      # deliberately never touches the filesystem this hard, and *every*
+      # platform-specific defect found so far lived in exactly this path — temp
+      # files that could not be deleted, an fd never closed, install paths spelled
+      # for one OS. It needs no network: the card folder is created first, so
+      # `import --id` resolves it locally instead of looking the id up.
+      - name: A library end to end
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run proxdex init lib
+          uv run python -c "
+          from PIL import Image
+          from pathlib import Path
+          Path('lib/cards/base1-base/base1-4_charizard').mkdir(parents=True)
+          Path('lib/cards/base1-base/.game').write_text('pokemon')
+          im = Image.new('RGB', (600, 825), (240, 200, 60))
+          im.paste(Image.new('RGB', (520, 730), (40, 90, 170)), (40, 48))
+          im.save('card.png')
+          "
+          uv run proxdex --root lib import card.png --id base1-4 --stage original --dry-run
+          uv run proxdex --root lib import card.png --id base1-4 --stage original
+          uv run proxdex --root lib border --auto base1-4
+          uv run proxdex --root lib skip upscale base1-4
+          uv run proxdex --root lib skip grade base1-4
+          # --no-open or the runner tries to launch a PDF viewer
+          uv run proxdex --root lib sheet ci --no-open
+          uv run proxdex --root lib batches
+          uv run proxdex --root lib where
+          uv run proxdex --root lib ls --json
+          test -f lib/print-batches/*/fronts.pdf

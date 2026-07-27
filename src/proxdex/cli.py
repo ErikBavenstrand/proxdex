@@ -993,6 +993,14 @@ def where(ctx: click.Context, clear_cache: bool) -> None:
         )
     else:
         console.print(f"upscaler  [yellow]not found[/] [dim]{escape(found.message)}[/]")
+        # "where did you look?" is the next question when the app is installed
+        # somewhere else — Upscayl's Windows installer lets you choose, and its
+        # portable zip and the Linux AppImage have no fixed home at all. Only
+        # when nothing was configured, because with `[tools] upscayl_bin` set it
+        # did not look anywhere: it used what it was told.
+        if not cfg.upscayl_bin:
+            for exe, _ in upscale_mod.installs():
+                console.print(f"          [dim]looked in {escape(str(exe))}[/]")
     if clear_cache:
         console.print(f"[green]✓[/] cleared {net.clear_cache()} cached response(s)")
     for host in net.health():

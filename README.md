@@ -185,19 +185,34 @@ Install it the way you install applications:
 
 ```bash
 brew install --cask upscayl      # macOS
-# or download from https://upscayl.org (macOS, Windows, Linux AppImage)
+# or download from https://upscayl.org — macOS, Windows (installer or portable
+# zip), Linux (AppImage, deb, rpm)
 ```
 
-proxdex finds the bundled binary and models inside `Upscayl.app` automatically on
-macOS; anywhere else, point at them:
+proxdex then finds it by itself on all three platforms, in Upscayl's own install
+layout — the engine at `resources/bin`, the models at `resources/models`:
+
+| | looked for at |
+|---|---|
+| macOS | `/Applications/Upscayl.app/Contents/Resources/…` (and `~/Applications`) |
+| Windows | `%ProgramFiles%\Upscayl\resources\…`, and `%LOCALAPPDATA%\Programs\Upscayl\…` for a per-user install |
+| Linux | `/opt/Upscayl/resources/…` (the `.deb` and `.rpm` both land there) |
+
+Some installs have no fixed home and cannot be guessed: Upscayl's Windows
+installer lets you choose the directory, its portable zip unpacks wherever you
+put it, and a Linux **AppImage** runs from a temporary mount. Point at those:
 
 ```toml
 [tools]
-upscayl_bin    = "/opt/Upscayl/resources/bin/upscayl-bin"
-upscayl_models = "/opt/Upscayl/resources/models"
+upscayl_bin    = "D:/Apps/Upscayl/resources/bin/upscayl-bin.exe"
+upscayl_models = "D:/Apps/Upscayl/resources/models"
 ```
 
-`proxdex where` tells you what this machine has:
+Keep the binary *in its own folder* — on Windows it needs the `vcomp140.dll`
+shipped beside it, so copying just the `.exe` out will not work.
+
+`proxdex where` tells you what this machine has, and when it finds nothing it
+says where it looked, which is usually the answer:
 
 ```
 upscaler  upscayl ✓ /Applications/Upscayl.app/Contents/Resources/bin/upscayl-bin
@@ -496,8 +511,8 @@ round-trip — and mirrors the app's own options: any of the seven built-in
 models, an output scale, and optional **Double Upscayl** (runs the model twice,
 so 2× doubled = 4×, up to 16×). The command construction matches the app
 exactly, including only passing `-s` when the scale differs from the model's
-native 4×. On macOS the bundled binary and models are auto-detected inside
-`Upscayl.app`; elsewhere set the paths under `[tools]`.
+native 4×. The bundled binary and models are auto-detected on macOS, Windows and
+Linux; for an install in a non-standard place, set the paths under `[tools]`.
 
 Set defaults once in `proxdex.toml`:
 

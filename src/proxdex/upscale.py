@@ -24,8 +24,10 @@ stage, or the option to skip it.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -94,38 +96,123 @@ class Upscaler(Protocol):
 
 
 # ------------------------------------------------------------------ upscayl --
-_BIN_CANDIDATES = (
-    "/Applications/Upscayl.app/Contents/Resources/bin/upscayl-bin",
-    str(Path.home() / "Applications/Upscayl.app/Contents/Resources/bin/upscayl-bin"),
-    "/opt/Upscayl/resources/bin/upscayl-bin",
-)
-_MODEL_CANDIDATES = (
-    "/Applications/Upscayl.app/Contents/Resources/models",
-    str(Path.home() / "Applications/Upscayl.app/Contents/Resources/models"),
-    "/opt/Upscayl/resources/models",
-)
+# Where the app installs itself, per platform. Every one of these is Upscayl's
+# own layout, taken from its `electron-builder` config rather than guessed: the
+# engine is `extraFiles`-copied to ``resources/bin`` and the models to
+# ``resources/models``, under whatever the platform's app root is. The binary is
+# ``upscayl-bin``, ``.exe`` on Windows (which also ships the vcomp DLLs beside
+# it, so the *directory* matters — never copy the exe out on its own).
+#
+# None of this is exhaustive on purpose. Upscayl's Windows installer lets you
+# choose the directory and also ships a portable zip, and a Linux AppImage runs
+# from a temporary mount with no persistent path at all — which is exactly why
+# ``[tools] upscayl_bin`` exists and why not finding it is a *reported* state
+# rather than a crash.
+def _env_dirs(*names: str) -> tuple[Path, ...]:
+    """The environment paths among ``names`` that are actually set, deduplicated.
+
+    Windows' install root is ``%ProgramFiles%``, which is not a fixed string: the
+    drive varies, it is localised on some installs, and a 32-bit Python reports
+    the x86 one — so it is read from the environment, never spelled out.
+    """
+    seen: dict[Path, None] = {}
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            seen.setdefault(Path(value), None)
+    return tuple(seen)
+
+
+def platform() -> str:
+    """``sys.platform``, through a function on purpose.
+
+    Two reasons, both practical: a type checker *narrows* ``sys.platform`` to the
+    host it is running on, so branching on it directly leaves the other platforms'
+    code unchecked — and a test cannot pretend to be Windows. Behind a ``-> str``
+    call, every branch is analysed and every branch is reachable from a test, which
+    is the only coverage the Windows paths can ever get: CI has no Windows runner.
+    """
+    return sys.platform
+
+
+def _app_roots() -> tuple[Path, ...]:
+    if platform() == "win32":
+        # the NSIS installer is `perMachine`, so Program Files by default; the
+        # LOCALAPPDATA entry covers a per-user install or a portable unpack there
+        programs = _env_dirs("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)")
+        local = _env_dirs("LOCALAPPDATA")
+        return tuple(p / "Upscayl" for p in programs) + tuple(
+            p / "Programs" / "Upscayl" for p in local
+        )
+    if platform() == "darwin":
+        return (
+            Path("/Applications/Upscayl.app/Contents"),
+            Path.home() / "Applications/Upscayl.app/Contents",
+        )
+    return (Path("/opt/Upscayl"),)  # the .deb and .rpm both land here
+
+
+def _resources() -> str:
+    """The resources directory's name inside the app root.
+
+    macOS capitalises it (``Contents/Resources``); Windows and Linux do not. Case
+    matters on a case-sensitive volume, so it is not left to luck.
+    """
+    return "Resources" if platform() == "darwin" else "resources"
+
+
+def _exe_name() -> str:
+    return "upscayl-bin.exe" if platform() == "win32" else "upscayl-bin"
+
+
+def installs() -> tuple[tuple[Path, Path], ...]:
+    """``(engine, models)`` pairs this platform is searched for, in order.
+
+    Public because "where did you look?" is the question a person asks when their
+    install is somewhere else — ``proxdex where`` prints these when nothing is
+    found, which beats being told only that it is missing.
+
+    Paired rather than searched separately, so a configured binary can never be
+    matched against the models folder of a *different* install.
+    """
+    res = _resources()
+    return tuple(
+        (root / res / "bin" / _exe_name(), root / res / "models")
+        for root in _app_roots()
+    )
+
+
+def _discover() -> tuple[Path, Path] | None:
+    """The first install where both halves are present."""
+    return next(
+        (
+            (exe, models)
+            for exe, models in installs()
+            if exe.exists() and models.is_dir()
+        ),
+        None,
+    )
 
 
 def _find_bin(cfg: Config) -> str | None:
     if cfg.upscayl_bin:
         return cfg.upscayl_bin if Path(cfg.upscayl_bin).exists() else None
-    for candidate in _BIN_CANDIDATES:
-        if Path(candidate).exists():
-            return candidate
-    for name in ("upscayl-bin", "upscayl"):
-        found = shutil.which(name)
-        if found:
-            return found
-    return None
+    found = _discover()
+    if found is not None:
+        return str(found[0])
+    # a PATH hit is last: `which` finds `upscayl-bin.exe` on Windows too, but
+    # Upscayl's installer does not put its resources/bin on PATH, so this is for
+    # a hand-placed build rather than the ordinary install
+    return next(
+        filter(None, (shutil.which(n) for n in ("upscayl-bin", "upscayl"))), None
+    )
 
 
 def _find_models(cfg: Config) -> str | None:
     if cfg.upscayl_models:
         return cfg.upscayl_models if Path(cfg.upscayl_models).exists() else None
-    for candidate in _MODEL_CANDIDATES:
-        if Path(candidate).exists():
-            return candidate
-    return None
+    found = _discover()
+    return str(found[1]) if found is not None else None
 
 
 def resolve_bin(cfg: Config) -> str:

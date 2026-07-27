@@ -174,6 +174,9 @@ install from wheels with no compiler.
 
 `cardbleed` ships as a dependency, so it's bundled in proxdex's own venv — no
 separate install, and proxdex finds it there even though it isn't on your PATH.
+It is pinned `>=0.4.1`: cardbleed runs *inside* proxdex's process and prints to
+proxdex's stdout, and 0.4.1 is the first release whose own output survives a
+stream that cannot encode it.
 
 ### Upscayl is installed separately, and cannot be otherwise
 

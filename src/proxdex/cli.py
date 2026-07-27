@@ -22,6 +22,7 @@ from typing import Any, TypeVar, cast
 import rich_click as click
 from PIL import Image
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -979,6 +980,19 @@ def where(ctx: click.Context, clear_cache: bool) -> None:
     console.print(f"config    {cfg_file} {mark}")
     console.print(f"game      {games.get(lib.default_game).name} [dim](default)[/]")
     console.print(f"cache     {net.cache_dir()}")
+    # the one external tool proxdex drives, and the one step that cannot run
+    # without it — so "why is upscale refusing?" is answerable here rather than
+    # only at the moment it refuses
+    cfg = Config.load(lib.root)
+    found = upscale_mod.availability(cfg)
+    # escaped: the message names `[tools] upscayl_bin`, and rich would read that
+    # square bracket as a style tag and silently drop it
+    if found.ready:
+        console.print(
+            f"upscaler  {found.backend} [green]✓[/] [dim]{escape(found.detail)}[/]"
+        )
+    else:
+        console.print(f"upscaler  [yellow]not found[/] [dim]{escape(found.message)}[/]")
     if clear_cache:
         console.print(f"[green]✓[/] cleared {net.clear_cache()} cached response(s)")
     for host in net.health():
@@ -1548,15 +1562,29 @@ def upscale(
     face: int | None,
     force: bool,
 ) -> None:
-    """Upscale with Upscayl → stage 3 (upscaled), after any border fix.
+    """Upscale → stage 3 (upscaled), after any border fix.
 
     Runs on the bordered image if present, else the original — so frame
-    expansion happens first. Needs Upscayl installed (its bundled
-    [cyan]upscayl-bin[/] is auto-detected on macOS). Mirrors the app's own
-    options; defaults live under [cyan]\\[tools][/].
+    expansion happens first. Defaults live under [cyan]\\[tools][/].
+
+    This is the one step that needs a tool proxdex does not ship, and **cannot**
+    ship: Upscayl is a desktop application with a native Vulkan engine, not a
+    Python package. Install it (its bundled [cyan]upscayl-bin[/] is found
+    automatically on macOS) or set [cyan]\\[tools] upscayl_bin[/]; see
+    [cyan]proxdex where[/] for what this machine has. Without it, skip the step —
+    [cyan]proxdex skip upscale[/] — and the earlier stage stands as the master.
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
+    # asked once, up front: a missing upscaler is a fact about the machine, and
+    # finding out per card halfway through a batch is the version of this that
+    # wastes your afternoon
+    found = upscale_mod.availability(cfg)
+    if not found.ready:
+        raise click.UsageError(
+            f"{found.message}\nOr skip the step: proxdex skip upscale"
+            + (f" {' '.join(ids)}" if ids else "")
+        )
     # the registry coerces each flag into its enum, or falls back to this
     # library's config — so only well-typed values reach upscayl-bin
     opts = steps.resolve("upscale", cfg, model=model, scale=scale, double=double)

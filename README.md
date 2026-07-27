@@ -167,6 +167,55 @@ uv tool upgrade proxdex        # later
 `cardbleed` ships as a dependency, so it's bundled in proxdex's own venv — no
 separate install, and proxdex finds it there even though it isn't on your PATH.
 
+### Upscayl is installed separately, and cannot be otherwise
+
+Everything proxdex needs comes with it — **except the upscaler**. That one is a
+desktop application, and no `pip`/`uv` install can supply it:
+
+- **Upscayl is not a Python package.** It is an Electron app whose engine,
+  `upscayl-bin`, is a native Vulkan binary. It is not published on PyPI, so there
+  is nothing for an extra to depend on. (There *is* an `upscayl` name on PyPI —
+  version `0.0.0a1`, described as "A small example package". It is unrelated.
+  proxdex does not depend on it and neither should you.)
+- **So there is no `proxdex[upscale]` extra**, deliberately. An extra can only
+  pull Python wheels, and the upscale step has no Python dependencies at all — it
+  runs a binary. An extra here would install nothing and mean nothing.
+
+Install it the way you install applications:
+
+```bash
+brew install --cask upscayl      # macOS
+# or download from https://upscayl.org (macOS, Windows, Linux AppImage)
+```
+
+proxdex finds the bundled binary and models inside `Upscayl.app` automatically on
+macOS; anywhere else, point at them:
+
+```toml
+[tools]
+upscayl_bin    = "/opt/Upscayl/resources/bin/upscayl-bin"
+upscayl_models = "/opt/Upscayl/resources/models"
+```
+
+`proxdex where` tells you what this machine has:
+
+```
+upscaler  upscayl ✓ /Applications/Upscayl.app/Contents/Resources/bin/upscayl-bin
+```
+
+**Without it, proxdex still works.** The upscale step is the only thing affected,
+and it is affected honestly: `proxdex upscale` refuses up front with what to
+install (not per card, halfway through a batch), and in the web UI its Run button
+is disabled with the same sentence and the Skip button beside it. Nothing else
+changes — the *stage* still exists, an upscaled image a card already holds is
+still shown and still printed, and `proxdex skip upscale` is a first-class choice
+that leaves the earlier stage as the master.
+
+Internally the step talks to an `Upscaler` backend rather than to Upscayl by name
+(`upscale.BACKENDS`), so a second engine is one class and one registry entry —
+including, if one ever ships wheels for every Python proxdex supports, a
+pip-installable one. Today there is exactly one backend, and it is Upscayl.
+
 ### Library vs. tool
 
 The **tool** is installed once; your **library** (cards, config, batches) is
@@ -437,6 +486,11 @@ the machine running the server to open anything, and should not.)
 
 ### Upscaling
 
+**This is the one step that needs software proxdex does not ship** — see
+[Upscayl is installed separately](#upscayl-is-installed-separately-and-cannot-be-otherwise)
+for why that cannot be fixed with an extra, and what happens when it is missing
+(short version: only this step is affected, and it says so).
+
 `proxdex upscale` drives Upscayl's engine (`upscayl-bin`) directly — no GUI
 round-trip — and mirrors the app's own options: any of the seven built-in
 models, an output scale, and optional **Double Upscayl** (runs the model twice,
@@ -461,7 +515,9 @@ options at load instead of failing later inside `upscayl-bin`. (The flip side:
 custom `.param` models are not selectable.)
 
 Override per run: `proxdex upscale --model ultrasharp-4x --scale 4 --double`.
-Prefer the GUI? Skip this step and `proxdex import` its output instead.
+Prefer the GUI? Skip this step and `proxdex import` its output instead — the
+import wizard reads `_upscayl_` in a filename as "this is the upscaled stage", so
+a whole output folder files itself.
 
 ## Border correction (frame expansion)
 

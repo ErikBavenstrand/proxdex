@@ -1344,7 +1344,9 @@ function paintBulk(){
     <span class="ms-auto d-flex flex-wrap gap-2 align-items-center">
       <span class="eyebrow">Run</span>
       ${runnable.map(s => `<button class="btn btn-sm btn-primary"
-        onclick="bulkStep('${s.key}')">${esc(s.label)}</button>`).join('')}
+        onclick="bulkStep('${s.key}')" ${s.tool_ready === false ? 'disabled' : ''}
+        title="${s.tool_ready === false ? esc(s.tool.message) : ''}"
+        >${esc(s.label)}</button>`).join('')}
       <span class="eyebrow ms-2">Skip</span>
       ${runnable.map(s => `<button class="btn btn-sm btn-outline-secondary"
         onclick="bulkPipe('skip','${s.key}')">${esc(s.label)}</button>`).join('')}
@@ -1467,13 +1469,25 @@ function stepInput(c, key){          // the stage this step consumes: nearest ea
    input exists. Used for the rail's ready dot and for advancing focus. */
 function actionable(c, key){
   const spec = SPEC(key), st = stStatus(c, spec.stage);
+  // a step whose tool is not installed is not the thing to do next, so nothing
+  // points you at it — otherwise the rail says "ready" beside a panel saying
+  // "not found", and one of the two is lying
+  if(spec.tool_ready === false) return false;
   if(key === PIPE()[0].key) return st !== 'done';
   return st !== 'done' && st !== 'skipped' && !!stepInput(c, key);
 }
+/* The word for a step that is next but cannot run. Distinct from `waiting`,
+   which means its input is not there yet — this one's input is ready and the
+   *tool* is missing, which is a different thing to go and fix. */
+const blocked = key => SPEC(key).tool_ready === false;
 /* Whether the Run button works, which is a different question: running a step
    is also how you take it *off* skip, so a skipped step is still runnable. What
    gates it is only whether there is an input to read. */
 function runnable(c, key){
+  // `ready` is false only for a step whose external tool is missing (/api/meta
+  // reports it from the step registry). The step, the stage and Skip all stay —
+  // only running it is off the table.
+  if(SPEC(key).tool_ready === false) return false;
   return key === PIPE()[0].key || !!stepInput(c, key);
 }
 function nextActionable(c){ const s = PIPE().find(s => actionable(c, s.key)); return s ? s.key : null; }
@@ -1616,7 +1630,8 @@ function frameState(c, s, i){
     st,
     cls: [st, state.step === s.key ? 'current' : '', ready ? 'ready' : '',
           (st === 'pending' && !ready && i > 0) ? 'waiting' : ''].filter(Boolean).join(' '),
-    label: st === 'done' ? 'done' : st === 'skipped' ? 'skipped' : ready ? 'ready' : 'waiting',
+    label: st === 'done' ? 'done' : st === 'skipped' ? 'skipped'
+         : ready ? 'ready' : blocked(s.key) ? 'no tool' : 'waiting',
     src: st === 'done' ? viewsrc(c.id, s.stage, state.face) : '',
   };
 }
@@ -1929,7 +1944,9 @@ function renderStepPanel(c, key){
   const s = SPEC(key), st = stStatus(c, s.stage), ready = actionable(c, key);
   const pill = st === 'done' ? '<span class="pill done">done</span>'
     : st === 'skipped' ? '<span class="pill skipped">skipped</span>'
-    : ready ? '<span class="pill ready">ready</span>' : '<span class="pill waiting">waiting</span>';
+    : ready ? '<span class="pill ready">ready</span>'
+    : blocked(key) ? '<span class="pill waiting">not installed</span>'
+    : '<span class="pill waiting">waiting</span>';
   const io = key === PIPE()[0].key ? ''
     : `<div class="mono faint mt-2" style="font-size:.6875rem">reads ${esc(stepInput(c, key) || '—')}</div>`;
 
@@ -2027,7 +2044,19 @@ function footer(c, key, st){
   const row = sec.length ? `<div class="btn-group btn-group-sm w-100">${sec.join('')}</div>` : '';
   // no restatement of the step's state here — the pill in the header, the rail
   // and the plate above the card already say it, three times over
-  return `${run}${row}`;
+  return `${run}${toolNote(s)}${row}`;
+}
+
+/* A step whose external tool is not installed says so where its Run button is,
+   in the server's own words, with what to do about it — a greyed-out button and
+   no explanation is the version of this that wastes an afternoon. Skip is still
+   right there beside it, which is the honest way past. */
+function toolNote(s){
+  if(s.tool_ready !== false || !s.tool) return '';
+  return `<p class="hint mb-0" style="color:var(--hold)">${esc(s.tool.detail)}
+    ${s.tool.hint ? `<br><span class="faint">${esc(s.tool.hint)}</span>` : ''}
+    <br><span class="faint">Skipping is a real choice: the earlier stage stands
+    as the master.</span></p>`;
 }
 
 /* Every mutation names the side it acts on, so the other side is untouched. */

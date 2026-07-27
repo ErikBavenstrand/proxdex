@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 from typing import Any, TypeVar, cast
 
+from proxdex import upscale
 from proxdex.config import Config, UpscaylModel, UpscaylScale
 from proxdex.frames import GuideId
 from proxdex.library import Stage, Step
@@ -141,6 +142,14 @@ class StepSpec:
     #: what the primary button says. "Run border" reads worse than "Reshape".
     run_label: str = ""
     options: tuple[StepOption, ...] = field(default_factory=tuple)
+    #: a step that needs a tool proxdex does not ship declares how to ask whether
+    #: that tool is here. Declared *with the step*, so the CLI, the API and the UI
+    #: all learn "this cannot run, and here is why" from the registry rather than
+    #: each testing for Upscayl themselves. None = nothing to install.
+    needs: Callable[[Config], upscale.Availability] | None = None
+
+    def availability(self, cfg: Config) -> upscale.Availability | None:
+        return self.needs(cfg) if self.needs is not None else None
 
     @property
     def option_keys(self) -> tuple[str, ...]:
@@ -162,6 +171,7 @@ class StepSpec:
         return out
 
     def json(self, cfg: Config) -> dict[str, Any]:
+        found = self.availability(cfg)
         return {
             "key": self.key,
             "stage": self.stage.label,
@@ -170,6 +180,21 @@ class StepSpec:
             "skippable": self.skippable,
             "run_label": self.run_label or f"Run {self.label.lower()}",
             "options": [o.json(cfg) for o in self.options],
+            # a step that needs an external tool reports whether it is there.
+            # Named `tool_ready` and not `ready`, because "ready" already means
+            # "this step is next" everywhere else — a step can be next and
+            # unrunnable at the same time, which is exactly the case to be clear
+            # about. The step is still *present* either way: a card may already
+            # hold this stage, and skipping stays a first-class choice.
+            "tool_ready": found is None or found.ready,
+            "tool": None
+            if found is None
+            else {
+                "backend": found.backend.value,
+                "detail": found.detail,
+                "hint": found.hint,
+                "message": found.message,
+            },
         }
 
 
@@ -218,9 +243,10 @@ UPSCALE = StepSpec(
     key="upscale",
     stage=Stage.UPSCALED,
     label="Upscale",
-    blurb="Enlarge and sharpen with Upscayl.",
+    blurb="Enlarge and sharpen with a neural upscaler.",
     step=Step.UPSCALE,
     skippable=True,
+    needs=upscale.availability,
     options=(
         StepOption(
             key="model",

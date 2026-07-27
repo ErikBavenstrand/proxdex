@@ -42,6 +42,7 @@ from proxdex import (
     calibrate,
     frames,
     games,
+    imports,
     media,
     net,
     profiles,
@@ -67,7 +68,7 @@ _VIEW_BOX = (1400, 1960)
 _JPEG_CACHE: dict[tuple[str, int, int, int], bytes] = {}
 _JPEG_CACHE_MAX = 64
 #: the client routes are real URLs, so a deep link has to reach the SPA shell
-_SPA_ROUTES = ("library", "card", "search", "settings", "sheet", "print")
+_SPA_ROUTES = ("library", "card", "search", "import", "settings", "sheet", "print")
 # card ids are <set>-<number>, and MTG collector numbers can carry their own
 # hyphen ("ymid-A-123"). No dots or slashes: these reach the CLI as argv.
 _ID_OK = re.compile(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+){1,2}$")
@@ -87,6 +88,13 @@ CardId = Annotated[str, Field(pattern=_ID_OK.pattern)]
 #: pattern-checked here rather than sanitized later
 ProfileName = Annotated[str, PathParam(pattern=r"^[a-z0-9][a-z0-9._-]{0,47}$")]
 Side = Annotated[int, Field(ge=1, le=_MAX_FACE)]
+#: a stage by the name every other surface spells it with. :class:`Stage` is an
+#: IntEnum, so the closed set of *labels* has to be written out for a request
+#: boundary to refuse a typo — and checked against the enum right below, because
+#: two lists of the same thing is exactly what this codebase does not keep.
+StageLabel = Literal["original", "bordered", "upscaled", "edited"]
+if set(get_args(StageLabel)) != set(STAGE_BY_LABEL):  # pragma: no cover
+    raise RuntimeError("StageLabel has drifted from library.Stage")
 #: a value a step setting may hold. Deliberately not `Any`: the settings schema
 #: only ever declares booleans, numbers and closed sets of strings.
 SettingValue = bool | int | float | str
@@ -210,6 +218,43 @@ class SheetBody(Body):
         if self.notes:
             args += ["--notes", self.notes]
         return args
+
+
+class ImportItem(Body):
+    """One file the wizard is holding, and what the user decided about it.
+
+    ``name`` is a *filename*, never a path: the browser has no path to give (and
+    would be talking about the wrong machine's filesystem if it did). Everything
+    else overrides what that name implies, and an unset ``id`` means "whatever
+    the name says", which is exactly the CLI's no-``--id`` case.
+    """
+
+    name: str = Field(min_length=1, max_length=255)
+    id: CardId | None = None
+    game: GameId | None = None
+    stage: StageLabel | None = None
+    face: Side | None = None
+
+    def item(self) -> imports.Item:
+        return imports.Item(
+            name=self.name,
+            id=self.id,
+            game=self.game,
+            stage=STAGE_BY_LABEL[self.stage] if self.stage else None,
+            face=self.face - 1 if self.face is not None else None,
+        )
+
+
+class ImportPlanBody(Body):
+    """What a folder of files would do to the library — names only, no bytes.
+
+    The plan is worked out from filenames, so the wizard can review two hundred
+    files without uploading one: the thumbnails are the browser's own copies, and
+    only the rows you keep are ever sent.
+    """
+
+    items: list[ImportItem] = Field(min_length=1, max_length=1024)
+    on_existing: imports.OnExisting = imports.OnExisting.OVERWRITE
 
 
 class ProfileBody(Body):
@@ -442,6 +487,22 @@ def create_app(lib: Library) -> FastAPI:
             },
             "stages": [s.label for s in _STAGES],
             "steps": [s.value for s in Step],
+            # the import vocabulary: what to do about a stage that already exists,
+            # what the planner can conclude about a file, and which suffixes count
+            # as a card image — so the wizard filters and labels off this, not off
+            # its own copy of the list
+            "import": {
+                "on_existing": [o.value for o in imports.OnExisting],
+                "dispositions": [
+                    {
+                        "id": d.value,
+                        "writes": d.writes,
+                        "blocked": d.blocked,
+                    }
+                    for d in imports.Disposition
+                ],
+                "suffixes": sorted(imports.IMAGE_SUFFIXES),
+            },
             "games": [
                 {"id": g.id.value, "name": g.name, "example": g.id_example}
                 for g in games.GAMES.values()
@@ -771,19 +832,42 @@ def create_app(lib: Library) -> FastAPI:
             args.append("--related")
         return run_cli(args)
 
+    @app.post("/api/import/plan")
+    def api_import_plan(body: ImportPlanBody) -> dict[str, Any]:
+        """What importing these files would do — from their names, reading only
+        the library. The wizard's review table and ``import --dry-run`` are the
+        same :func:`proxdex.imports.plan`, so they cannot disagree."""
+        run = imports.plan(
+            lib, [i.item() for i in body.items], on_existing=body.on_existing
+        )
+        return run.json()
+
     @app.post("/api/import")
     def api_import(
         file: Annotated[UploadFile, File()],
         cid: Annotated[str, Form(alias="id", pattern=_ID_OK.pattern)],
-        stage: Annotated[str, Form()] = "original",
+        stage: Annotated[StageLabel, Form()] = "original",
         game: Annotated[GameId | None, Form()] = None,
         face: Annotated[int | None, Form(ge=1, le=_MAX_FACE)] = None,
+        on_existing: Annotated[imports.OnExisting, Form()] = (
+            imports.OnExisting.OVERWRITE
+        ),
     ) -> dict[str, Any]:
-        if stage not in STAGE_BY_LABEL:
-            return {"ok": False, "log": f"bad stage {stage!r}"}
+        """File one uploaded image. The wizard calls this once per row, so a
+        failure names its own file and the rest of the folder still lands."""
         tmp = _spool(file)
         try:
-            args = ["import", str(tmp), "--id", cid, "--stage", stage, "--move"]
+            args = [
+                "import",
+                str(tmp),
+                "--id",
+                cid,
+                "--stage",
+                stage,
+                "--on-existing",
+                on_existing.value,
+                "--move",
+            ]
             if game is not None:
                 args += ["--game", game.value]
             return run_cli([*args, *_side(face)])
@@ -833,7 +917,40 @@ def create_app(lib: Library) -> FastAPI:
     # ---- produce -----------------------------------------------------------
     @app.post("/api/sheet")
     def api_sheet(body: SheetBody) -> dict[str, Any]:
-        return run_cli(["sheet", body.name, *body.argv()])
+        """Impose the run, and say which PDF came out of it.
+
+        ``--no-open`` is not a preference here, it is a correction: `sheet`'s
+        `[sheet] open` would launch a PDF viewer on the machine running the
+        server, which is not the machine you are looking at. The browser's own
+        equivalent is the link this returns — see `_written`.
+        """
+        res = run_cli(["sheet", body.name, *body.argv(), "--no-open"])
+        if res["ok"]:
+            res["batch"] = _written()
+        return res
+
+    def _written() -> dict[str, Any] | None:
+        """The batch whose PDF was written most recently — what `--open` opens.
+
+        Found by mtime rather than by rebuilding ``<date>_<slug>/<faces>.pdf``
+        here: the CLI owns that naming, and a second copy of it in the web layer
+        is a copy that can be wrong.
+        """
+        newest: tuple[float, report.Batch, Path] | None = None
+        for batch in report.batches(lib):
+            for pdf in batch.pdfs:
+                stamp = pdf.stat().st_mtime
+                if newest is None or stamp > newest[0]:
+                    newest = (stamp, batch, pdf)
+        if newest is None:
+            return None
+        _, found, latest = newest
+        return {
+            "name": found.name,
+            "dir": found.dir.name,
+            "pdf": latest.name,
+            "pdfs": sorted(p.name for p in found.pdfs),
+        }
 
     @app.post("/api/sheet/plan")
     def api_sheet_plan(body: SheetBody) -> Any:

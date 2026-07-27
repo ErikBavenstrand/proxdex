@@ -605,9 +605,58 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
   border: 1px solid var(--rule); border-radius: var(--card-radius);
 }
 .hit input { position: absolute; top: .5rem; left: .5rem; z-index: 2; }
+/* the browser's own `search --open`: the provider's full-resolution scan, one
+   card at a time. It sits over the thumbnail rather than in the meta line so it
+   is where your eye already is — and it must outrank the label's own click,
+   which selects the card. */
+.hit .full {
+  position: absolute; top: .5rem; right: .5rem; z-index: 2; opacity: 0;
+  font-size: .625rem; letter-spacing: .04em; text-transform: uppercase;
+  padding: .125rem .375rem; border-radius: 3px; text-decoration: none;
+  background: color-mix(in srgb, var(--stock) 82%, transparent);
+  border: 1px solid var(--rule); color: var(--dim);
+}
+.hit:hover .full, .hit .full:focus-visible { opacity: 1; }
+.hit .full:hover { color: var(--type); border-color: var(--mark); }
 .hit.have img { border-color: var(--proof); }
 .hit .hitmeta { font-size: .6875rem; color: var(--dim); margin-top: .375rem; line-height: 1.4; }
 .hit .hitmeta b { color: var(--type); font-size: .75rem; }
+
+/* --- import wizard -------------------------------------------------------
+   A folder of loose files, reviewed one row at a time before anything is sent.
+   The thumbnails are the browser's own copies of the files (object URLs), so a
+   two-hundred-file folder previews without a single upload. */
+.drop {
+  border: 1px dashed var(--rule-2); border-radius: var(--bs-border-radius);
+  padding: var(--s6) var(--s4); text-align: center; background: var(--stock);
+}
+.drop.over { border-color: var(--mark); background: var(--stock-2); }
+.drop .big { font-size: .9375rem; font-weight: 600; }
+/* one row per file. It scrolls sideways inside its own panel rather than making
+   the page scroll — every other screen here is a fixed measure. */
+.impwrap { overflow-x: auto; }
+.imptab { width: 100%; min-width: 46rem; border-collapse: separate; border-spacing: 0; }
+.imptab th {
+  font-size: .625rem; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--faint); font-weight: 600; text-align: left;
+  padding: 0 var(--s2) var(--s2); white-space: nowrap;
+}
+.imptab td { padding: var(--s2); border-top: 1px solid var(--rule); vertical-align: middle; }
+.imptab tr.gone td { opacity: .45; }
+.imptab .form-control, .imptab .form-select { height: 1.875rem; font-size: .75rem; }
+.imptab .fname { font-size: .75rem; color: var(--dim); word-break: break-all; max-width: 14rem; }
+.imptab .why { font-size: .6875rem; color: var(--faint); line-height: 1.35; }
+.imptab .pv {
+  width: 2.5rem; aspect-ratio: 63/88; object-fit: cover; display: block;
+  border: 1px solid var(--rule); border-radius: 3px; background: var(--stock-2);
+}
+/* the plan's verdict per row: the same words `import --dry-run` prints */
+.disp { font-size: .625rem; letter-spacing: .04em; text-transform: uppercase; font-weight: 600; }
+.disp.write { color: var(--proof); }
+.disp.keep  { color: var(--dim); }
+.disp.stop  { color: var(--hold); }
+.disp.fail  { color: var(--bad); }
+.disp.ok    { color: var(--proof); }
 
 /* --- settings screen ----------------------------------------------------- */
 .setgrid { display: grid; gap: var(--s4); grid-template-columns: minmax(0,1fr); }
@@ -725,6 +774,7 @@ img.proof { width: 100%; max-width: 32rem; border: 1px solid var(--rule); border
     <nav class="d-flex gap-1" id="nav">
       <button class="navlink active" data-view="library">Library</button>
       <button class="navlink" data-view="search">Search</button>
+      <button class="navlink" data-view="import">Import</button>
       <button class="navlink" data-view="sheet">Sheet</button>
       <button class="navlink" data-view="print">Print</button>
       <button class="navlink" data-view="settings">Settings</button>
@@ -825,9 +875,17 @@ const state = {
   // the sheet builder: which cards and how many of each, plus this run's page
   // settings. `picks` empty means "every ready card", exactly as the CLI's
   // `sheet <name>` with no ids does.
-  sheet:{name:'deck', picks:new Map(), filter:'', opts:null, plan:null, planning:false},
+  // `written` is the last PDF this session imposed — the browser's answer to
+  // `sheet --open`, which is a link you click rather than an app the server launches
+  sheet:{name:'deck', picks:new Map(), filter:'', opts:null, plan:null, planning:false,
+         written:null},
   // the print screen: which profile is open, and what the server said about it
   profile:null, profileList:null, profileDetail:null, proofOf:null, previewOf:null,
+  // the import wizard: the files the browser is holding, what the server says
+  // they would become, and how far the upload got. `rows` holds real File
+  // objects and their object URLs — nothing is uploaded to draw the review.
+  imp:{rows:[], plan:null, planning:false, on_existing:'overwrite', ignored:0,
+       running:false, at:0, find:null, q:'', results:null, done:null},
 };
 const card = () => state.cards.find(c => c.id === state.id) || null;
 /* What a card is, when it is not an ordinary one-sided 63×88 print. The names
@@ -876,7 +934,7 @@ async function get(p){ const r = await fetch(p); if(!r.ok) throw await r.text();
 async function act(path, body, okmsg){
   const {_method, ...payload} = body || {};
   const method = _method || 'POST';
-  let ok = false;
+  let ok = false, result = false;
   $('#busy').classList.add('on');
   try{
     const r = await fetch(path, {
@@ -889,10 +947,14 @@ async function act(path, body, okmsg){
     ok = j.ok !== false;
     toast(ok ? okmsg + '\n' + tail(j.log) : 'Failed\n' + (j.log || JSON.stringify(j)),
           ok ? 4500 : 14000);
+    // the server's own answer on success, `false` on failure — every caller
+    // treats it as a boolean, and the one that needs the detail (makeSheet,
+    // which wants the PDF that came out) reads its fields
+    if(ok) result = j || true;
   } catch(e){ toast('Failed\n' + e, 14000); }
   $('#busy').classList.remove('on');
   await refresh(true);
-  return ok;
+  return result;
 }
 
 /* A confirm() replacement that matches the rest of the console. */
@@ -982,6 +1044,7 @@ function currentUrl(){
     const p = new URLSearchParams(Object.entries(state.search).filter(([,v]) => v));
     return '/search' + (p.toString() ? '?' + p : '');
   }
+  if(state.view === 'import') return '/import';
   if(state.view === 'settings') return '/settings';
   if(state.view === 'sheet') return '/sheet';
   if(state.view === 'print')
@@ -1002,6 +1065,7 @@ function routeFromUrl(){
       rarity: q.get('rarity') || '', year: q.get('year') || '',
     }};
   }
+  if(parts[0] === 'import') return {view:'import', id:null, step:null};
   if(parts[0] === 'settings') return {view:'settings', id:null, step:null};
   if(parts[0] === 'sheet') return {view:'sheet', id:null, step:null};
   if(parts[0] === 'print')
@@ -1077,6 +1141,7 @@ function render(){
       showHint(state.results.length ? '' : 'No matches. Try fewer words, or switch game.');
     } else if(state.search.q.trim()) doSearch();   // a /search?q=… link
   }
+  else if(state.view === 'import') renderImport();
   else if(state.view === 'sheet') renderSheet();
   else if(state.view === 'print') renderPrint();
   else if(state.view === 'settings') renderSettings();
@@ -2452,7 +2517,8 @@ function viewSearch(){
       <div class="d-flex align-items-center gap-2 mt-2">
         <span class="hint">Every word must appear in the card name. Ids look like
           <code class="mono" id="q_example">${esc(example)}</code>. A two-sided card
-          arrives with both sides.</span>
+          arrives with both sides. Hover a result for <b>full ↗</b> — the
+          provider's own scan, full size, for telling two prints apart.</span>
         <span class="form-check mb-0 ms-auto">
           <input class="form-check-input" type="checkbox" id="f_related"
                  ${state.search.related ? 'checked' : ''}
@@ -2481,11 +2547,18 @@ function readSearchForm(){
     rarity: $('#f_rar').value, year: $('#f_year').value,
   };
 }
+/* A link inside a <label> would otherwise tick the label's checkbox on its way
+   out: opening the full scan is not choosing the card. */
+function stopClick(ev){ ev.stopPropagation(); }
+
 function paintResults(rows){
   const box = $('#results'); if(!box) return;
   box.innerHTML = rows.map(x => `
       <label class="hit ${x.have ? 'have' : ''}">
         <input class="form-check-input" type="checkbox" value="${esc(x.id)}" ${x.have ? 'disabled' : ''}>
+        <a class="full" target="_blank" rel="noopener" href="${esc(x.image)}"
+           title="Open the full-resolution scan in a new tab"
+           onclick="stopClick(event)">full ↗</a>
         <img loading="lazy" alt="${esc(x.name)}" src="${esc(x.image)}" onerror="this.style.opacity=.12">
         <div class="hitmeta"><b>${esc(x.name)}</b><br>${esc(x.set)} · ${esc(x.year)} ·
           <span class="mono">${esc(x.number)}</span><br>
@@ -2511,6 +2584,423 @@ async function fetchSel(){
   if(!ids.length){ toast('Select some cards first.'); return; }
   await act('/api/fetch', {ids, game: $('#f_game').value, related: state.search.related},
     `Added ${ids.length} card(s)`);
+}
+
+/* ---------- import wizard -------------------------------------------------
+   `proxdex import` for a whole folder: pick the files, review what each one
+   would become, then send them. The review is the *server's* plan
+   (/api/import/plan = `import --dry-run`), computed from filenames alone — so
+   nothing is uploaded to draw it, and the table cannot promise an outcome the
+   import does not produce.
+
+   The files stay in the browser until you press Import, and then go one request
+   at a time: a folder where one file fails should file the other forty-nine and
+   name the one that didn't. */
+const IMP = () => state.imp;
+const impMeta = () => state.meta.import || {on_existing:[], dispositions:[], suffixes:[]};
+/* How a disposition reads: green writes, dim keeps, amber wants a decision. The
+   words are the server's own — this only chooses a colour for each. */
+function dispClass(d){
+  const known = impMeta().dispositions.find(x => x.id === d);
+  if(!known) return 'stop';
+  return known.writes ? 'write' : (known.blocked ? 'stop' : 'keep');
+}
+
+function renderImport(){
+  $('#main').innerHTML = `
+    <div class="d-flex align-items-baseline gap-2 mb-3 flex-wrap">
+      <div><div class="eyebrow">File loose images</div><h5 class="mb-0">Import</h5></div>
+      <span class="hint ms-auto mb-0" style="max-width:34rem">Drop a folder of scans or an
+        Upscayl output. Each file's card, stage and side are read from its name —
+        check the ones marked below, then import.</span>
+    </div>
+    <div class="vstack gap-3">
+      <div class="drop" id="impdrop">
+        <div class="big mb-1">Drop a folder or files here</div>
+        <p class="hint mb-3">${esc(impMeta().suffixes.join(' '))} — anything else is left alone.</p>
+        <div class="d-flex gap-2 justify-content-center flex-wrap">
+          <label class="btn btn-sm btn-primary mb-0">Choose a folder
+            <input type="file" hidden webkitdirectory multiple onchange="impPick(this)"></label>
+          <label class="btn btn-sm btn-outline-secondary mb-0">Choose files
+            <input type="file" hidden multiple accept="image/*" onchange="impPick(this)"></label>
+        </div>
+      </div>
+      <div id="imprev"></div>
+    </div>`;
+  armDrop();
+  paintImport();
+}
+
+/* A dropped *folder* arrives as directory entries, not files, so it has to be
+   walked. Without this the whole point — "drop the Upscayl output folder" —
+   silently drops nothing. */
+function armDrop(){
+  const zone = $('#impdrop'); if(!zone) return;
+  zone.ondragover = ev => { ev.preventDefault(); zone.classList.add('over'); };
+  zone.ondragleave = () => zone.classList.remove('over');
+  zone.ondrop = async ev => {
+    ev.preventDefault();
+    zone.classList.remove('over');
+    const items = [...(ev.dataTransfer.items || [])]
+      .map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+    const found = items.length ? await walkEntries(items) : [...ev.dataTransfer.files];
+    impAdd(found);
+  };
+}
+async function walkEntries(entries){
+  const out = [];
+  for(const e of entries){
+    if(e.isFile){
+      out.push(await new Promise(res => e.file(res, () => res(null))));
+    } else if(e.isDirectory){
+      const reader = e.createReader();
+      // readEntries hands back a page at a time, so it is called until it is empty
+      for(;;){
+        const page = await new Promise(res => reader.readEntries(res, () => res([])));
+        if(!page.length) break;
+        out.push(...await walkEntries(page));
+      }
+    }
+  }
+  return out.filter(Boolean);
+}
+function impPick(input){
+  impAdd([...input.files]);
+  input.value = '';        // so choosing the same folder again re-adds it
+}
+/* Take on files, keeping only what proxdex would accept as a card image and
+   saying how many were left behind — a folder has .DS_Store and a notes.txt in
+   it, and silently ignoring them looks like losing them. */
+function impAdd(files){
+  const ok = impMeta().suffixes;
+  const keep = files.filter(f => ok.some(s => f.name.toLowerCase().endsWith(s)));
+  IMP().ignored += files.length - keep.length;
+  const have = new Set(IMP().rows.map(r => r.name));
+  for(const file of keep){
+    if(have.has(file.name)) continue;      // the same name twice is the same file
+    IMP().rows.push({file, name:file.name, url:URL.createObjectURL(file),
+                     id:null, game:null, stage:null, face:null, result:null});
+  }
+  IMP().done = null;
+  planImport();
+}
+function impClear(){
+  for(const r of IMP().rows) URL.revokeObjectURL(r.url);
+  Object.assign(IMP(), {rows:[], plan:null, ignored:0, find:null, done:null, at:0});
+  renderImport();
+}
+function impDrop(i){
+  const [gone] = IMP().rows.splice(i, 1);
+  if(gone) URL.revokeObjectURL(gone.url);
+  if(IMP().find === i) IMP().find = null;
+  planImport();
+}
+
+/* Every edit re-asks the server what the run would do. Debounced, because it is
+   answered while you are still typing an id. */
+let _impTimer;
+function planImport(){
+  clearTimeout(_impTimer);
+  if(!IMP().rows.length){ IMP().plan = null; paintImport(); return; }
+  IMP().planning = true;
+  paintImport();
+  _impTimer = setTimeout(async () => {
+    try{
+      const r = await fetch('/api/import/plan', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({on_existing: IMP().on_existing, items: IMP().rows.map(row => {
+          const item = {name: row.name};
+          // only what the user decided travels: an absent key means "whatever
+          // the filename says", which is the CLI's no-flag case
+          if(row.id) item.id = row.id;
+          if(row.game) item.game = row.game;
+          if(row.stage) item.stage = row.stage;
+          if(row.face) item.face = row.face;
+          return item;
+        })}),
+      });
+      IMP().plan = r.ok ? await r.json() : null;
+      if(!r.ok) toast('The plan could not be worked out\n' + tail(await r.text()), 9000);
+    } catch(e){ IMP().plan = null; }
+    IMP().planning = false;
+    paintImport();
+  }, 200);
+}
+function impSet(i, key, value){
+  IMP().rows[i][key] = value || null;
+  planImport();
+}
+/* Accept the id the filename suggested. That is not cosmetic: a *guessed* id can
+   never create a card folder, and this is the confirmation that lets it —
+   exactly what typing `--id` on the CLI means. */
+function impConfirm(i){
+  const at = IMP().plan && IMP().plan.items[i];
+  if(at && at.id) impSet(i, 'id', at.id);
+}
+function impSetAll(key, value){
+  if(!value) return;
+  for(const r of IMP().rows) r[key] = value;
+  planImport();
+}
+function impOnExisting(value){ IMP().on_existing = value; planImport(); }
+
+function paintImport(){
+  const host = $('#imprev'); if(!host) return;
+  const rows = IMP().rows, plan = IMP().plan;
+  if(!rows.length){
+    host.innerHTML = IMP().ignored
+      ? `<p class="hint">${IMP().ignored} file(s) were not card images.</p>` : '';
+    return;
+  }
+  const at = plan ? plan.items : [];
+  const stages = state.meta.stages;
+  host.innerHTML = `
+    ${impBar()}
+    <div class="panel p-3 impwrap">
+      <table class="imptab">
+        <thead><tr>
+          <th></th><th>file</th><th>card</th><th>stage</th><th>side</th>
+          <th>becomes</th><th></th>
+        </tr></thead>
+        <tbody>${rows.map((r, i) => impRow(r, i, at[i], stages)).join('')}</tbody>
+      </table>
+    </div>
+    ${IMP().find === null ? '' : impFinder(IMP().find)}
+    ${impDone()}`;
+}
+
+function impBar(){
+  const plan = IMP().plan, rows = IMP().rows;
+  const busy = IMP().planning ? '<span class="chip">working…</span>' : '';
+  const counts = plan ? [
+    `<b class="mono">${plan.ready}</b> to file`,
+    plan.skipped ? `<span class="faint">${plan.skipped} kept</span>` : '',
+    plan.blocked ? `<span style="color:var(--hold)">${plan.blocked} ${
+      plan.blocked === 1 ? 'needs' : 'need'} a look</span>` : '',
+  ].filter(Boolean).join(' · ') : '';
+  const opts = impMeta().on_existing.map(o =>
+    `<option ${IMP().on_existing === o ? 'selected' : ''}>${esc(o)}</option>`).join('');
+  return `
+    <div class="panel p-3 mb-3">
+      <div class="d-flex align-items-center gap-3 flex-wrap">
+        <span class="mono" style="font-size:.8125rem">${rows.length} file${rows.length === 1 ? '' : 's'}</span>
+        <span class="hint mb-0">${counts}</span> ${busy}
+        <div class="ms-auto d-flex gap-2 align-items-center flex-wrap">
+          <label class="eyebrow mb-0" for="imp_exist">already there</label>
+          <select class="form-select form-select-sm" style="width:8.5rem" id="imp_exist"
+                  onchange="impOnExisting(this.value)">${opts}</select>
+          <button class="btn btn-sm btn-primary" onclick="runImport()"
+            ${plan && plan.ready && !IMP().running ? '' : 'disabled'}>
+            ${IMP().running ? `Importing ${IMP().at}/${plan ? plan.ready : 0}…`
+                            : `Import ${plan ? plan.ready : 0}`}</button>
+          <button class="btn btn-sm btn-ghost" onclick="impClear()">Clear</button>
+        </div>
+      </div>
+      <hr class="rule my-3">
+      <div class="d-flex gap-2 align-items-center flex-wrap">
+        <span class="eyebrow">set for every file</span>
+        <select class="form-select form-select-sm" style="width:9rem"
+                onchange="impSetAll('stage', this.value); this.value=''">
+          <option value="">stage…</option>
+          ${state.meta.stages.map(s => `<option>${esc(s)}</option>`).join('')}</select>
+        <select class="form-select form-select-sm" style="width:9rem"
+                onchange="impSetAll('game', this.value); this.value=''">
+          <option value="">game…</option>
+          ${state.meta.games.map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('')}</select>
+        <select class="form-select form-select-sm" style="width:7rem"
+                onchange="impSetAll('face', this.value ? +this.value : null); this.value=''">
+          <option value="">side…</option><option value="1">front</option><option value="2">back</option></select>
+        ${IMP().ignored ? `<span class="hint ms-auto mb-0">${IMP().ignored} non-image
+          file(s) were left alone.</span>` : ''}
+      </div>
+      ${plan && plan.discards ? `<p class="hint mb-0 mt-2" style="color:var(--hold)">
+        ⚠ ${plan.discards} later-stage image(s) go stale and are removed — they were
+        derived from what you are replacing.</p>` : ''}
+      ${plan && plan.creates.length ? `<p class="hint mb-0 mt-2">
+        + ${plan.creates.length} new card folder(s): <span class="mono">${
+        esc(plan.creates.join(' '))}</span> — looked up as they are filed.</p>` : ''}
+    </div>`;
+}
+
+function impRow(row, i, at, stages){
+  const d = at ? at.disposition : '';
+  const sent = row.result;
+  const verdict = sent
+    ? `<span class="disp ${sent.ok ? 'ok' : 'fail'}">${sent.ok ? 'filed' : 'failed'}</span>`
+    : `<span class="disp ${dispClass(d)}">${esc(d || '…')}</span>`;
+  const why = sent && !sent.ok ? tail(sent.log) : (at ? at.reason : '');
+  const known = at && at.card_name ? at.card_name : '';
+  return `
+    <tr class="${at && at.disposition === 'skip' ? 'gone' : ''}">
+      <td><img class="pv" alt="" src="${esc(row.url)}"></td>
+      <td><div class="fname">${esc(row.name)}</div></td>
+      <td>
+        <input class="form-control form-control-sm mono" style="width:8.5rem"
+               placeholder="${esc(at && at.id ? at.id : 'card id')}"
+               value="${esc(row.id || '')}" oninput="impSet(${i}, 'id', this.value.trim())">
+        <div class="why">${known ? esc(known)
+          : (at && at.guessed_id && at.id ? 'from the filename' : '')}</div>
+      </td>
+      <td><select class="form-select form-select-sm" style="width:7.5rem"
+                  onchange="impSet(${i}, 'stage', this.value)">
+        ${stages.map(s => `<option ${(row.stage || (at && at.stage)) === s ? 'selected' : ''}
+          >${esc(s)}</option>`).join('')}</select></td>
+      <td><select class="form-select form-select-sm" style="width:5.5rem"
+                  onchange="impSet(${i}, 'face', +this.value)">
+        ${[1, 2].map(f => `<option value="${f}" ${(row.face || (at && at.face) || 1) === f
+          ? 'selected' : ''}>${f === 1 ? 'front' : 'back'}</option>`).join('')}</select></td>
+      <td>${verdict}<div class="why">${esc(why || '')}</div>
+        ${at && at.discards.length ? `<div class="why" style="color:var(--hold)"
+          >↳ discards ${esc(at.discards.join(', '))}</div>` : ''}</td>
+      <td class="text-end text-nowrap">
+        ${at && at.disposition === 'missing'
+          ? `<button class="btn btn-sm btn-ghost mono" onclick="impConfirm(${i})"
+               title="Take the id from the filename and let the import look the card up"
+               >use ${esc(at.id)}</button>` : ''}
+        ${at && (at.disposition === 'unmatched' || at.disposition === 'missing')
+          ? `<button class="btn btn-sm btn-ghost" onclick="impFind(${i})">Find…</button>` : ''}
+        <button class="btn btn-sm btn-ghost" onclick="impDrop(${i})"
+                title="Leave this file out">×</button>
+      </td>
+    </tr>`;
+}
+
+/* Finding the card a file is of. It is the same `/api/search` the Search screen
+   uses; picking a hit writes its id into the row, which is what turns a guess
+   into a confirmed id the import may create a folder for. */
+function impFind(i){
+  IMP().find = i;
+  IMP().results = null;
+  // the query lives in state, not in the input: every repaint rebuilds the
+  // panel, and a value only the DOM knew would be wiped by the first one
+  IMP().q = impQuery(IMP().rows[i].name);
+  doImpSearch();
+  const q = $('#impq');
+  if(q) q.focus();
+}
+/* A filename, as a search: drop the extension, the stage words proxdex writes
+   and the punctuation a scanner leaves behind. */
+function impQuery(name){
+  return name.replace(/\.[a-z0-9]+$/i, '')
+    .replace(/\b(upscayl|realesrgan|original|bordered|upscaled|edited|\d+x|f2)\b/gi, ' ')
+    .replace(/[_\-.()\[\]0-9]+/g, ' ').trim();
+}
+function impFinder(i){
+  const row = IMP().rows[i];
+  const hits = IMP().results;
+  return `
+    <div class="panel p-3 mt-3">
+      <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+        <div class="eyebrow">Which card is <span class="mono">${esc(row.name)}</span>?</div>
+        <button class="btn btn-sm btn-ghost ms-auto" onclick="impFindClose()">Close</button>
+      </div>
+      <div class="d-flex gap-2 mb-3 flex-wrap">
+        <select class="form-select form-select-sm" style="width:10rem" id="impgame"
+                onchange="doImpSearch()">
+          ${state.meta.games.map(g => `<option value="${esc(g.id)}"
+            ${g.id === (row.game || state.meta.default_game) ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}
+        </select>
+        <input class="form-control form-control-sm" style="max-width:20rem" id="impq"
+               placeholder="Card name" value="${esc(IMP().q)}"
+               oninput="state.imp.q = this.value"
+               onkeydown="if(event.key==='Enter')doImpSearch()">
+        <button class="btn btn-sm btn-outline-secondary" onclick="doImpSearch()">Search</button>
+      </div>
+      ${hits === null ? '<p class="hint mb-0">Searching…</p>' : hits.length
+        ? `<div class="results">${hits.slice(0, 24).map(x => `
+            <button class="hit" style="border:0;background:none;padding:0;text-align:left"
+                    onclick="impChoose(${i}, '${esc(x.id)}', '${esc(x.game)}')">
+              <img loading="lazy" alt="${esc(x.name)}" src="${esc(x.image)}">
+              <div class="hitmeta"><b>${esc(x.name)}</b><br>${esc(x.set)} ·
+                <span class="mono">${esc(x.id)}</span>${x.have ? ' · in library' : ''}</div>
+            </button>`).join('')}</div>`
+        : '<p class="hint mb-0">No matches. Try fewer words, or the other game.</p>'}
+    </div>`;
+}
+function impFindClose(){ IMP().find = null; IMP().results = null; paintImport(); }
+/* Two searches can be in flight — the one the panel opened with, and the one you
+   typed over it — and the first is the slower query often enough to matter. Only
+   the newest may write the results, or an empty first answer lands on top of a
+   good second one and the panel says "no matches" about a card it found. */
+let _impSeq = 0;
+async function doImpSearch(){
+  const g = $('#impgame');
+  const row = IMP().rows[IMP().find];
+  const game = g ? g.value : (row ? row.game : '') || '';
+  const mine = ++_impSeq;
+  if(!IMP().q.trim()){ IMP().results = []; paintImport(); return; }
+  IMP().results = null;
+  paintImport();
+  let found;
+  try{
+    const r = await get('/api/search?' + new URLSearchParams({q:IMP().q.trim(), game}));
+    found = Array.isArray(r) ? r : [];
+  } catch(e){ found = []; }
+  if(mine !== _impSeq) return;      // a newer search has already answered
+  IMP().results = found;
+  paintImport();
+}
+function impChoose(i, id, game){
+  const row = IMP().rows[i];
+  row.id = id; row.game = game;
+  IMP().find = null; IMP().results = null;
+  planImport();
+}
+
+/* The import itself: one request per file, in order, so progress is real and a
+   failure belongs to a named file instead of the batch. */
+async function runImport(){
+  const plan = IMP().plan;
+  if(!plan || !plan.ready) return;
+  if(plan.discards && !await ask(
+      `${plan.discards} later-stage image(s) were derived from what you are replacing, ` +
+      `and will be removed. Import ${plan.ready} file(s)?`, 'Import')) return;
+  const queue = IMP().rows
+    .map((row, i) => ({row, at: plan.items[i]}))
+    .filter(x => x.at && x.at.writes);
+  IMP().running = true; IMP().at = 0; IMP().done = null;
+  for(const r of IMP().rows) r.result = null;
+  paintImport();
+  let filed = 0;
+  for(const {row, at} of queue){
+    const fd = new FormData();
+    fd.append('file', row.file);
+    fd.append('id', at.id);
+    fd.append('stage', at.stage);
+    fd.append('face', String(at.face));
+    fd.append('on_existing', IMP().on_existing);
+    if(at.game) fd.append('game', at.game);
+    try{
+      const r = await fetch('/api/import', {method:'POST', body:fd});
+      const j = await r.json();
+      row.result = {ok: j.ok !== false, log: j.log || ''};
+    } catch(e){ row.result = {ok:false, log:String(e)}; }
+    if(row.result.ok) filed++;
+    IMP().at++;
+    paintImport();
+  }
+  IMP().running = false;
+  IMP().done = {filed, failed: queue.length - filed,
+                cards: [...new Set(queue.map(q => q.at.id))]};
+  // the library changed under us: the contact sheet, the stage tallies and every
+  // card's rev all move, so this is a real reload rather than a repaint
+  await refresh(true);
+  planImport();
+  toast(`Imported ${filed} file(s)` + (IMP().done.failed ? `, ${IMP().done.failed} failed` : ''));
+}
+function impDone(){
+  const d = IMP().done;
+  if(!d) return '';
+  return `
+    <div class="panel p-3 mt-3">
+      <div class="eyebrow mb-2">Just imported</div>
+      <p class="hint mb-2"><b class="mono">${d.filed}</b> file(s) filed${
+        d.failed ? `, <span style="color:var(--bad)">${d.failed} failed</span>` : ''} —
+        ${d.cards.length} card(s) touched.</p>
+      <div class="d-flex gap-2 flex-wrap">${d.cards.map(id => `
+        <a class="btn btn-sm btn-ghost mono" href="/card/${encodeURIComponent(id)}"
+           onclick="return openCard('${esc(id)}', event)">${esc(id)}</a>`).join('')}</div>
+    </div>`;
 }
 
 /* ---------- settings -----------------------------------------------------
@@ -2820,6 +3310,7 @@ function renderSheet(){
             <input class="form-control form-control-sm" id="sb_notes" value="${esc(o.notes || '')}"
                    placeholder="Recorded in the manifest" oninput="sheetSet('notes', this.value)"></div>
         </div>
+        <div id="sb_written"></div>
         <div class="panel p-3" id="sb_plan"></div>
         <div class="panel p-3">
           <div class="eyebrow mb-2">Batches</div>
@@ -2829,6 +3320,7 @@ function renderSheet(){
     </div>`;
   loadBatches();
   paintSheetPicks();
+  paintWritten();
   planSheet();
 }
 
@@ -3057,9 +3549,39 @@ function goLink(ev, view, profile){
   navigate({view, id:null, step:null, profile: profile || null});
   return false;
 }
+/* `sheet --open` hands the finished PDF to a desktop app. The browser cannot do
+   that, and the server must not: it may be a different machine, and a popup
+   opened after an await is blocked anyway. So the equivalent is a link, put where
+   you were looking when you pressed Impose — one click, new tab, your own PDF
+   viewer. The CLI run is passed --no-open for the same reason (see api_sheet). */
 async function makeSheet(){
-  const ok = await act('/api/sheet', sheetPayload(), 'Sheet written');
-  if(ok) loadBatches();
+  const res = await act('/api/sheet', sheetPayload(), 'Sheet written');
+  if(!res) return;
+  state.sheet.written = res.batch || null;
+  paintWritten();
+  loadBatches();
+}
+function paintWritten(){
+  const host = $('#sb_written'), w = state.sheet.written;
+  if(!host) return;
+  if(!w){ host.innerHTML = ''; return; }
+  const href = f => `/api/pdf/${encodeURIComponent(w.dir)}/${encodeURIComponent(f)}`;
+  host.innerHTML = `
+    <div class="panel p-3">
+      <div class="eyebrow mb-2">Just imposed</div>
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <b>${esc(w.name)}</b>
+        <span class="mono faint" style="font-size:.6875rem">${esc(w.dir)}</span>
+        <a class="btn btn-sm btn-primary ms-auto" target="_blank" rel="noopener"
+           href="${href(w.pdf)}">Open ${esc(w.pdf)}</a>
+      </div>
+      ${w.pdfs.length > 1 ? `<p class="hint mb-0 mt-2">Also in this batch:
+        ${w.pdfs.filter(f => f !== w.pdf).map(f =>
+          `<a class="mono" target="_blank" rel="noopener" href="${href(f)}">${esc(f)}</a>`
+        ).join(' · ')}</p>` : ''}
+      <p class="hint mb-0 mt-2">Print with colour management off, then mark the
+        batch printed below.</p>
+    </div>`;
 }
 
 /* ---------- the print screen: profiles and calibration -------------------
@@ -3436,6 +3958,7 @@ const KEYS = [
   {keys:['?'],              where:'anywhere', what:'Show this sheet'},
   {keys:['G','then','L'],   where:'anywhere', what:'Go to the library'},
   {keys:['G','then','S'],   where:'anywhere', what:'Go to search'},
+  {keys:['G','then','I'],   where:'anywhere', what:'Go to import'},
   {keys:['G','then','H'],   where:'anywhere', what:'Go to the sheet builder'},
   {keys:['G','then','P'],   where:'anywhere', what:'Go to print profiles'},
   {keys:['G','then',','],   where:'anywhere', what:'Go to settings'},
@@ -3470,7 +3993,8 @@ document.addEventListener('keydown', e => {
   if(e.key === '?'){ e.preventDefault(); showKeys(); return; }
   if(e.key === 'g' || e.key === 'G'){ _goto = Date.now(); return; }
   if(Date.now() - _goto < 1200){
-    const dest = {l:'library', s:'search', h:'sheet', p:'print', ',':'settings'}[e.key.toLowerCase()];
+    const dest = {l:'library', s:'search', i:'import', h:'sheet', p:'print',
+                  ',':'settings'}[e.key.toLowerCase()];
     _goto = 0;
     if(dest){ e.preventDefault(); go(dest); return; }
   }

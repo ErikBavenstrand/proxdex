@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -35,6 +36,7 @@ from proxdex import (
     borders,
     frames,
     games,
+    imports,
     media,
     net,
     profiles,
@@ -206,7 +208,7 @@ fit = "cover"
 faces       = "fronts"     # fronts | backs | duplex
 duplex_flip = "long"       # long | short print-flip edge (mirrors the backs)
 back_image  = ""           # shared card back; or per-card <id>_back.png
-open        = false         # open the PDF after writing
+open        = false        # open the PDF after writing (CLI; --no-open overrides)
 
 # offsets (mm) — nudge the whole image; back offset aligns duplex front/back
 front_offset_x_mm = 0.0
@@ -341,6 +343,26 @@ def _api_note() -> None:
         err.print(
             f"[yellow]⚠[/] {host.message} [dim](retried; cached where possible)[/]"
         )
+
+
+def _open_locally(path: Path) -> None:
+    """Hand a written file to whatever this desktop opens it with.
+
+    Only the CLI does this, and only on the machine you typed the command on:
+    ``open`` is macOS', ``xdg-open`` is the freedesktop one, and Windows has
+    ``os.startfile``. It is best-effort — a headless box has none of them, and
+    failing to launch a viewer must never fail the command that produced the
+    file. The web UI has no equivalent *by design*: see the note in `sheet`.
+    """
+    with contextlib.suppress(OSError):
+        if sys.platform == "win32":
+            os.startfile(path)  # noqa: S606 - a file this command just wrote
+            return
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        if shutil.which(opener) is None:
+            err.print(f"[dim]no {opener} here — the file is at {path}[/]")
+            return
+        subprocess.run([opener, str(path)], check=False)
 
 
 def _cascade(card: Card, stage: Stage, face: int = FRONT) -> None:
@@ -617,7 +639,10 @@ def fetch(
 )
 @click.option("-f", "--fetch", "fetch_all", is_flag=True, help="Fetch every result.")
 @click.option(
-    "--open", "open_images", is_flag=True, help="Open result images in the browser."
+    "--open",
+    "open_images",
+    is_flag=True,
+    help="Open the first 12 result images in your browser.",
 )
 @click.option("--force", is_flag=True, help="Re-download even if the original exists.")
 @click.pass_context
@@ -758,6 +783,19 @@ def _parse_selection(
 )
 @_FACE
 @click.option("--move", is_flag=True, help="Move files instead of copying them.")
+@click.option(
+    "--on-existing",
+    "on_existing",
+    type=click.Choice([o.value for o in imports.OnExisting]),
+    default=imports.OnExisting.OVERWRITE.value,
+    help="When that stage image is already there: replace it, or keep it.",
+)
+@click.option(
+    "--dry-run",
+    "dry_run",
+    is_flag=True,
+    help="Report what each file would become and write nothing.",
+)
 @click.pass_context
 def import_(
     ctx: click.Context,
@@ -767,54 +805,164 @@ def import_(
     stage: str | None,
     face: int | None,
     move: bool,
+    on_existing: str,
+    dry_run: bool,
 ) -> None:
     """File loose images (e.g. an Upscayl output folder) into card stages.
 
-    With no [cyan]--id[/], the card id is read from each filename and the card
-    folder must already exist. With [cyan]--id[/] the metadata is looked up and
-    the folder created on the fly, so you can import an arbitrarily-named scan:
+    Where each file lands is read off its name — the card id it starts with, the
+    stage ([cyan]upscayl[/] in the name → upscaled, else original) and the side
+    (proxdex's own [cyan]_f2[/] suffix). [cyan]--id/--stage/--face[/] override
+    that for every file in the run.
+
+    With no [cyan]--id[/], the card folder must already exist: a guessed id is
+    not enough to invent one. With [cyan]--id[/] the metadata is looked up and
+    the folder created on the fly, so an arbitrarily-named scan files fine:
 
     [dim]  proxdex import my-scan.png --id ex6-105 --stage original[/]
+
+    [cyan]--dry-run[/] prints the plan — one row per file, with what it replaces
+    and what it invalidates — and writes nothing. It is the same plan the web
+    UI's import wizard shows, so the two cannot promise different outcomes.
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     want = games.parse(game)
-    forced_stage = STAGE_BY_LABEL[stage] if stage else None
+    existing = imports.OnExisting(on_existing)
     files: list[Path] = [
         Path(match)
         for pattern in paths
         # glob.glob handles user-supplied shell patterns (e.g. ~/dump/*.png)
         for match in glob.glob(str(Path(pattern).expanduser()))  # noqa: PTH207
     ]
-
-    def one(f: Path) -> None:
-        file_cid = cid or _card_id_from(f.stem)
-        if file_cid is None:
-            raise FileError(f"{f.name}: no card id in filename (pass --id)")
-        card = _ensure_card(lib, cfg, file_cid, want) if cid else lib.find(file_cid)
-        if card is None:
-            raise FileError(
-                f"{file_cid}: no card folder — pass --id to create it, or "
-                f"`proxdex fetch {file_cid}` first"
-            )
-        target = forced_stage or (
-            Stage.UPSCALED if "upscayl" in f.name.lower() else Stage.ORIGINAL
-        )
-        # one file is one side; without --face it replaces the front
-        side = _faces(card, face)[0] if face is not None else FRONT
-        dst = card.stage_path(target, side)
-        (shutil.move if move else shutil.copy2)(str(f), str(dst))
-        card.clear_skip(target, side)
-        _cascade(card, target, side)
-        console.print(
-            f"[green]✓[/] {f.name} → {dst.relative_to(lib.root)} "
-            f"[dim](stage {target.value} {target.label})[/]"
-        )
-
     if not files:
         raise click.UsageError("no files matched")
-    _each(files, one, "importing")
+    run = imports.plan(
+        lib,
+        [
+            imports.Item(
+                name=str(f),
+                id=cid,
+                game=want,
+                stage=STAGE_BY_LABEL[stage] if stage else None,
+                # --face is 1-based everywhere it is typed; faces are 0-based inside
+                face=face - 1 if face is not None else None,
+            )
+            for f in files
+        ],
+        on_existing=existing,
+    )
+    _import_plan(run, lib)
+    if dry_run:
+        console.print("[dim]dry run — nothing written.[/]")
+        return
+    if not run.ready:
+        raise click.UsageError("nothing to import — see the plan above")
+
+    def one(planned: imports.Assignment) -> None:
+        source = Path(planned.item.name)
+        assert planned.id is not None  # noqa: S101 (a writing plan always has one)
+        card = _ensure_card(lib, cfg, planned.id, want) if cid else lib.find(planned.id)
+        if card is None:  # the library changed under a plan made a moment ago
+            raise FileError(f"{planned.id}: no card folder any more")
+        # a card the plan created is only now known to have one side or two, so
+        # the side is checked here as well as in the plan
+        _faces(card, planned.face + 1)
+        dst = card.stage_path(planned.stage, planned.face)
+        (shutil.move if move else shutil.copy2)(str(source), str(dst))
+        _flatten_filed(dst)
+        card.clear_skip(planned.stage, planned.face)
+        _cascade(card, planned.stage, planned.face)
+        console.print(
+            f"[green]✓[/] {source.name} → {dst.relative_to(lib.root)} "
+            f"[dim](stage {planned.stage.value} {planned.stage.label})[/]"
+        )
+
+    failed = _each(list(run.ready), one, "importing")
+    console.print(
+        f"[dim]{len(run.ready) - failed} filed"
+        + (f", {failed} failed" if failed else "")
+        + (f", {len(run.skipped)} kept" if run.skipped else "")
+        + (f", {len(run.blocked)} not imported" if run.blocked else "")
+        + "[/]"
+    )
     _reindex(lib)
+
+
+def _flatten_filed(path: Path) -> None:
+    """Composite away any transparency in a file just written into a stage.
+
+    **No stage image in the library carries an alpha channel**, and that has to be
+    enforced everywhere one is written, not once at the front door. ``fetch``
+    flattens on download, but three other things file images: ``import`` copies
+    bytes, cardbleed passes alpha straight through, and **Upscayl emits RGBA** — so
+    a card's transparent die-cut corners survived all the way to the printed sheet,
+    where the corner pixels are whatever happened to be under the alpha. Measured
+    on a real library that is near-white on one card (212,225,229 against a
+    143,171,174 border) and near-black on an upscaled one (mean 51, min 0).
+
+    Cheap and non-destructive: a file with nothing to remove is not rewritten, so
+    an imported file's bytes stay verbatim in the ordinary case.
+    """
+    with Image.open(path) as im:
+        if not sources.transparent(im):
+            return
+        flat = sources.flatten(im)
+    flat.save(path)
+
+
+def _import_plan(run: imports.Run, lib: Library) -> None:
+    """Print an import plan: one row per file, and what the run costs.
+
+    The same `imports.Run` the UI's wizard renders — a preview that could differ
+    from the import is worse than no preview.
+    """
+    table = Table(box=None, pad_edge=False, header_style="dim")
+    table.add_column("#", style="dim", justify="right")
+    table.add_column("file")
+    table.add_column("card")
+    table.add_column("stage")
+    table.add_column("side", justify="right")
+    table.add_column("becomes", no_wrap=True)
+    table.add_column("")
+    for n, a in enumerate(run.items, 1):
+        tone = "green" if a.disposition.writes else "yellow"
+        if a.disposition is imports.Disposition.SKIP:
+            tone = "dim"
+        note = a.reason
+        if a.discards:
+            note += f" ↳ discards {', '.join(s.label for s in a.discards)}"
+        card = a.id or "—"
+        if a.guessed_id and a.id:
+            card += " ?"  # the id was read off the filename, not confirmed
+        table.add_row(
+            str(n),
+            a.name,
+            card,
+            a.stage.label,
+            str(a.face + 1),
+            f"[{tone}]{a.disposition.value}[/]",
+            f"[dim]{note.strip()}[/]",
+        )
+    console.print(table)
+    if any(a.guessed_id and a.id for a in run.items):
+        console.print("[dim]? = card id read off the filename, not given[/]")
+    counts = [f"{len(run.ready)} to file"]
+    if run.skipped:
+        counts.append(f"{len(run.skipped)} kept as-is")
+    if run.blocked:
+        counts.append(f"{len(run.blocked)} blocked")
+    console.print(f"[dim]{lib.root.name}: {', '.join(counts)}[/]")
+    if run.creates:
+        console.print(
+            f"[cyan]+[/] {len(run.creates)} new card folder(s) — "
+            f"{', '.join(run.creates)} [dim](looked up as they are filed)[/]"
+        )
+    if run.discards:
+        console.print(
+            f"[yellow]⚠[/] {run.discards} later-stage image(s) go stale and are "
+            "removed [dim](they were derived from what you are replacing)[/]"
+        )
 
 
 @cli.command()
@@ -1429,6 +1577,7 @@ def upscale(
             upscale_mod.run(
                 src, dst, cfg, model=use_model, scale=use_scale, double=use_double
             )
+            _flatten_filed(dst)
             card.clear_skip(Stage.UPSCALED, f)
             _cascade(card, Stage.UPSCALED, f)
             console.print(
@@ -1822,6 +1971,7 @@ def border(
                 console.print(f"[cyan]{name}[/]: {note}")
                 return
             bleed.grow(src, dst, cfg, **grow_mm)
+        _flatten_filed(dst)
         card.clear_skip(Stage.BORDERED, f)
         _cascade(card, Stage.BORDERED, f)
         console.print(f"[green]✓[/] {name}: {note} → {dst.relative_to(lib.root)}")
@@ -2185,7 +2335,12 @@ def _sheet_options(fn: F) -> F:
     is_flag=True,
     help="Report the page plan and write nothing.",
 )
-@click.option("--open", "open_pdf", is_flag=True, help="Open the PDF when done.")
+@click.option(
+    "--open/--no-open",
+    "open_pdf",
+    default=None,
+    help="Open the PDF when done (default: the library's sheet.open).",
+)
 @click.pass_context
 def sheet(
     ctx: click.Context,
@@ -2204,7 +2359,7 @@ def sheet(
     copies: int,
     notes: str,
     dry_run: bool,
-    open_pdf: bool,
+    open_pdf: bool | None,
 ) -> None:
     """Impose the trim masters into a print PDF and record the batch.
 
@@ -2368,10 +2523,13 @@ def sheet(
     console.print(
         f"[dim]print with colour management OFF, then `proxdex printed {slug}`[/]"
     )
-    if open_pdf or cfg.sheet_open:
-        import subprocess
-
-        subprocess.run(["open", str(pdf)], check=False)
+    # `--open/--no-open` overrides `[sheet] open` for this run, in both
+    # directions. It has to work downwards too: the web UI shells out to this
+    # very command, and a library configured to open its sheets would otherwise
+    # launch a PDF viewer on whatever machine is running the server — which is
+    # not necessarily, or even usually, the machine you are looking at.
+    if cfg.sheet_open if open_pdf is None else open_pdf:
+        _open_locally(pdf)
 
 
 @cli.command()
@@ -3227,16 +3385,6 @@ def cal_proof(ctx: click.Context, name: str | None, out: Path | None) -> None:
         f"[green]wrote[/] {dst} [dim]— round {last.n}, off by mean {e.mean:.1f} / "
         f"max {e.max:.1f} RGB[/]"
     )
-
-
-def _card_id_from(stem: str) -> str | None:
-    """The card id a filename starts with — ``ex3-90``, ``neo-136``, ``bw11-1a``.
-
-    MTG collector numbers can carry a letter suffix, so one is allowed; ids
-    with anything stranger in them need an explicit ``--id``.
-    """
-    m = re.match(r"[a-z]+\d*-\d+[a-z]?", stem, re.IGNORECASE)
-    return m.group(0) if m else None
 
 
 def _hoist_root(args: Sequence[str]) -> list[str]:

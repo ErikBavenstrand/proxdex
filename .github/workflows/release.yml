@@ -12,9 +12,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv run --group dev ruff check src
-      - run: uv run --group dev ruff format --check src
+      - run: uv run --group dev ruff check src tests
+      - run: uv run --group dev ruff format --check src tests
       - run: uv run --group dev pyright
+      - run: uv run --group dev pytest
       - name: The tag must match the version it claims to ship
         run: |
           tag="${GITHUB_REF_NAME#v}"

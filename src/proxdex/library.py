@@ -113,6 +113,33 @@ def face_suffix(face: int) -> str:
     return "" if face <= FRONT else f"_f{face + 1}"
 
 
+@dataclass(frozen=True, slots=True)
+class StageFile:
+    """What a stage filename says it is: card id, stage, face."""
+
+    id: str
+    stage: Stage
+    face: int
+
+
+def parse_stage_file(stem: str) -> StageFile | None:
+    """Read a stage filename back — the inverse of :meth:`Card.stage_path`.
+
+    ``None`` for anything that is not one of proxdex's own stage files, so an
+    arbitrary scan being imported is never mistaken for one. The stage number and
+    its label have to agree: ``ex3-90_3_upscaled`` is a stage file, and a
+    hand-renamed ``ex3-90_9_upscaled`` is not.
+    """
+    m = _STAGE_FILE.match(stem)
+    if m is None:
+        return None
+    stage = STAGE_BY_LABEL.get(m["label"])
+    if stage is None or stage.value != int(m["n"]):
+        return None
+    face = int(m["face"]) - 1 if m["face"] else FRONT
+    return StageFile(id=m["id"], stage=stage, face=face)
+
+
 def slugify(text: str) -> str:
     text = text.lower().replace("&", "and")
     return re.sub(r"[^a-z0-9]+", "-", text).strip("-")
@@ -221,9 +248,9 @@ class Card:
     def _faces_on_disk(self) -> int:
         highest = FRONT
         for path in self.dir.glob(f"{self.id}_*.png"):
-            m = _STAGE_FILE.match(path.stem)
-            if m is not None and m["face"]:
-                highest = max(highest, int(m["face"]) - 1)
+            found = parse_stage_file(path.stem)
+            if found is not None:
+                highest = max(highest, found.face)
         return highest + 1
 
     @property

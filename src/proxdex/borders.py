@@ -3,12 +3,19 @@ where a card's printed border actually ends.
 
 The border step needs one number per edge — how far in from the trim the printed
 frame runs — and asking a person to drag four marks onto every card is the slow
-part of the job. :func:`detect_inset` measures it: the frame is a ring of nearly
-one colour, so each edge is scanned inward until the picture stops looking like
-the ring. It reports the *per-edge support* alongside the numbers — how many of
-the scan lines agreed — because a card whose art runs to the frame has no clean
-border to find on that edge, and a silent guess there would be worse than no
-answer at all.
+part of the job. :func:`detect_inset` measures it by scanning inward until the
+picture stops looking like the border.
+
+What "looking like the border" means is decided **per scan line**, from the pixels
+that line holds just inside the cut edge. The ring as a whole is very often not
+one colour — a silver frame is a gradient, an ex-era frame is a sheen — and one
+colour read for the whole ring needs a tolerance wide enough to cover that
+variation, which is a tolerance wide enough to swallow the art too. Locally there
+is nothing to average away.
+
+It reports the *per-edge support* alongside the numbers — how many of the scan
+lines agreed — because a card whose art runs to the frame has no clean border to
+find on that edge, and a silent guess there would be worse than no answer at all.
 """
 
 from __future__ import annotations
@@ -52,10 +59,17 @@ def frame_color(arr: RGB) -> RGB:
 
 
 # --------------------------------------------------- inner border detection ---
-#: where to read the border colour from: a band this far in from the trim, past
-#: the rounded corners and any antialiased cut edge, still well outside the art
-_RING_FROM = 0.008
-_RING_TO = 0.022
+#: the outer skin of the image, ignored entirely: the cut edge, its antialiasing,
+#: and whatever a transparent die-cut corner was composited onto. The *scan* has
+#: to start here too, not at pixel 0 — reading the border colour past the skin
+#: while scanning from before it makes every card whose extreme edge differs from
+#: its border (a black MTG border under a lighter cut edge) read as "no border at
+#: all" on the first pixel.
+_SKIN = 0.008
+#: how deep the reference window runs, past the skin — the pixels taken to *be*
+#: the border on this lane. Small, because the thinnest border proxdex sees is
+#: about 2% of the card and the window has to fit inside it.
+_REF = 0.012
 #: how far inward to look for the end of the frame, as a fraction of the edge's
 #: own dimension. A real border is 3-4% of the card; 25% is generous and bounds
 #: the work.
@@ -66,11 +80,11 @@ _SCANS = 64
 _EDGE_MARGIN = 0.12
 #: neighbouring lines averaged into each scan line, to smooth out scan noise
 _BLOCK = 5
-#: a pixel counts as "not the border" once any channel is this far off the ring
-#: colour. Floors the adaptive threshold so a perfectly flat border still needs a
-#: real difference, not sensor noise, to end.
-_MIN_DELTA = 16.0
-_DELTA_SPREAD = 6.0
+#: how far outside the border's own observed range a pixel must fall to count as
+#: not being the border. The range does the adapting — this is only a floor, so
+#: that a dead-flat border still needs a real difference rather than sensor noise
+#: to end, and it is absolute because a printed edge is a step, not a percentage.
+_MIN_DELTA = 18.0
 #: consecutive off-colour pixels required, so one speck of dust is not an edge
 _RUN = 3
 #: two scan lines count as agreeing when they land this close, as a fraction of
@@ -112,8 +126,15 @@ class Detection:
 
     @property
     def frameless(self) -> bool:
-        """No measurable border on any edge — a borderless or full-art print."""
-        return max(self.inset) < _NO_FRAME
+        """No border worth measuring — a borderless or full-art print.
+
+        Not simply "the numbers came out small". Art that happens to change a
+        little way in from the trim yields four plausible-looking numbers that no
+        scan line agreed on, and cropping a card to its own art is the one outcome
+        worse than declining to measure. So the finding is that **not one edge**
+        found a border its own scan lines agreed about.
+        """
+        return max(self.inset) < _NO_FRAME or max(self.support) < _TRUST
 
     @property
     def weak(self) -> tuple[str, ...]:
@@ -128,20 +149,18 @@ class Detection:
 def detect_inset(path: Path) -> Detection:
     """Find the inner edge of the printed border on all four sides.
 
-    The frame is a ring of nearly one colour, so its colour is read from a band
-    just inside the trim and each edge is then scanned inward until the picture
-    stops matching it. Scanning many lines per edge and taking the median keeps
-    one piece of art that touches the frame from moving the answer, and the share
-    of lines that landed on that median becomes the edge's support — so a card
-    this does not work on says which edge to check instead of quietly returning a
-    plausible number.
+    Each edge is scanned along many lines, each judged against its *own* few
+    pixels just inside the cut edge, and the answer is the depth the most lines
+    agree on — which keeps one piece of art that touches the frame from moving it,
+    and makes the size of that agreement the edge's support. So a card this does
+    not work on says which edge to check instead of quietly returning a plausible
+    number.
 
     The result is a *pre-placement*, not a decision: proxdex never fits against a
     guess without saying so, and the align marks are still yours to nudge.
     """
     arr = load_rgb(path)
-    ring, delta = _ring(arr)
-    measured = tuple(_edge_depth(arr, ring, delta, edge) for edge in Detection.EDGES)
+    measured = tuple(_edge_depth(arr, edge) for edge in Detection.EDGES)
     inset = (
         round(measured[0][0], 5),
         round(measured[1][0], 5),
@@ -182,46 +201,38 @@ def _and(names: tuple[str, ...]) -> str:
     return ", ".join(names[:-1]) + " and " + names[-1]
 
 
-def _ring(arr: RGB) -> tuple[RGB, float]:
-    """The border's own colour, and how far off it a pixel must be to not be it.
+def _lanes(arr: RGB, edge: str) -> RGB:
+    """The image rotated so this edge's scan runs from index 0 inwards.
 
-    The threshold is adaptive: a flat black MTG border tolerates very little
-    variation, while a holo Pokémon border varies on its own, so the ring's
-    spread sets the bar and :data:`_MIN_DELTA` floors it.
-    """
-    h, w, _ = arr.shape
-    short = min(h, w)
-    lo, hi = max(1, round(short * _RING_FROM)), max(2, round(short * _RING_TO))
-    band = np.concatenate(
-        [
-            arr[lo:hi, :, :].reshape(-1, 3),
-            arr[-hi:-lo, :, :].reshape(-1, 3),
-            arr[:, lo:hi, :].reshape(-1, 3),
-            arr[:, -hi:-lo, :].reshape(-1, 3),
-        ]
-    )
-    ring = np.median(band, axis=0).astype(np.float32)
-    spread = float(np.median(np.abs(band - ring).max(axis=1)))
-    return ring, max(_MIN_DELTA, spread * _DELTA_SPREAD)
-
-
-def _edge_depth(arr: RGB, ring: RGB, delta: float, edge: str) -> tuple[float, float]:
-    """One edge's border depth as a fraction, plus how much the scans agreed.
-
-    Every edge is rotated so the scan always runs from index 0 inwards, which is
-    the only difference between the four of them.
+    Which is the only difference between the four edges — everything after this
+    is one piece of code.
     """
     if edge == "top":
-        lanes = arr
-    elif edge == "bottom":
-        lanes = arr[::-1]
-    elif edge == "left":
-        lanes = arr.transpose(1, 0, 2)
-    else:  # right
-        lanes = arr.transpose(1, 0, 2)[::-1]
+        return arr
+    if edge == "bottom":
+        return arr[::-1]
+    if edge == "left":
+        return arr.transpose(1, 0, 2)
+    return arr.transpose(1, 0, 2)[::-1]  # right
 
+
+def _edge_depth(arr: RGB, edge: str) -> tuple[float, float]:
+    """One edge's border depth as a fraction, plus how much the scans agreed.
+
+    Each scan line carries **its own** idea of what the border looks like: the
+    range of colours the lane holds in a window just past the outer skin. A
+    printed border is locally one colour, but the ring as a whole very often is
+    not — a holo silver frame is a gradient, an ex-era frame is a sheen — and one
+    colour read for the whole ring plus a tolerance wide enough to cover that
+    variation is a tolerance wide enough to swallow the art as well. Locally,
+    there is nothing to average away.
+    """
+    lanes = _lanes(arr, edge)
     span, across = lanes.shape[0], lanes.shape[1]
-    depth = max(_RUN + 1, round(span * _MAX_DEPTH))
+    short = min(arr.shape[0], arr.shape[1])
+    skin = max(1, round(short * _SKIN))
+    ref = max(2, round(short * _REF))
+    depth = max(skin + ref + _RUN + 1, round(span * _MAX_DEPTH))
     margin = round(across * _EDGE_MARGIN)
     starts = np.linspace(margin, across - margin - _BLOCK, _SCANS, dtype=int)
     # each scan line is the mean of a small block of neighbouring lines, which
@@ -231,7 +242,15 @@ def _edge_depth(arr: RGB, ring: RGB, delta: float, edge: str) -> tuple[float, fl
         [lanes[:depth, start : start + _BLOCK, :].mean(axis=1) for start in starts],
         axis=1,
     )
-    off = np.abs(profile - ring).max(axis=2) > delta
+    # what this lane's border *is*: the span of colours it holds just inside the
+    # cut edge, widened by the floor. A window rather than a single colour, so a
+    # border that ramps across the window is still described by it.
+    window = profile[skin : skin + ref]
+    low = window.min(axis=0) - _MIN_DELTA
+    high = window.max(axis=0) + _MIN_DELTA
+    off = ((profile < low) | (profile > high)).any(axis=2)
+    # the border cannot end inside the window it was measured from
+    off[: skin + ref] = False
     # the first run of _RUN consecutive off-colour pixels is where the frame ends
     runs = off[: depth - _RUN + 1]
     for k in range(1, _RUN):
@@ -242,6 +261,29 @@ def _edge_depth(arr: RGB, ring: RGB, delta: float, edge: str) -> tuple[float, fl
     if not hit.any():
         return 0.0, 0.0
     lane_depths = runs.argmax(axis=0)[hit].astype(np.float32)
-    middle = float(np.median(lane_depths))
-    agreed = int(np.count_nonzero(np.abs(lane_depths - middle) <= span * _TOLERANCE))
-    return middle / span, agreed / len(starts)
+    found, agreed = _consensus(lane_depths, span * _TOLERANCE)
+    return found / span, agreed / len(starts)
+
+
+def _consensus(depths: RGB, tol: float) -> tuple[float, int]:
+    """The depth the most scan lines agree on, and how many agreed.
+
+    The median is the wrong summary when the lanes are split between two edges,
+    and on a decorated frame they are: an ex-era border has a thin printed line
+    just inside the colour, so some lanes stop at the colour and some at the line
+    — and the median then lands in the *gap* between the two, a number not one
+    lane measured. The densest cluster is always a real edge, and how big it is
+    happens to be exactly the honest confidence in it. Ties go to the shallower
+    candidate, because the border is the outermost ring: anything deeper is the
+    frame's own decoration.
+    """
+    best, most = 0.0, -1
+    # the candidates are the measurements themselves, and `np.unique` sorts them,
+    # so a strict `>` leaves the shallowest of any equally-supported cluster
+    for candidate in np.unique(depths):
+        near = np.abs(depths - candidate) <= tol
+        count = int(np.count_nonzero(near))
+        if count > most:
+            best, most = float(candidate), count
+    members = depths[np.abs(depths - best) <= tol]
+    return float(np.median(members)), most

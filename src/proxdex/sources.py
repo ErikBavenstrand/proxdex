@@ -260,7 +260,7 @@ def download(meta: CardMeta, face: int = 0) -> Image.Image:
     resp = _get(url, accept="image/*", cache=False)
     if not resp.ok:
         raise FileError(f"{meta.id}: {resp.status} for {url}")
-    return _flatten(Image.open(io.BytesIO(resp.body)))
+    return flatten(Image.open(io.BytesIO(resp.body)))
 
 
 def _details(cid: str, cfg: Config, game: GameId) -> CardDetail:
@@ -925,7 +925,17 @@ def _get(
         raise FileError(str(exc)) from exc
 
 
-def _flatten(im: Image.Image) -> Image.Image:
+def transparent(im: Image.Image) -> bool:
+    """Whether this image carries transparency that has to be composited away.
+
+    Public because a card can enter the library two ways: ``fetch`` downloads it
+    and ``import`` copies a file in. Both have to end up with the same picture, so
+    both ask this the same question.
+    """
+    return im.mode in {"RGBA", "LA", "P"} or "transparency" in im.info
+
+
+def flatten(im: Image.Image) -> Image.Image:
     """RGB, compositing any transparency onto the card's own border colour.
 
     Both providers ship PNGs whose die-cut corners are transparent, and those
@@ -935,7 +945,7 @@ def _flatten(im: Image.Image) -> Image.Image:
     is read off the card itself: the median colour of its opaque outer ring. A
     future game, or a silver-bordered oddity, needs no configuration.
     """
-    if im.mode not in {"RGBA", "LA", "P"} and "transparency" not in im.info:
+    if not transparent(im):
         return im.convert("RGB")
     rgba = im.convert("RGBA")
     base = Image.new("RGB", rgba.size, _edge_color(rgba))

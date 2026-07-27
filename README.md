@@ -225,12 +225,21 @@ That's the loop: **search → prepare (per step) → sheet → printed.** Any of
 `border`, `upscale` and `grade` can be skipped instead of run — a card is ready
 to impose once `grade` is settled either way.
 
-`import` files loose images (Upscayl-GUI output, or `--id` an arbitrary scan):
+`import` files loose images (Upscayl-GUI output, or `--id` an arbitrary scan).
+Where each file lands is read off its name — the card id it starts with, the
+stage (`upscayl` → upscaled), the side (`_f2`) — and `--dry-run` shows the whole
+plan before a byte moves:
 
 ```bash
-proxdex import ~/upscaled/*.png         # ex*_upscayl_*.png → the upscaled stage
-proxdex import scan.png --id ex6-105    # arbitrary file → looks up + files it
+proxdex import ~/upscaled/*.png --dry-run   # what each file would become
+proxdex import ~/upscaled/*.png             # ex*_upscayl_*.png → the upscaled stage
+proxdex import scan.png --id ex6-105        # arbitrary file → looks up + files it
+proxdex import ~/dump/*.png --on-existing skip   # keep the stages already there
 ```
+
+The plan names what it replaces, what two files would collide over, and which
+later stages go stale — and it is the same plan the web UI's **import wizard**
+shows, so the preview and the import cannot disagree.
 
 Commands accept card ids to scope them (`proxdex upscale ex6-105`); with none,
 they act on the whole library. `proxdex` searches up from the current
@@ -302,7 +311,17 @@ machine (localhost only):
   so you can see the result before running it. The frame spec — and how much it
   is trusted — is a setting like any other.
 - **Search** — pick a game, query with filters, preview art, add selected, with
-  or without the cards they're printed alongside.
+  or without the cards they're printed alongside. Hover a hit for `full ↗` — the
+  provider's own scan at full size, for telling two prints apart.
+- **Import wizard** — drop a folder of scans or an Upscayl output and review it
+  one row per file before anything is sent: the card it goes to, the stage, the
+  side, and what it would do — a new stage, a replacement, a slot two files want,
+  a name with no id in it. The review is `import --dry-run` computed on the
+  server from the **filenames alone**, so a two-hundred-file folder previews
+  without uploading a byte; the thumbnails are the browser's own copies. A row
+  with no id gets a **Find…** search to name the card, `already there` chooses
+  replace-or-keep for the run, and the files then go one request at a time so a
+  failure belongs to one named file instead of the folder.
 - **Card data sheet** — every field the provider returns, its outbound links, and
   what the card is **printed alongside** — a meld partner, the melded card, the
   tokens it makes — each addable in one click.
@@ -313,7 +332,9 @@ machine (localhost only):
   estimate) and the calibration loop live here too.
 - **Make sheet** — the whole library or just what you selected, with a per-card
   side choice for two-sided cards, made where the consequence is. If the batch
-  mixes card sizes it says so up front, with how many of each fit a page.
+  mixes card sizes it says so up front, with how many of each fit a page. The
+  PDF it writes is linked the moment it exists — the browser's version of
+  `sheet --open`, which opens the file on whatever machine you *typed* it on.
   **Mark printed** and **rebuild index** from the toolbar.
 
 `?` shows every keyboard shortcut; `G` then `L`/`S`/`,` jumps between screens.
@@ -410,7 +431,9 @@ Fetch which? [numbers/ranges/ids · 'all' · blank to cancel]: 1
 
 Type `1`, `1,3`, `1-3`, an id, or `all`. Narrow with `--set base1`,
 `--rarity holo`, `--year 2004`; skip the prompt with `--select 1,3` or
-`--fetch`; add `--open` to preview result images in your browser.
+`--fetch`; add `--open` to preview the first 12 result images in your browser.
+(The web UI's equivalent is a `full ↗` link on each hit — a browser cannot ask
+the machine running the server to open anything, and should not.)
 
 ### Upscaling
 
@@ -453,16 +476,20 @@ You say where the border currently sits with
 does this by dragging), and the card's **frame spec** supplies the target
 widths. Add `--stretch` to un-distort the art so the borders land exactly.
 
-`--auto` measures those four numbers off the image instead. The frame is a ring
-of nearly one colour, so each edge is scanned inward until the picture stops
-matching it, over 64 scan lines per edge. It is a *pre-placement*, not a
-decision: every edge reports the share of its lines that agreed, and an edge they
-disagreed about is named rather than passed off as measured.
+`--auto` measures those four numbers off the image instead. Each edge is scanned
+inward over 64 lines until the picture stops looking like the border — and every
+line decides that from its *own* pixels just inside the cut edge, because a card's
+frame is often not one colour at all: a silver full-art border is a gradient, an
+ex-era border is a sheen, and a single colour read for the whole ring needs a
+tolerance wide enough to swallow the art along with the variation. The answer is
+the depth the most lines agree on. It is a *pre-placement*, not a decision: every
+edge reports the share of its lines that agreed, and an edge they disagreed about
+is named rather than passed off as measured.
 
 ```
 $ proxdex border --auto base1-4
-  ⌖ base1-4: border ends at T2.18 R2.67 B2.06 L3.17% — every edge measured cleanly.
-✓ base1-4: fit → 621×867px  T4.44 R4.48 B4.44 L4.48%  (Pokémon · WOTC vintage)
+  ⌖ base1-4: border ends at T2.06 R2.67 B2.06 L3.17% — every edge measured cleanly.
+✓ base1-4: fit → 628×877px  T3.92 R5.00 B3.92 L5.00%  (Pokémon · WOTC vintage, stretch)
 
 $ proxdex border --auto --dry-run inr-14
   ⌖ inr-14: border ends at about T3.51 R4.03 B3.56 L3.90%. The top scan lines

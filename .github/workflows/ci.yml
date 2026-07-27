@@ -11,8 +11,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv run --group dev ruff check src
-      - run: uv run --group dev ruff format --check src
+      - run: uv run --group dev ruff check src tests
+      - run: uv run --group dev ruff format --check src tests
       - run: uv run --group dev pyright
 
   smoke:
@@ -28,3 +28,6 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: uv run proxdex --version
       - run: uv run proxdex --help
+      # the suite includes the UI/cardbleed fit parity check, which needs node —
+      # every runner image ships one, and the test skips loudly if it doesn't
+      - run: uv run --group dev pytest

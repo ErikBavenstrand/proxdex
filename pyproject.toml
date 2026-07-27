@@ -56,11 +56,19 @@ dev = [
     "uvicorn>=0.29",
     "python-multipart>=0.0.9",
     "tomlkit>=0.12",
+    # the test suite (small and deliberate — see CLAUDE.md), pinned for the same
+    # reason the linters are: CI resolves fresh, so an unpinned tool can turn a
+    # release red on its own account.
+    "pytest==8.4.2",
 ]
 
 [tool.ruff]
 line-length = 88
-src = ["src"]
+src = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
 
 [tool.ruff.lint]
 # × / · / → are used deliberately in size displays and progress output
@@ -96,9 +104,13 @@ ban-relative-imports = "all"
 
 [tool.ruff.lint.per-file-ignores]
 "src/proxdex/cli.py" = ["PLC0206"]  # dict iteration in the settings-panel loop
+# a test asserts, imports its own fixtures module, and is not a package
+"tests/**" = ["S101", "INP001", "PLR6301", "SLF001"]
 
 [tool.pyright]
-include = ["src"]
+include = ["src", "tests"]
+# pytest's decorators are untyped; a fixture is not a typing question
+reportUntypedFunctionDecorator = false
 typeCheckingMode = "strict"
 pythonVersion = "3.11"
 # numpy/pillow/img2pdf expressions surface as Unknown; keep strict elsewhere

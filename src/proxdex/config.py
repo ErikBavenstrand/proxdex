@@ -310,7 +310,9 @@ class Config:
     sheet_open: bool = setting(
         default=False,
         label="Open the PDF",
-        help="Open each sheet as soon as it's written.",
+        help="Open each sheet as soon as it's written. Applies to the CLI, on "
+        "the machine you type it on; a sheet imposed from this UI is linked "
+        "instead, since the server may not be the machine you are looking at.",
     )
     # --- border: how the reshape hits the frame spec -------------------------
     border_stretch: bool = setting(

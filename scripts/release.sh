@@ -34,9 +34,12 @@ git rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "$tag already exist
 git ls-remote --exit-code --tags origin "$tag" >/dev/null 2>&1 && die "$tag already exists on origin"
 
 step "linting, formatting and typechecking"
-uv run --group dev ruff check src
-uv run --group dev ruff format --check src
+uv run --group dev ruff check src tests
+uv run --group dev ruff format --check src tests
 uv run --group dev pyright
+
+step "running the tests"
+uv run --group dev pytest
 
 step "parsing the web UI's script (it is not linted anywhere else)"
 tmp=$(mktemp -d)

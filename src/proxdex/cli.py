@@ -446,7 +446,7 @@ def init(ctx: click.Context, path: Path | None) -> None:
     if marker.exists():
         console.print(f"[yellow]already a library:[/] {root}")
         return
-    marker.write_text(DEFAULT_TOML)
+    marker.write_text(DEFAULT_TOML, encoding="utf-8", newline="\n")
     console.print(f"[green]initialized[/] proxdex library at [bold]{root}[/]")
 
 
@@ -1478,7 +1478,7 @@ def config_set(ctx: click.Context, assignments: tuple[str, ...]) -> None:
 
     lib = _lib(ctx)
     path = lib.root / MARKER
-    doc = tomlkit.parse(path.read_text() if path.exists() else "")
+    doc = tomlkit.parse(path.read_text(encoding="utf-8") if path.exists() else "")
     for raw in assignments:
         path_part, sep, value = raw.partition("=")
         if not sep:
@@ -1499,7 +1499,7 @@ def config_set(ctx: click.Context, assignments: tuple[str, ...]) -> None:
             doc[section] = tomlkit.table()
         doc[section][key] = clean.value if isinstance(clean, Enum) else clean
         console.print(f"[green]✓[/] \\[{section}] {key} = {_toml_text(clean)}")
-    path.write_text(tomlkit.dumps(doc))
+    path.write_text(tomlkit.dumps(doc), encoding="utf-8", newline="\n")
     console.print(f"[dim]wrote {path}[/]")
 
 
@@ -1508,11 +1508,11 @@ def _write_setting(lib: Library, section: str, key: str, value: Any) -> None:
     import tomlkit
 
     path = lib.root / MARKER
-    doc = tomlkit.parse(path.read_text() if path.exists() else "")
+    doc = tomlkit.parse(path.read_text(encoding="utf-8") if path.exists() else "")
     if section not in doc:
         doc[section] = tomlkit.table()
     doc[section][key] = value.value if isinstance(value, Enum) else value
-    path.write_text(tomlkit.dumps(doc))
+    path.write_text(tomlkit.dumps(doc), encoding="utf-8", newline="\n")
 
 
 def _unknown_note(field_name: str | None) -> str:
@@ -1524,7 +1524,7 @@ def _config_rows(lib: Library) -> list[tuple[str, str, Any]]:
     path = lib.root / MARKER
     if not path.exists():
         return []
-    doc = tomllib.loads(path.read_text())
+    doc = tomllib.loads(path.read_text(encoding="utf-8"))
     return [
         (section, key, value)
         for section, table in doc.items()
@@ -2057,7 +2057,7 @@ def _write_batch(path: Path, data: dict[str, object]) -> None:
     doc["bleed_mm"] = _as_float(data.get("bleed_mm"))
     doc["cards"] = _as_strings(data.get("cards"))
     doc["copies"] = _as_ints(data.get("copies"))
-    path.write_text(tomlkit.dumps(doc))
+    path.write_text(tomlkit.dumps(doc), encoding="utf-8", newline="\n")
 
 
 def _as_int(value: object) -> int:
@@ -2577,7 +2577,7 @@ def printed(ctx: click.Context, name: str) -> None:
     lib = _lib(ctx)
     slug = slugify(name)
     for tf in lib.batches_dir.glob("*/batch.toml"):
-        data = tomllib.loads(tf.read_text())
+        data = tomllib.loads(tf.read_text(encoding="utf-8"))
         if data.get("name") == slug or tf.parent.name.endswith(f"_{slug}"):
             data["printed"] = True
             data["printed_date"] = date.today().isoformat()

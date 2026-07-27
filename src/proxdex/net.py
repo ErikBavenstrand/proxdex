@@ -299,5 +299,5 @@ def _write(path: Path, payload: dict[str, Any]) -> None:
     with contextlib.suppress(OSError):
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
         tmp.replace(path)

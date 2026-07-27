@@ -450,7 +450,9 @@ def exists(root: Path, name: str) -> bool:
 def save(root: Path, profile: Profile) -> Path:
     dst = path_for(root, profile.name)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(json.dumps(profile.json(), indent=2) + "\n")
+    dst.write_text(
+        json.dumps(profile.json(), indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
     profile.stored = True
     return dst
 
@@ -480,7 +482,7 @@ def read(root: Path, name: str) -> Profile | None:
     if not path.exists():
         return None
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ProxdexError(f"{path.name} is not readable: {exc}") from exc
     if not isinstance(data, dict):

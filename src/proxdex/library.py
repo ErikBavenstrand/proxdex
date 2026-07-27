@@ -151,7 +151,7 @@ def read_game(folder: Path, default: GameId = games.DEFAULT) -> GameId:
     for candidate in (folder, folder.parent):
         marker = candidate / GAME_MARKER
         if marker.is_file():
-            found = games.parse(marker.read_text())
+            found = games.parse(marker.read_text(encoding="utf-8"))
             if found is not None:
                 return found
     return default
@@ -167,7 +167,9 @@ class Card:
     game: GameId = games.DEFAULT
 
     def write_game(self, game: GameId) -> None:
-        (self.dir / GAME_MARKER).write_text(game.value + "\n")
+        (self.dir / GAME_MARKER).write_text(
+            game.value + "\n", encoding="utf-8", newline="\n"
+        )
         self.game = game
 
     @property
@@ -182,7 +184,9 @@ class Card:
         self, layout: Layout, *, oversized: bool = False, frame: GuideId | None = None
     ) -> None:
         """Record the print kind, as the provider stated it at fetch time."""
-        (self.dir / LAYOUT_MARKER).write_text(layout.value + "\n")
+        (self.dir / LAYOUT_MARKER).write_text(
+            layout.value + "\n", encoding="utf-8", newline="\n"
+        )
         flag = self.dir / OVERSIZED_MARKER
         if oversized:
             flag.touch()
@@ -190,7 +194,7 @@ class Card:
             flag.unlink(missing_ok=True)
         marker = self.dir / FRAME_MARKER
         if frame is not None:
-            marker.write_text(frame.value + "\n")
+            marker.write_text(frame.value + "\n", encoding="utf-8", newline="\n")
         else:
             marker.unlink(missing_ok=True)
 
@@ -200,7 +204,7 @@ class Card:
         disk, so a library filed before layouts were recorded still reads right."""
         marker = self.dir / LAYOUT_MARKER
         if marker.is_file():
-            found = games.parse_layout(marker.read_text())
+            found = games.parse_layout(marker.read_text(encoding="utf-8"))
             if found is not None:
                 return found
         return Layout.DOUBLE if len(self.faces) > 1 else Layout.SINGLE
@@ -216,7 +220,7 @@ class Card:
         if not marker.is_file():
             return None
         try:
-            return GuideId(marker.read_text().strip().lower())
+            return GuideId(marker.read_text(encoding="utf-8").strip().lower())
         except ValueError:
             return None
 
@@ -228,13 +232,19 @@ class Card:
         image has been downloaded; a single-faced card writes nothing.
         """
         if len(names) > 1:
-            (self.dir / FACES_MARKER).write_text("\n".join(names) + "\n")
+            (self.dir / FACES_MARKER).write_text(
+                "\n".join(names) + "\n", encoding="utf-8", newline="\n"
+            )
 
     def face_names(self) -> tuple[str, ...]:
         """One name per face, front first. Always at least one entry."""
         marker = self.dir / FACES_MARKER
         if marker.is_file():
-            names = [ln.strip() for ln in marker.read_text().splitlines() if ln.strip()]
+            names = [
+                ln.strip()
+                for ln in marker.read_text(encoding="utf-8").splitlines()
+                if ln.strip()
+            ]
             if names:
                 return tuple(names)
         # no marker: fall back to whatever face files are actually on disk, so a
@@ -259,7 +269,7 @@ class Card:
         you can print the reverse of a transform card instead of its front."""
         marker = self.dir / FRONT_MARKER
         if marker.is_file():
-            text = marker.read_text().strip()
+            text = marker.read_text(encoding="utf-8").strip()
             if text.isdigit() and int(text) in self.faces:
                 return int(text)
         return FRONT
@@ -269,7 +279,7 @@ class Card:
         if face == FRONT:
             marker.unlink(missing_ok=True)
         else:
-            marker.write_text(f"{face}\n")
+            marker.write_text(f"{face}\n", encoding="utf-8", newline="\n")
 
     @property
     def back_face(self) -> int | None:
@@ -416,7 +426,7 @@ class Library:
         if d.exists() and read_game(d, self.default_game) is not game:
             d = self.cards_dir / f"{set_id}-{slugify(set_name)}-{game.value}"
         d.mkdir(parents=True, exist_ok=True)
-        (d / GAME_MARKER).write_text(game.value + "\n")
+        (d / GAME_MARKER).write_text(game.value + "\n", encoding="utf-8", newline="\n")
         return d
 
     def select(self, ids: tuple[str, ...]) -> list[Card]:

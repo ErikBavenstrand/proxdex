@@ -449,7 +449,7 @@ class Config:
             return cfg
         known = {fld.name for fld in fields(cls)}
         try:
-            raw = tomllib.loads(f.read_text())
+            raw = tomllib.loads(f.read_text(encoding="utf-8"))
         except tomllib.TOMLDecodeError as exc:
             raise ConfigError(f"{f} is not valid TOML: {exc}") from exc
         for key, value in raw.items():

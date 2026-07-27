@@ -401,7 +401,7 @@ def create_app(lib: Library) -> FastAPI:
     # ---- config ------------------------------------------------------------
     @app.get("/api/config")
     def api_config() -> dict[str, Any]:
-        text = cfg_path.read_text() if cfg_path.exists() else ""
+        text = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else ""
         doc = tomlkit.parse(text)
         allowed = _field_options()
         docs = Config.describe()
@@ -429,7 +429,7 @@ def create_app(lib: Library) -> FastAPI:
 
     @app.put("/api/config")
     def api_config_put(body: ConfigBody) -> Any:
-        text = cfg_path.read_text() if cfg_path.exists() else ""
+        text = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else ""
         doc = tomlkit.parse(text)
         # Coerce every value through Config's own annotations *before* writing:
         # the file then always holds the declared type (an enum's own value, not
@@ -456,7 +456,7 @@ def create_app(lib: Library) -> FastAPI:
             if section not in doc:
                 doc[section] = tomlkit.table()
             doc[section][key] = value
-        cfg_path.write_text(tomlkit.dumps(doc))
+        cfg_path.write_text(tomlkit.dumps(doc), encoding="utf-8", newline="\n")
         return {"ok": True}
 
     @app.get("/api/meta")

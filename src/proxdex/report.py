@@ -31,7 +31,7 @@ class Batch:
 def batches(lib: Library) -> list[Batch]:
     out: list[Batch] = []
     for tf in sorted(lib.batches_dir.glob("*/batch.toml")):
-        data = tomllib.loads(tf.read_text())
+        data = tomllib.loads(tf.read_text(encoding="utf-8"))
         out.append(
             Batch(
                 name=str(data.get("name", tf.parent.name)),
@@ -95,5 +95,5 @@ def write_index(lib: Library) -> Path:
         note = f" — {batch.notes}" if batch.notes else ""
         lines.append(f"- **{batch.name}** ({state}) · {len(batch.cards)} cards{note}")
     dst = lib.root / "INDEX.md"
-    dst.write_text("\n".join(lines) + "\n")
+    dst.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     return dst

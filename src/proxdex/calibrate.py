@@ -52,21 +52,14 @@ _LABEL_Y = 0.115
 
 @dataclass(frozen=True, slots=True)
 class Chart:
-    """One version of the patch target: what it prints, and how it is laid out.
+    """The patch target: what it prints, and how it is laid out."""
 
-    Versioned, because a round is only comparable to the chart it was measured
-    against. Old rounds keep their own version and stay usable — a (scanned, sent)
-    pair is a pair whatever target produced it — so improving the chart never
-    silently throws away somebody's calibration.
-    """
-
-    version: int
     cols: int
     rows: int
     patches: tuple[tuple[int, int, int], ...]
     #: white gutter around each patch, as a share of its cell. Enough that wet ink
     #: from a neighbour cannot reach the sampled centre.
-    pad: float = 0.12
+    pad: float
 
     def __len__(self) -> int:
         return len(self.patches)
@@ -89,51 +82,19 @@ class Chart:
         return out
 
 
-def _v1_patches() -> tuple[tuple[int, int, int], ...]:
-    """The chart proxdex shipped through 0.5.0: a grey ramp, primaries, card tones.
-
-    Kept so rounds measured on it can still be read. Two thirds of it sits outside
-    any real print gamut — pure primaries, 0 and 255 — which is why v2 replaced it.
-    """
-    grays = [(v, v, v) for v in (0, 36, 73, 109, 146, 182, 219, 255)]
-    prim: list[tuple[int, int, int]] = []
-    for lvl in (255, 170, 85):
-        prim += [
-            (lvl, 0, 0),
-            (0, lvl, 0),
-            (0, 0, lvl),
-            (0, lvl, lvl),
-            (lvl, 0, lvl),
-            (lvl, lvl, 0),
-        ]
-    misc = [
-        (250, 214, 46),
-        (230, 150, 40),
-        (200, 40, 40),
-        (40, 80, 200),
-        (30, 150, 90),
-        (240, 200, 170),
-        (120, 70, 40),
-        (20, 20, 20),
-        (200, 200, 255),
-        (255, 240, 200),
-    ]
-    return tuple(grays + prim + misc)
-
-
 #: the neutral ramp spans the full range: the grey axis is where tone response
 #: bends hardest and where the eye is least forgiving, and it is the one line
 #: through the cube every printer can follow to both ends
-_V2_GREYS = 16
+_GREYS = 16
 #: the colour lattice is pulled *inside* the printable box on purpose. Corner
 #: colours (pure red, 255 white) are unreachable on paper, so a patch spent there
 #: is a patch that measures nothing; this range measured best on a narrow-gamut
 #: matte, a wide-gamut glossy and a flat plain-paper press alike.
-_V2_LO, _V2_HI = 50, 200
-_V2_STEPS = 4
+_LATTICE_LO, _LATTICE_HI = 50, 200
+_LATTICE_STEPS = 4
 
 
-def _v2_patches() -> tuple[tuple[int, int, int], ...]:
+def _patches() -> tuple[tuple[int, int, int], ...]:
     """80 patches: a 16-step neutral ramp, then a 4×4×4 lattice of the interior.
 
     A lattice rather than a hand-picked set because the correction has to be true
@@ -145,44 +106,35 @@ def _v2_patches() -> tuple[tuple[int, int, int], ...]:
     600dpi scan, against a sampling window of ~70px — and going denser loses more
     to read noise and neighbour bleed than the extra coverage buys back. Measured
     against three simulated presses, a 228-patch chart was *worse* than this one
-    and a 512-patch near-continuous one was worse than the 36-patch chart it
-    replaced. A continuous gradient is worse still: there is no flat area to
+    and a 512-patch near-continuous one was worse than a 36-patch chart of
+    primaries. A continuous gradient is worse still: there is no flat area to
     average, and 1% of geometric error becomes a correlated 2.3 levels of error in
-    the value you attribute to every reading.
+    the value you attribute to every reading. Nor does the density justify a 3-D
+    LUT — one lost to this polynomial at every density tried.
     """
     greys = [
         (round(v), round(v), round(v))
-        for v in np.linspace(4, 252, _V2_GREYS, dtype=np.float64)
+        for v in np.linspace(4, 252, _GREYS, dtype=np.float64)
     ]
-    steps = [round(v) for v in np.linspace(_V2_LO, _V2_HI, _V2_STEPS)]
+    steps = [round(v) for v in np.linspace(_LATTICE_LO, _LATTICE_HI, _LATTICE_STEPS)]
     lattice = [(r, g, b) for r in steps for g in steps for b in steps]
     return tuple(greys + lattice)
 
 
-CHARTS: dict[int, Chart] = {
-    1: Chart(version=1, cols=6, rows=6, patches=_v1_patches(), pad=0.12),
-    2: Chart(version=2, cols=8, rows=10, patches=_v2_patches(), pad=0.09),
-}
-#: what a new round is measured against
-CHART_VERSION = 2
+CHART = Chart(cols=8, rows=10, patches=_patches(), pad=0.09)
 
 
-def chart(version: int = CHART_VERSION) -> Chart:
-    """One chart version, or the current one. Unknown versions raise."""
-    spec = CHARTS.get(version)
-    if spec is None:
-        known = ", ".join(str(v) for v in sorted(CHARTS))
-        raise ProxdexError(f"unknown chart version {version} (known: {known})")
-    return spec
+def chart() -> Chart:
+    return CHART
 
 
-def chart_patches(version: int = CHART_VERSION) -> tuple[tuple[int, int, int], ...]:
-    return chart(version).patches
+def chart_patches() -> tuple[tuple[int, int, int], ...]:
+    return CHART.patches
 
 
-def target(version: int = CHART_VERSION) -> Patches:
+def target() -> Patches:
     """The chart's patches as a float array — what a true print would scan as."""
-    return chart(version).target
+    return CHART.target
 
 
 # ------------------------------------------------------------------- slots ----
@@ -436,11 +388,9 @@ def _float(value: object) -> float:
 
 
 # ------------------------------------------------------------ chart render ----
-def sent_patches(
-    correction: Correction | None, version: int = CHART_VERSION
-) -> Patches:
+def sent_patches(correction: Correction | None) -> Patches:
     """What this round actually puts on paper: the target, through what we know."""
-    goal = target(version)
+    goal = target()
     return goal if correction is None else correction.apply(goal)
 
 
@@ -448,7 +398,6 @@ def render_chart(
     correction: Correction | None = None,
     label: str = "",
     size: tuple[int, int] = (CANVAS_W, CANVAS_H),
-    version: int = CHART_VERSION,
 ) -> Image.Image:
     """The chart itself. ``label`` is printed above the patches.
 
@@ -456,7 +405,7 @@ def render_chart(
     at, never drawn small and scaled up, so every patch stays exactly the colour
     it is meant to be and no resampler invents one in between.
     """
-    spec = chart(version)
+    spec = CHART
     width, height = size
     im = Image.new("RGB", (width, height), (255, 255, 255))
     draw = ImageDraw.Draw(im)
@@ -478,7 +427,7 @@ def render_chart(
     cw = (x1 - x0) / spec.cols * width
     ch = (y1 - y0) / spec.rows * height
     pad = min(cw, ch) * spec.pad
-    for i, color in enumerate(sent_patches(correction, version).round().astype(int)):
+    for i, color in enumerate(sent_patches(correction).round().astype(int)):
         col, row = i % spec.cols, i // spec.cols
         px = (x0 + col / spec.cols * (x1 - x0)) * width
         py = (y0 + row / spec.rows * (y1 - y0)) * height
@@ -513,7 +462,6 @@ def chart_page(
     slot: Slot | None = None,
     grid: tuple[int, int] = GRID,
     label: str = "",
-    version: int = CHART_VERSION,
 ) -> Image.Image:
     """A full print page with the chart in ``slot`` and every other slot blank.
 
@@ -529,7 +477,7 @@ def chart_page(
     inset_y = (y1 - y0) * _CELL_INSET * ph
     box_w = round((x1 - x0) * pw - 2 * inset_x)
     box_h = round((y1 - y0) * ph - 2 * inset_y)
-    art = render_chart(correction, label, fit_size((box_w, box_h)), version)
+    art = render_chart(correction, label, fit_size((box_w, box_h)))
     page.paste(
         art,
         (
@@ -571,10 +519,8 @@ def _affine(dst: list[tuple[float, float]]) -> NDArray[np.float32]:
     return params.astype(np.float32)
 
 
-def sample_patches(
-    arr: RGB, params: NDArray[np.float32], version: int = CHART_VERSION
-) -> Patches:
-    spec = chart(version)
+def sample_patches(arr: RGB, params: NDArray[np.float32]) -> Patches:
+    spec = CHART
     h, w, _ = arr.shape
     measured = np.zeros((len(spec), 3), np.float32)
     # the sampled window scales with the patch, so a denser chart reads its own
@@ -616,7 +562,7 @@ _PROOF_W, _PROOF_H = 120, 27
 _PROOF_GAP = 8
 
 
-def proof_sheet(scanned: Patches, version: int = CHART_VERSION) -> Image.Image:
+def proof_sheet(scanned: Patches) -> Image.Image:
     """Target above, scanned below, patch by patch.
 
     A mean error says a print is off; this says *how* — whether the paper is
@@ -624,7 +570,7 @@ def proof_sheet(scanned: Patches, version: int = CHART_VERSION) -> Image.Image:
     whether another round is worth the paper. The two halves of a pair touch, so
     any difference between them shows as a visible seam.
     """
-    spec = chart(version)
+    spec = CHART
     goal = spec.target
     pair_h = _PROOF_H * 2 + _PROOF_GAP
     im = Image.new(
@@ -651,7 +597,6 @@ def read_scan(
     *,
     slot: Slot | None = None,
     grid: tuple[int, int] = GRID,
-    version: int = CHART_VERSION,
 ) -> Patches:
     """Read every patch of one chart out of a scan.
 
@@ -662,4 +607,4 @@ def read_scan(
     arr = np.asarray(Image.open(path).convert("RGB"), np.float32)
     if slot is not None and cfg is not None:
         arr = crop_slot(arr, cfg, slot, grid)
-    return sample_patches(arr, _affine(detect_fiducials(arr)), version)
+    return sample_patches(arr, _affine(detect_fiducials(arr)))

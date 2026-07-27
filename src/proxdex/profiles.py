@@ -15,16 +15,18 @@ Why a file per profile rather than settings in ``proxdex.toml``:
 * two media coexist — you print the same deck on paper and on foil — so one
   active set of numbers was always the wrong shape.
 
-The correction is refitted from **all** rounds every time one is added or dropped,
-so nothing is stored that cannot be rederived from the measurements; a profile
-file is a record of what happened, not a cache.
+Rounds are never deleted, only switched off, and the correction is refitted from
+the live ones on every read — so nothing is stored that cannot be rederived from
+the measurements, and turning a round back on restores exactly what it was doing.
+A profile file is a record of what happened, not a cache.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -41,8 +43,6 @@ from proxdex.media import Preset, Recipe, preset
 DIR = "profiles"
 #: a grid is exactly (cols, rows)
 _PAIR = 2
-#: the pre-0.5 single-shot calibrations, read once so nobody loses a measurement
-LEGACY_DIR = "calibration"
 _NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,47}$")
 
 
@@ -73,15 +73,17 @@ class Round:
     date: str = ""
     scan: str = ""
     note: str = ""
-    #: which chart version this round was printed from. A round is only comparable
-    #: to its own target, but its (scanned, sent) pairs stay valid for the fit
-    #: whatever chart produced them — so an old round is never wasted.
-    chart: int = 1
+    #: whether this round feeds the fit. A round is never deleted — a bad one is
+    #: switched off, so you can see what it was doing and put it back.
+    enabled: bool = True
 
     @property
     def error(self) -> Error:
         """How far this print landed from the target — the convergence measure."""
-        return calibrate.error(self.scanned, calibrate.target(self.chart))
+        return calibrate.error(self.scanned)
+
+    def switched(self, *, on: bool) -> Round:
+        return replace(self, enabled=on)
 
     def json(self) -> dict[str, Any]:
         return {
@@ -90,7 +92,7 @@ class Round:
             "date": self.date,
             "scan": self.scan,
             "note": self.note,
-            "chart": self.chart,
+            "enabled": self.enabled,
             "sent": _rows(self.sent),
             "scanned": _rows(self.scanned),
             "error": self.error.json(),
@@ -98,21 +100,12 @@ class Round:
 
     @classmethod
     def read(cls, data: object, n: int) -> Round | None:
-        """One stored round, or None if it cannot be trusted.
-
-        A file written before charts were versioned has no ``chart`` key and was
-        measured on version 1, which is why that is the default rather than the
-        current version.
-        """
+        """One stored round, or None if its measurements cannot be trusted."""
         if not isinstance(data, dict):
             return None
         raw: dict[str, Any] = data
-        version = raw.get("chart")
-        version = version if isinstance(version, int) else 1
-        if version not in calibrate.CHARTS:
-            return None
-        sent = _patches(raw.get("sent"), version)
-        scanned = _patches(raw.get("scanned"), version)
+        sent = _read_patches(raw.get("sent"))
+        scanned = _read_patches(raw.get("scanned"))
         if sent is None or scanned is None:
             return None
         return cls(
@@ -123,7 +116,7 @@ class Round:
             date=_text(raw.get("date")),
             scan=_text(raw.get("scan")),
             note=_text(raw.get("note")),
-            chart=version,
+            enabled=raw.get("enabled") is not False,
         )
 
 
@@ -140,9 +133,6 @@ class Profile:
     #: the slot the last emitted chart was rendered into, so reading its scan
     #: back needs no arguments
     pending: Slot | None = None
-    #: a correction inherited from a pre-0.5 calibration, with no rounds behind
-    #: it. Used until the first real round replaces it.
-    inherited: Correction | None = None
     #: False for a built-in preset that has never been saved
     stored: bool = False
     #: rounds in the file that could not be read back — a damaged entry, or one
@@ -154,27 +144,58 @@ class Profile:
     # ---------------------------------------------------------------- state --
     @property
     def calibrated(self) -> bool:
-        return bool(self.rounds) or self.inherited is not None
+        return bool(self.live)
+
+    @property
+    def live(self) -> list[Round]:
+        """The rounds that feed the fit. A switched-off round stays in the file."""
+        return [r for r in self.rounds if r.enabled]
 
     @property
     def correction(self) -> Correction | None:
-        """The measured correction, fitted over every round at once.
+        """The measured correction, fitted over every live round at once.
 
-        None means nothing has been measured, and the recipe is all there is.
+        None means nothing usable has been measured, and the recipe is all there is.
         """
-        if not self.rounds:
-            return self.inherited
-        scanned = np.concatenate([r.scanned for r in self.rounds])
-        sent = np.concatenate([r.sent for r in self.rounds])
+        return self._fit(self.live)
+
+    def _fit(self, rounds: Sequence[Round]) -> Correction | None:
+        if not rounds:
+            return None
+        scanned = np.concatenate([r.scanned for r in rounds])
+        sent = np.concatenate([r.sent for r in rounds])
         return calibrate.fit(scanned, sent)
+
+    def influence(self, n: int) -> float | None:
+        """How much round ``n`` moves the correction — its weight in the answer.
+
+        Refit without it and measure how differently the result maps the target,
+        in mean RGB. That is the "with and without" a switch is for: a round
+        pulling far harder than its neighbours is either the most informative
+        measurement you have or an outlier, and either way you want to know.
+        """
+        rnd = self.round(n)
+        if rnd is None or not rnd.enabled:
+            return None
+        with_it = self.correction
+        without = self._fit([r for r in self.live if r.n != n])
+        if with_it is None:
+            return None
+        goal = calibrate.target()
+        base = with_it.apply(goal)
+        other = goal if without is None else without.apply(goal)
+        return float(np.sqrt(((base - other) ** 2).sum(axis=1)).mean())
 
     @property
     def residual(self) -> Error | None:
-        """How true the most recent round printed — the number to watch fall."""
-        return self.rounds[-1].error if self.rounds else None
+        """How true the most recent live round printed — the number to watch fall."""
+        live = self.live
+        return live[-1].error if live else None
 
     @property
     def used_slots(self) -> tuple[Slot, ...]:
+        """Every slot with ink on it — including a round that is switched off,
+        because the paper does not care whether the fit uses it."""
         return tuple(r.slot for r in self.rounds)
 
     @property
@@ -196,16 +217,6 @@ class Profile:
     @property
     def sheet_full(self) -> bool:
         return not self.free_slots
-
-    @property
-    def charts(self) -> tuple[int, ...]:
-        """Which chart versions this profile's rounds were measured on.
-
-        More than one is fine for the *fit* — the pairs are all real measurements
-        — but the per-round errors then come from different patch sets, so the
-        trend is not strictly like-for-like and says so.
-        """
-        return tuple(sorted({r.chart for r in self.rounds}))
 
     def round(self, n: int) -> Round | None:
         return next((r for r in self.rounds if r.n == n), None)
@@ -233,35 +244,25 @@ class Profile:
             date=date.today().isoformat(),
             scan=scan,
             note=note,
-            chart=calibrate.CHART_VERSION,
         )
         self.rounds.append(rnd)
         self.pending = None
-        # a real measurement supersedes an inherited correction, which had no
-        # samples anyone can see
-        self.inherited = None
         return rnd
 
-    def drop_round(self, n: int) -> Round:
-        """Remove one round and renumber the rest, so the history stays 1..N."""
+    def switch_round(self, n: int, *, on: bool) -> Round:
+        """Include or exclude one round, keeping it and its number in the file.
+
+        Nothing is ever deleted: a round you switch off can be switched back on,
+        and its numbering never shifts under the round you were talking about.
+        """
         rnd = self.round(n)
         if rnd is None:
             raise ProxdexError(f"{self.name}: no round {n}")
-        self.rounds = [
-            Round(
-                n=i + 1,
-                slot=r.slot,
-                sent=r.sent,
-                scanned=r.scanned,
-                date=r.date,
-                scan=r.scan,
-                note=r.note,
-                chart=r.chart,
-            )
-            for i, r in enumerate(self.rounds)
-            if r.n != n
-        ]
-        return rnd
+        if rnd.enabled == on:
+            state = "already in the fit" if on else "already switched off"
+            raise ProxdexError(f"{self.name}: round {n} is {state}")
+        self.rounds = [r.switched(on=on) if r.n == n else r for r in self.rounds]
+        return self.rounds[[r.n for r in self.rounds].index(n)]
 
     # ------------------------------------------------------------ transform --
     def coef(self) -> Coef | None:
@@ -276,9 +277,6 @@ class Profile:
             "recipe": self.recipe.json(),
             "grid": list(self.grid),
             "pending": None if self.pending is None else self.pending.json(),
-            # a correction with no rounds behind it still has to survive a save,
-            # or adopting a pre-0.5 calibration would quietly discard it
-            "inherited": None if self.inherited is None else self.inherited.json(),
             "rounds": [r.json() for r in self.rounds],
         }
 
@@ -292,8 +290,8 @@ class Profile:
             "notes": self.notes,
             "recipe": self.recipe.json(),
             "rounds": len(self.rounds),
+            "live": len(self.live),
             "calibrated": self.calibrated,
-            "inherited": self.inherited is not None,
             "residual": None if residual is None else residual.json(),
             "next_slot": self.next_slot.json(),
             "grid": list(self.grid),
@@ -301,8 +299,6 @@ class Profile:
             "preset": preset(self.name) is not None,
             "unreadable": self.unreadable,
             "patches": len(calibrate.chart()),
-            "chart": calibrate.CHART_VERSION,
-            "charts": list(self.charts),
         }
 
     def detail(self) -> dict[str, Any]:
@@ -317,8 +313,9 @@ class Profile:
                 "scan": r.scan,
                 "note": r.note,
                 "error": r.error.json(),
-                "chart": r.chart,
-                "target": _rows(calibrate.target(r.chart)),
+                "enabled": r.enabled,
+                "influence": self.influence(r.n),
+                "target": _rows(calibrate.target()),
                 "sent": _rows(r.sent),
                 "scanned": _rows(r.scanned),
             }
@@ -399,7 +396,6 @@ def read(root: Path, name: str) -> Profile | None:
         grid=_grid(raw.get("grid")),
         rounds=rounds,
         pending=None if pending is None else Slot.read(pending),
-        inherited=Correction.read(raw.get("inherited")),
         stored=True,
         unreadable=unreadable,
     )
@@ -430,11 +426,6 @@ def resolve(root: Path, name: str) -> Profile:
     if stored is not None:
         return stored
     kind = preset(name)
-    legacy = _legacy(root, name)
-    if legacy is not None:
-        # somebody printed and scanned for this; adopt it as a real profile rather
-        # than leave it half-alive in a directory nothing reads any more
-        return _adopt(root, name, kind, legacy)
     if kind is not None:
         return Profile(name=kind.value, medium=kind, notes="", recipe=kind.recipe)
     raise ProxdexError(
@@ -443,35 +434,28 @@ def resolve(root: Path, name: str) -> Profile:
     )
 
 
-def _adopt(
-    root: Path, name: str, kind: Preset | None, correction: Correction
-) -> Profile:
-    """Turn a pre-0.5 ``calibration/<name>.json`` into a real profile, once.
-
-    Its patch measurements were never stored, so it cannot join the round history
-    — but a calibration somebody printed and scanned for is not something to throw
-    away. It is carried as an *inherited* correction, used until the first real
-    round replaces it, and the provenance goes in the notes where the user will
-    read it.
-    """
-    profile = Profile(
-        name=slug(name),
-        medium=kind or Preset.NONE,
-        notes=(
-            f"Adopted from {LEGACY_DIR}/{name}.json (calibrated before 0.5).\n"
-            "Its patch measurements were not kept, so it cannot be refined — "
-            "`proxdex calibrate chart` starts a fresh loop, which supersedes it."
-        ),
-        recipe=(kind or Preset.NONE).recipe,
-        inherited=correction,
-    )
-    save(root, profile)
-    return profile
-
-
 def active(root: Path, cfg: Config, override: str | None = None) -> Profile:
-    """The profile this run prints through: the flag, else ``[print] profile``."""
+    """The profile card *fronts* print through: the flag, else ``[print] profile``."""
     return resolve(root, override or cfg.print_profile or Preset.NONE.value)
+
+
+def active_back(
+    root: Path,
+    cfg: Config,
+    override: str | None = None,
+    front: Profile | None = None,
+) -> Profile:
+    """The profile card *backs* print through.
+
+    Unset means "the same medium as the fronts", which is the ordinary case — a
+    duplex sheet is one piece of paper. It is worth a setting because it is not
+    *always* one medium: the reverse of a one-sided glossy stock is a different
+    surface, and a backs-only run often goes on different paper entirely.
+    """
+    name = override or cfg.print_back_profile
+    if not name:
+        return front if front is not None else active(root, cfg)
+    return resolve(root, name)
 
 
 def create(
@@ -488,33 +472,15 @@ def create(
     return profile
 
 
-def _legacy(root: Path, name: str) -> Correction | None:
-    """A pre-0.5 ``calibration/<name>.json`` correction, if one is lying around.
-
-    Its patch measurements were never stored, so it cannot join the round history
-    — but throwing away a calibration somebody printed and scanned for would be
-    rude, so it is carried as an inherited correction until a real round replaces
-    it.
-    """
-    path = root / LEGACY_DIR / f"{name}.json"
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-    return Correction.read(data.get("coef")) if isinstance(data, dict) else None
-
-
 def _rows(arr: Patches) -> list[list[float]]:
     return [[round(float(v), 3) for v in row] for row in arr]
 
 
-def _patches(data: object, version: int) -> Patches | None:
+def _read_patches(data: object) -> Patches | None:
     if not isinstance(data, list) or not data:
         return None
     arr = np.asarray(data, dtype=np.float32)
-    want = (len(calibrate.chart(version)), 3)
+    want = (len(calibrate.chart()), 3)
     if arr.shape != want or not np.isfinite(arr).all():
         return None
     return arr

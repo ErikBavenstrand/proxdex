@@ -180,6 +180,9 @@ class SheetBody(Body):
     bleed: Annotated[float, Field(ge=0, le=20)] | None = None
     guides: bool | None = None
     profile: str | None = Field(default=None, max_length=64)
+    #: card backs, when they land on a different medium than the fronts. Empty or
+    #: absent means "the same profile", which is the ordinary case.
+    back_profile: str | None = Field(default=None, max_length=64)
     notes: str = Field(default="", max_length=2000)
 
     def argv(self) -> list[str]:
@@ -188,6 +191,8 @@ class SheetBody(Body):
         args += ["--faces", (self.faces or Faces.FRONTS).value]
         if self.profile:
             args += ["--profile", self.profile]
+        if self.back_profile:
+            args += ["--back-profile", self.back_profile]
         if self.page is not None:
             args += ["--page", self.page.value]
         if self.orientation is not None:
@@ -237,6 +242,12 @@ class ProfileBody(Body):
 
 class RenameBody(Body):
     name: str = Field(min_length=1, max_length=48)
+
+
+class RoundBody(Body):
+    """Whether a calibration round feeds the fit."""
+
+    enabled: bool
 
 
 class BackBody(Body):
@@ -416,6 +427,7 @@ def create_app(lib: Library) -> FastAPI:
             "pipeline": steps.json_pipeline(cfg),
             "profiles": profiles.names(lib.root),
             "active_profile": cfg.print_profile,
+            "active_back_profile": cfg.print_back_profile,
             "faces": [f.value for f in Faces],
             "pages": [p.value for p in PageSize],
             "orientations": [o.value for o in Orientation],
@@ -845,10 +857,18 @@ def create_app(lib: Library) -> FastAPI:
             chosen = [(card, 1) for card in lib.cards()]
         try:
             prof = profiles.active(lib.root, cfg, body.profile)
+            back = profiles.active_back(lib.root, cfg, body.back_profile, prof)
         except ProxdexError as exc:
             return _bad(str(exc))
         out = sheet_mod.plan(chosen, cfg).json(cfg)
         out["profile"] = prof.summary()
+        # Only when backs are actually printed AND on a different medium. Naming a
+        # second profile on a fronts-only run would describe a correction that
+        # never happens.
+        prints_backs = cfg.sheet_faces is not Faces.FRONTS
+        out["back_profile"] = (
+            back.summary() if prints_backs and back.name != prof.name else None
+        )
         return out
 
     @app.post("/api/printed/{name}")
@@ -915,6 +935,7 @@ def create_app(lib: Library) -> FastAPI:
         cfg = Config.load(lib.root)
         return {
             "active": cfg.print_profile,
+            "active_back": cfg.print_back_profile,
             "media": [
                 {"id": p.value, "label": p.label, "recipe": p.recipe.json()}
                 for p in media.Preset
@@ -988,7 +1009,7 @@ def create_app(lib: Library) -> FastAPI:
         if rnd is None:
             return Response(status_code=404)
         buf = io.BytesIO()
-        calibrate.proof_sheet(rnd.scanned, rnd.chart).save(buf, "PNG")
+        calibrate.proof_sheet(rnd.scanned).save(buf, "PNG")
         return Response(
             buf.getvalue(),
             media_type="image/png",
@@ -1016,9 +1037,13 @@ def create_app(lib: Library) -> FastAPI:
         finally:
             tmp.unlink(missing_ok=True)
 
-    @app.post("/api/calibrate/drop/{name}/{round_n}")
-    def api_cal_drop(name: ProfileName, round_n: int) -> dict[str, Any]:
-        return run_cli(["calibrate", "drop", name, "--round", str(round_n)])
+    @app.post("/api/calibrate/round/{name}/{round_n}")
+    def api_cal_switch(
+        name: ProfileName, round_n: int, body: RoundBody
+    ) -> dict[str, Any]:
+        """Include or exclude one round. Nothing is deleted — that is the point."""
+        verb = "enable" if body.enabled else "disable"
+        return run_cli(["calibrate", verb, name, "--round", str(round_n)])
 
     # ---- SPA fallback (registered last, so it shadows nothing) --------------
     @app.get("/{route}", response_class=HTMLResponse)

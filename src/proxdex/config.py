@@ -356,6 +356,15 @@ class Config:
         "paper, foil) is a starting point; a profile you calibrated carries a "
         "measured correction and your own notes.",
     )
+    #: card backs can be a different medium — the reverse of a one-sided glossy
+    #: stock is a different surface, and backs-only runs are often on other paper
+    print_back_profile: str = setting(
+        "",
+        label="Print profile for backs",
+        help="Correct card backs for a different medium than the fronts. Leave "
+        "empty and they use the same profile — which is right when both sides land "
+        "on the same paper.",
+    )
     # --- external tools ------------------------------------------------------
     #: upscayl-bin path; "" = auto-detect (bundled macOS app, then PATH)
     upscayl_bin: str = setting(

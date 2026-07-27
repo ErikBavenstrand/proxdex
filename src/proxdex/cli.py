@@ -236,6 +236,9 @@ reg_inset_mm = 10.0
 # Everything about a medium — its notes, its recipe, its calibration — lives in
 # <root>/profiles/<name>.json, not here.
 profile = "none"
+# Card backs, when they are not the same medium as the fronts — the reverse of a
+# one-sided glossy stock, or a backs-only run on other paper. Empty = same as above.
+back_profile = ""
 
 [tools]
 # Upscayl (the upscale stage). On macOS the bundled binary and models are
@@ -1859,6 +1862,7 @@ def _write_batch(path: Path, data: dict[str, object]) -> None:
     doc["pdf"] = str(data.get("pdf", "fronts.pdf"))
     # how it was printed, so a reprint is reproducible rather than remembered
     doc["profile"] = str(data.get("profile", ""))
+    doc["back_profile"] = str(data.get("back_profile", ""))
     for key in ("page", "orientation"):
         doc[key] = str(data.get(key, ""))
     doc["dpi"] = _as_int(data.get("dpi"))
@@ -1936,18 +1940,24 @@ class _Repro:
 
     cfg: Config
     profile: profiles.Profile
+    #: what corrects a card *back*. The same profile unless the backs land on a
+    #: different medium, which is a thing that happens.
+    back_profile: profiles.Profile
     tmpdir: Path
 
-    def cell(self, master: Image.Image, trim: tuple[float, float]) -> Image.Image:
+    def cell(
+        self, master: Image.Image, trim: tuple[float, float], *, back: bool = False
+    ) -> Image.Image:
         cfg = self.cfg
         ppm = cfg.sheet_dpi / 25.4
         trim_w, trim_h = round(trim[0] * ppm), round(trim[1] * ppm)
         im = sheet_mod.fit(master, trim_w, trim_h, cfg.sheet_fit)
-        correction = self.profile.correction
+        profile = self.back_profile if back else self.profile
+        correction = profile.correction
         if correction is not None:
             im = correction.apply_to_image(im)
-        elif not self.profile.recipe.neutral:
-            im = media.compensate(im, self.profile.recipe)
+        elif not profile.recipe.neutral:
+            im = media.compensate(im, profile.recipe)
         if cfg.bleed_mm <= 0:
             return im
         bp = round(cfg.bleed_mm * ppm)
@@ -2141,7 +2151,15 @@ _SHEET_OPTIONS = (
     click.option(
         "--profile",
         default=None,
-        help="Print profile for the medium (default from [cyan]\\[print][/]).",
+        help="Print profile for the card fronts (default from "
+        "[cyan]\\[print] profile[/]).",
+    ),
+    click.option(
+        "--back-profile",
+        "back_profile",
+        default=None,
+        help="Print profile for the card backs, when they land on a different "
+        "medium (default from [cyan]\\[print] back_profile[/], else the fronts').",
     ),
     click.option(
         "--copies",
@@ -2186,6 +2204,7 @@ def sheet(
     bleed: float | None,
     guides: bool | None,
     profile: str | None,
+    back_profile: str | None,
     copies: int,
     notes: str,
     dry_run: bool,
@@ -2200,6 +2219,10 @@ def sheet(
 
     Copies: [cyan]ID:4[/] prints a playset of that card, [cyan]--copies N[/]
     applies to every card in the run.
+
+    Fronts and backs can be corrected for different media —
+    [cyan]--profile[/] and [cyan]--back-profile[/] — for the runs where the two
+    sides do not land on the same paper.
 
     Every page setting can be overridden for this run only —
     [cyan]--page/--orientation/--cols/--rows/--bleed/--dpi/--guides[/] — because
@@ -2260,7 +2283,11 @@ def sheet(
         )
 
     prof = profiles.active(lib.root, cfg, profile)
+    back_prof = profiles.active_back(lib.root, cfg, back_profile, prof)
     _profile_note(prof)
+    if back_prof.name != prof.name:
+        console.print(f"[cyan]◐[/] card backs print through [bold]{back_prof.name}[/]")
+        _profile_note(back_prof)
     if dry_run:
         console.print(
             f"[dim]dry run — {run.cards} card(s) ({cfg.sheet_faces}) would make "
@@ -2271,7 +2298,7 @@ def sheet(
 
     tmpdir = Path(tempfile.mkdtemp(prefix="proxdex-sheet-"))
     try:
-        repro = _Repro(cfg, prof, tmpdir)
+        repro = _Repro(cfg, prof, back_prof, tmpdir)
         trims = [_trim_mm(c, cfg) for c in ready]
         # the back of a card is reproduced at that card's own size, so the cache is
         # keyed by both — one shared back image serves two trims in a mixed batch
@@ -2292,7 +2319,9 @@ def sheet(
                     continue
                 key = (path, trim)
                 if key not in cache:
-                    cache[key] = repro.cell(Image.open(path).convert("RGB"), trim)
+                    cache[key] = repro.cell(
+                        Image.open(path).convert("RGB"), trim, back=True
+                    )
                 backs[i] = cache[key]
         # one cell per copy: a playset is the same reproduction four times, and
         # reproducing it once is both faster and bit-identical on paper
@@ -2325,6 +2354,7 @@ def sheet(
             # counts, the medium, and the page settings this run used
             "copies": counts,
             "profile": prof.name,
+            "back_profile": back_prof.name,
             "page": cfg.sheet_page,
             "orientation": cfg.sheet_orientation,
             "dpi": cfg.sheet_dpi,
@@ -2377,6 +2407,14 @@ _MEDIUM = click.option(
 )
 
 
+def _round_count(prof: profiles.Profile) -> str:
+    """``4`` — or ``4 (+1 off)`` when a round is being held out of the fit."""
+    if not prof.rounds:
+        return "[dim]—[/]"
+    off = len(prof.rounds) - len(prof.live)
+    return f"{len(prof.live)}" + (f" [dim](+{off} off)[/]" if off else "")
+
+
 def _profile(lib: Library, name: str | None) -> profiles.Profile:
     """The named profile, or the active one from [cyan]\\[print] profile[/]."""
     return profiles.active(lib.root, Config.load(lib.root), name)
@@ -2418,16 +2456,12 @@ def _profile_note(prof: profiles.Profile) -> None:
     _unreadable_note(prof)
     residual = prof.residual
     if residual is not None:
+        off = len(prof.rounds) - len(prof.live)
+        muted = f", {off} switched off" if off else ""
         console.print(
             f"[cyan]◐[/] profile [bold]{prof.name}[/] — measured over "
-            f"{len(prof.rounds)} round(s), last print off by mean "
+            f"{len(prof.live)} round(s){muted}, last print off by mean "
             f"{residual.mean:.1f} RGB over {residual.measured} reachable patch(es)"
-        )
-    elif prof.inherited is not None:
-        console.print(
-            f"[cyan]◐[/] profile [bold]{prof.name}[/] — carrying a calibration "
-            "measured before 0.5. [dim]Its patches were never stored, so it cannot "
-            "be refined; `proxdex calibrate chart` starts a fresh loop.[/]"
         )
     elif not prof.recipe.neutral:
         console.print(
@@ -2470,10 +2504,10 @@ def profile_list(ctx: click.Context) -> None:
             "→" if prof.name == cfg.print_profile else "",
             f"[bold]{prof.name}[/]" if prof.stored else f"[dim]{prof.name}[/]",
             prof.medium.label if prof.stored else "built-in preset",
-            str(len(prof.rounds)) if prof.rounds else "[dim]—[/]",
+            _round_count(prof),
             f"mean {residual.mean:.1f} / max {residual.max:.1f}"
             if residual
-            else ("[dim]inherited[/]" if prof.inherited else "[dim]not measured[/]"),
+            else "[dim]not measured[/]",
             _one_line(prof.notes),
         )
     console.print(table)
@@ -2505,12 +2539,6 @@ def profile_show(ctx: click.Context, name: str | None) -> None:
         f"brightness {recipe.brightness:g} · gamma {recipe.gamma:g}"
     )
     _unreadable_note(prof)
-    if prof.inherited is not None:
-        console.print(
-            "\n[cyan]◐[/] carrying a correction measured before 0.5. [dim]Its "
-            "patches were never stored, so it cannot be refined — a fresh loop "
-            "supersedes it.[/]"
-        )
     if not prof.rounds:
         console.print(
             "\n[dim]no calibration rounds yet — `proxdex calibrate chart"
@@ -2518,23 +2546,39 @@ def profile_show(ctx: click.Context, name: str | None) -> None:
         )
         return
     table = Table(box=None, pad_edge=False, header_style="bold")
-    for col in ("Round", "Slot", "Date", "Off by (mean/max RGB)", "Reached", "Note"):
+    cols = ("", "Round", "Slot", "Date", "Off by (mean/max)", "Reached", "Pull", "Note")
+    for col in cols:
         table.add_column(col)
     for rnd in prof.rounds:
         e = rnd.error
+        pull = prof.influence(rnd.n)
         table.add_row(
-            str(rnd.n),
+            "✓" if rnd.enabled else "[dim]·[/]",
+            str(rnd.n) if rnd.enabled else f"[dim]{rnd.n}[/]",
             rnd.slot.text,
             rnd.date,
             f"{e.mean:.1f} / {e.max:.1f}",
             f"{e.measured}/{e.total}",
+            f"{pull:.1f}" if pull is not None else "[dim]—[/]",
             _one_line(rnd.note),
         )
     console.print("\n[bold]Calibration[/]")
     console.print(table)
-    trend = " → ".join(f"{r.error.mean:.1f}" for r in prof.rounds)
-    console.print(f"[dim]mean error by round: {trend} (lower is truer)[/]")
-    last = prof.rounds[-1].error
+    live = prof.live
+    if not live:
+        console.print(
+            "[yellow]every round is switched off[/] — nothing is correcting this "
+            "medium. [dim]`proxdex calibrate enable --round N` puts one back.[/]"
+        )
+        return
+    trend = " → ".join(f"{r.error.mean:.1f}" for r in live)
+    console.print(f"[dim]mean error by live round: {trend} (lower is truer)[/]")
+    console.print(
+        "[dim]✓ = in the fit, · = switched off. Pull is how far the correction "
+        "moves if that round is left out — a round pulling much harder than its "
+        "neighbours is either your most informative measurement or an outlier.[/]"
+    )
+    last = live[-1].error
     if last.clipped:
         console.print(
             f"[dim]{last.clipped} of {last.total} patches are outside what this "
@@ -2703,17 +2747,6 @@ def _unreadable_note(prof: profiles.Profile) -> None:
             "not be read and are not in the fit. [dim]A damaged entry, or one "
             "measured on a chart proxdex no longer knows. Re-measure, or keep the "
             "file for the record.[/]"
-        )
-    older = [v for v in prof.charts if v != calibrate_mod.CHART_VERSION]
-    if older:
-        console.print(
-            f"[cyan]◐[/] {len(older)} of this profile's rounds were measured on "
-            f"chart v{', v'.join(str(v) for v in older)}; new ones use "
-            f"v{calibrate_mod.CHART_VERSION} "
-            f"({len(calibrate_mod.chart())} patches). [dim]Every round still "
-            "counts toward the fit — the pairs are real measurements either way — "
-            "but their errors come from different patch sets, so read the trend "
-            "as a guide rather than like-for-like.[/]"
         )
 
 
@@ -2933,25 +2966,61 @@ def _suspect_round(prof: profiles.Profile, rnd: profiles.Round) -> None:
     err.print(
         f"[yellow]⚠[/] round {rnd.n} is much worse than round {best.n} "
         f"({rnd.error.mean:.1f} vs {best.error.mean:.1f}) — check the scan is the "
-        "right slot, the right way up and unretouched. [dim]`proxdex calibrate drop "
-        f"{prof.name} --round {rnd.n}` refits without it.[/]"
+        "right slot, the right way up and unretouched. [dim]`proxdex calibrate "
+        f"disable {prof.name} --round {rnd.n}` refits without it, and keeps it.[/]"
     )
 
 
-@calibrate.command("drop")
+_ROUND = click.option("--round", "which", type=int, required=True, help="Round number.")
+
+
+@calibrate.command("disable")
 @_PROFILE_ARG
-@click.option("--round", "which", type=int, required=True, help="Round number.")
+@_ROUND
 @click.pass_context
-def cal_drop(ctx: click.Context, name: str | None, which: int) -> None:
-    """Remove one round — a misfeed, a crooked scan — and refit without it."""
+def cal_disable(ctx: click.Context, name: str | None, which: int) -> None:
+    """Leave a round out of the fit, without losing it.
+
+    A misfeed, a crooked scan, or just a suspicion: switch it off and the
+    correction refits without it. The round stays in the file with its number and
+    its measurements, so `enable` puts it back exactly as it was — which is the
+    only way to see what it was actually doing.
+    """
+    _switch(ctx, name, which, on=False)
+
+
+@calibrate.command("enable")
+@_PROFILE_ARG
+@_ROUND
+@click.pass_context
+def cal_enable(ctx: click.Context, name: str | None, which: int) -> None:
+    """Put a switched-off round back into the fit."""
+    _switch(ctx, name, which, on=True)
+
+
+def _switch(ctx: click.Context, name: str | None, which: int, *, on: bool) -> None:
     lib = _lib(ctx)
     prof = _stored(lib, name)
-    rnd = prof.drop_round(which)
+    before = prof.residual
+    rnd = prof.switch_round(which, on=on)
     profiles.save(lib.root, prof)
+    verb = "back in the fit" if on else "switched off"
     console.print(
-        f"[green]✓[/] dropped round {which} (slot {rnd.slot.text}); "
-        f"{len(prof.rounds)} round(s) left, correction refitted"
+        f"[green]✓[/] round {which} (slot {rnd.slot.text}) {verb} — "
+        f"{len(prof.live)} of {len(prof.rounds)} round(s) now feed the correction"
     )
+    after = prof.residual
+    if before is not None and after is not None and before.mean != after.mean:
+        console.print(
+            f"[dim]the newest live round's error reads {after.mean:.1f} now, "
+            f"was {before.mean:.1f}[/]"
+        )
+    if not prof.live:
+        err.print(
+            "[yellow]⚠[/] nothing is left in the fit, so this profile corrects "
+            f"by its recipe alone. [dim]`proxdex calibrate enable {prof.name} "
+            "--round N` to undo.[/]"
+        )
 
 
 @calibrate.command("proof")
@@ -2979,7 +3048,7 @@ def cal_proof(ctx: click.Context, name: str | None, out: Path | None) -> None:
     default = profiles.profiles_dir(lib.root) / f"{prof.name}_round{last.n}_proof.png"
     dst = out or default
     dst.parent.mkdir(parents=True, exist_ok=True)
-    calibrate_mod.proof_sheet(last.scanned, last.chart).save(dst)
+    calibrate_mod.proof_sheet(last.scanned).save(dst)
     e = last.error
     console.print(
         f"[green]wrote[/] {dst} [dim]— round {last.n}, off by mean {e.mean:.1f} / "

@@ -689,6 +689,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
 .tbar .mono { font-size: .5625rem; color: var(--faint); }
 .profline { border: 1px solid var(--rule); border-radius: .375rem; padding: var(--s2);
   display: flex; flex-direction: column; gap: var(--s1); }
+.tbl tr.muted td, .slot.muted b { opacity: .45; }
 .recipe { display: grid; gap: var(--s2); grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); }
 img.proof { width: 100%; max-width: 32rem; border: 1px solid var(--rule); border-radius: .25rem; }
 
@@ -2797,12 +2798,23 @@ function renderSheet(){
           <div class="setting"><label for="sb_name">batch name</label>
             <input class="form-control form-control-sm" id="sb_name"
                    value="${esc(state.sheet.name)}" oninput="state.sheet.name=this.value"></div>
-          <div class="setting"><label for="sb_profile">print profile</label>
+          <div class="setting"><label for="sb_profile">profile · fronts</label>
             <select class="form-select form-select-sm" id="sb_profile" onchange="sheetSet('profile', this.value)">
               <option value="">${esc(state.meta.active_profile || 'none')} — the library default</option>
               ${(state.meta.profiles || []).map(n =>
                 `<option ${o.profile === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
             </select></div>
+          ${o.faces === 'fronts' ? '' : `
+          <div class="setting"><label for="sb_back_profile">profile · backs</label>
+            <select class="form-select form-select-sm" id="sb_back_profile"
+                    onchange="sheetSet('back_profile', this.value)">
+              <option value="">${esc(state.meta.active_back_profile || 'same as fronts')}</option>
+              ${(state.meta.profiles || []).map(n =>
+                `<option ${o.back_profile === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+            </select></div>
+          <p class="hint mb-0">Backs need their own profile only when they land on a
+            different medium — the reverse of a one-sided stock, or a backs-only run
+            on other paper. A duplex sheet is one piece of paper.</p>`}
           ${SHEET_FIELDS.map(f => sheetField(f, o)).join('')}
           <div class="setting"><label for="sb_notes">notes</label>
             <input class="form-control form-control-sm" id="sb_notes" value="${esc(o.notes || '')}"
@@ -2842,7 +2854,10 @@ function sheetField(f, o){
 
 function sheetSet(key, value){
   sheetOpts()[key] = value;
-  paintSheetPicks();   // the faces choice changes what the two-sided note says
+  // `faces` decides whether backs are printed at all, so it changes which
+  // controls are even meaningful — that needs a re-render, not just a re-plan
+  if(key === 'faces'){ renderSheet(); return; }
+  paintSheetPicks();
   planSheet();
 }
 function sheetFilter(text){
@@ -2967,7 +2982,8 @@ function sheetPayload(){
     faces: o.faces, page: o.page, orientation: o.orientation,
     dpi: o.dpi ?? null, cols: o.cols ?? null, rows: o.rows ?? null,
     bleed: o.bleed ?? null, guides: o.guides ?? null,
-    profile: o.profile || null, notes: o.notes || '',
+    profile: o.profile || null, back_profile: o.back_profile || null,
+    notes: o.notes || '',
   };
 }
 function paintPlan(){
@@ -3013,10 +3029,19 @@ function paintPlan(){
       <p class="hint mb-0">${res
         ? `Measured over ${prof.rounds} round(s); the last print landed a mean of
            ${res.mean.toFixed(1)} RGB from the target.`
-        : (prof.inherited ? 'Carrying a calibration measured before 0.5 — a fresh loop can do better.'
-          : (prof.name === 'none' ? 'No medium correction: the cards print exactly as stored.'
-            : 'A hand-set recipe, not a measurement. Calibrating it is a print and a scan away.'))}</p>
+        : (prof.name === 'none' ? 'No medium correction: the cards print exactly as stored.'
+          : 'A hand-set recipe, not a measurement. Calibrating it is a print and a scan away.')}</p>
     </div>
+    ${plan.back_profile ? `<div class="profline mb-2">
+      <div class="d-flex align-items-center gap-2">
+        <span class="chip ${plan.back_profile.residual ? 'good' : 'warn'}">${esc(plan.back_profile.name)}</span>
+        <span class="mono faint" style="font-size:.6875rem">backs</span>
+      </div>
+      <p class="hint mb-0">${plan.back_profile.residual
+        ? `Measured over ${plan.back_profile.rounds} round(s).`
+        : 'Not measured — a hand-set recipe.'} The backs are corrected for this
+        medium instead of the fronts'.</p>
+    </div>` : ''}
     <div class="d-grid"><button class="btn btn-sm btn-primary"
       onclick="makeSheet()" ${plan.pages ? '' : 'disabled'}>Impose ${plan.cards} card${
       plan.cards === 1 ? '' : 's'} → ${plan.pages} page${plan.pages === 1 ? '' : 's'}</button></div>
@@ -3151,15 +3176,17 @@ async function paintProfile(){
    measured, and how the error fell. */
 function calibrationPanel(p){
   const rounds = p.rounds_detail || [];
-  const worst = Math.max(1, ...rounds.map(r => r.error.mean));
+  const worst = Math.max(1, ...rounds.filter(r => r.enabled).map(r => r.error.mean));
   const used = new Map(rounds.map(r => [`${r.slot[0]},${r.slot[1]}`, r]));
   const [cols, rows] = p.grid;
   const cells = [];
   for(let row = 0; row < rows; row++) for(let col = 0; col < cols; col++){
     const r = used.get(`${col},${row}`);
     const next = !r && p.next_slot[0] === col && p.next_slot[1] === row;
-    cells.push(`<div class="slot ${r ? 'used' : ''} ${next ? 'next' : ''}"
-      title="${r ? `round ${r.n}, off by mean ${r.error.mean.toFixed(1)} RGB`
+    cells.push(`<div class="slot ${r ? 'used' : ''} ${next ? 'next' : ''} ${
+      r && !r.enabled ? 'muted' : ''}"
+      title="${r ? `round ${r.n}, off by mean ${r.error.mean.toFixed(1)} RGB${
+        r.enabled ? '' : ' — switched off, but the ink is still on the paper'}`
                  : (next ? 'the next chart prints here' : 'blank')}">
       <b>${r ? r.n : (next ? '→' : '')}</b>
       <span class="mono">${col + 1},${row + 1}</span></div>`);
@@ -3169,6 +3196,7 @@ function calibrationPanel(p){
     <div class="panel p-3 mb-3">
       <div class="d-flex align-items-baseline gap-2 mb-1">
         <div class="eyebrow">Calibration</div>
+        ${p.live !== p.rounds ? `<span class="chip">${p.live} of ${p.rounds} in the fit</span>` : ''}
         ${res ? `<span class="ms-auto mono">off by mean
           <b style="color:var(--mark)">${res.mean.toFixed(1)}</b> / max ${res.max.toFixed(1)} RGB</span>` : ''}
       </div>
@@ -3214,26 +3242,35 @@ function calibrationPanel(p){
       ${rounds.length ? `
         <hr class="rule my-3">
         <div class="eyebrow mb-1">How the error fell</div>
-        <div class="trend">${rounds.map(r => `
+        <div class="trend">${rounds.filter(r => r.enabled).map(r => `
           <div class="tbar" title="round ${r.n}: mean ${r.error.mean.toFixed(1)} RGB">
             <i style="height:${Math.max(4, r.error.mean / worst * 100)}%"></i>
             <span class="mono">${r.error.mean.toFixed(1)}</span>
           </div>`).join('')}</div>
         <div class="tblwrap mt-2"><table class="tbl">
           <thead><tr><th>Round</th><th>Slot</th><th>Date</th><th>Mean / max RGB</th>
-            <th>Reached</th><th>Note</th><th></th></tr></thead>
-          <tbody>${rounds.map(r => `<tr>
-            <td class="mono">${r.n}</td>
+            <th>Reached</th><th title="How far the correction moves if this round is left out">Pull</th>
+            <th>Note</th><th></th></tr></thead>
+          <tbody>${rounds.map(r => `<tr class="${r.enabled ? '' : 'muted'}">
+            <td class="mono">${r.enabled ? r.n : `${r.n} · off`}</td>
             <td class="mono">${esc(r.slot_text)}</td>
             <td class="faint">${esc(r.date)}</td>
             <td class="mono">${r.error.mean.toFixed(1)} / ${r.error.max.toFixed(1)}</td>
             <td class="mono faint">${r.error.measured}/${r.error.measured + r.error.clipped}</td>
+            <td class="mono faint">${r.influence === null || r.influence === undefined
+              ? '—' : r.influence.toFixed(1)}</td>
             <td class="faint">${esc(r.note)}</td>
             <td class="text-end">
               <button class="btn btn-sm btn-ghost" onclick="showProof(${r.n})">${
                 state.proofOf === r.n ? 'Hide' : 'Proof'}</button>
-              <button class="btn btn-sm btn-ghost" onclick="dropRound(${r.n})">Drop</button>
+              <button class="btn btn-sm btn-ghost" onclick="switchRound(${r.n}, ${!r.enabled})">${
+                r.enabled ? 'Switch off' : 'Switch on'}</button>
             </td></tr>`).join('')}</tbody></table></div>
+        <p class="hint mb-0 mt-1">A round is never deleted — switch it off and the
+          correction refits without it, switch it back on and it returns exactly as
+          it was. <b>Pull</b> is how far the correction moves when a round is left
+          out: one pulling much harder than its neighbours is either your most
+          informative measurement or an outlier.</p>
         ${state.proofOf ? `
           <div class="eyebrow mt-3 mb-1">Round ${state.proofOf}: asked for, and what came back</div>
           <img class="proof" alt="Target patches above, scanned patches below"
@@ -3338,11 +3375,10 @@ async function addRound(){
   toast(j.ok ? tail(j.log) : 'Failed\n' + tail(j.log || JSON.stringify(j)), j.ok ? 9000 : 14000);
   reloadProfiles();
 }
-async function dropRound(n){
-  if(!await ask(`Drop round ${n} and refit without it?`, 'Drop')) return;
-  if(await act(`/api/calibrate/drop/${encodeURIComponent(state.profile)}/${n}`, {},
-               `Round ${n} dropped`))
-    reloadProfiles();
+async function switchRound(n, on){
+  const ok = await act(`/api/calibrate/round/${encodeURIComponent(state.profile)}/${n}`,
+                       {enabled: on}, on ? `Round ${n} back in the fit` : `Round ${n} switched off`);
+  if(ok) reloadProfiles();
 }
 function showProof(n){
   state.proofOf = state.proofOf === n ? null : n;

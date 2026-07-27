@@ -545,6 +545,12 @@ with colour management off": a name, **your notes**, the recipe it started from,
 and the calibration rounds measured on it. They live in
 `<root>/profiles/<name>.json`; `[print] profile` names the default.
 
+Fronts and backs can be corrected for **different media** — `[print] back_profile`
+or `sheet --back-profile`. Leave it unset and both sides use one profile, which is
+right for duplex, since a duplex sheet is one piece of paper. It exists because
+that is not always true: the reverse of a one-sided glossy stock is a different
+surface, and a backs-only run often goes on other paper entirely.
+
 ```bash
 proxdex profile list
 proxdex profile new matte-200 --medium paper \
@@ -575,7 +581,8 @@ proxdex calibrate add --scan scan.png        # records the round, refits, report
 #   feed the SAME sheet back in and repeat — the next chart goes in slot 2,1
 proxdex profile show                         # watch the error fall
 proxdex calibrate proof                      # target vs scan, patch by patch
-proxdex calibrate drop --round 3             # a misfeed or a crooked scan
+proxdex calibrate disable --round 3          # a misfeed or a crooked scan
+proxdex calibrate enable  --round 3          # …and put it back
 ```
 
 Every round is **kept**, and the correction is refitted over all of them at once,
@@ -604,9 +611,14 @@ measured rather than assumed:
   levels of error in every reading. (A 3-D LUT, which is what a dense lattice
   would justify, also lost to the polynomial at every density tested.)
 
-Charts are **versioned**. Rounds measured on the old one keep working: each round
-scores against its own target, and its measurements still count toward the fit, so
-upgrading never discards a calibration you paid for in paper.
+**Rounds are never deleted.** A bad one — a misfeed, a scan with the scanner's
+auto-correction left on — is *switched off*: the correction refits without it, and
+switching it back on restores exactly what it was doing. That is the only way to
+see with and without. `proxdex profile show` also gives each round a **pull**: how
+far the correction moves if that round is left out. A round pulling much harder
+than its neighbours is either your most informative measurement or an outlier, and
+it is worth knowing which. In a run where round 3 was scanned with auto-correction
+on, its pull came out at 17.7 against 5.6 / 5.4 / 4.4 for the others.
 
 The chart travels the same renderer as a card sheet, so the correction is
 measured on the exact path it is applied to. `proxdex sheet` then applies it, and
@@ -633,6 +645,7 @@ proxdex sheet deck --copies 4                 # four of everything ready
 proxdex sheet deck --dry-run                  # the page plan, writing nothing
 proxdex sheet deck --orientation landscape --cols 4 --rows 2 --bleed 3
 proxdex sheet deck --profile foil-clear --notes "third attempt, rear tray"
+proxdex sheet deck --faces duplex --profile matte-200 --back-profile glossy-reverse
 ```
 
 `--dry-run` reports the pages per card size before anything is rendered, from the

@@ -541,9 +541,26 @@ are the same for every card on the sheet. That is what a print profile is for.
 ## Print profiles (one per medium you own)
 
 A profile is everything proxdex needs to know about "matte 200 g on the XP-15000
-with colour management off": a name, **your notes**, the recipe it started from,
-and the calibration rounds measured on it. They live in
-`<root>/profiles/<name>.json`; `[print] profile` names the default.
+with colour management off": a name, **your notes**, and how it corrects. They live
+in `<root>/profiles/<name>.json`; `[print] profile` names the default.
+
+```bash
+proxdex profile list
+proxdex profile new matte-200 \
+        --notes "Canon TS8350 · matte 200 g · plain-paper setting · CM OFF" --use
+proxdex profile show matte-200        # notes, numbers, every round, the trend
+proxdex profile set matte-200 --note "switched to the rear tray"
+proxdex profile rename matte-200 matte-200-rear
+proxdex profile rm old-glossy
+```
+
+Write the notes down. Six months later they are the only way to reproduce a print.
+
+**Nothing ships pre-filled.** There is one built-in name, `none`, and it is the
+identity — no correction at all. A new profile starts there too. proxdex has no
+numbers to offer for *your* paper: "foil needs saturation 1.38" was true of exactly
+one setup that nobody reading this owns, so a recipe like that is a guess wearing a
+label. Every real profile is one you made, one of two ways.
 
 Fronts and backs can be corrected for **different media** — `[print] back_profile`
 or `sheet --back-profile`. Leave it unset and both sides use one profile, which is
@@ -551,21 +568,26 @@ right for duplex, since a duplex sheet is one piece of paper. It exists because
 that is not always true: the reverse of a one-sided glossy stock is a different
 surface, and a backs-only run often goes on other paper entirely.
 
+## Defining a profile without a scanner
+
+Four multipliers, set by hand, applied at print time. The trick is not to guess
+them on screen — a screen is not the paper — but to **print one page of the same
+card at a row of values and pick the one that looks right**:
+
 ```bash
-proxdex profile list
-proxdex profile new matte-200 --medium paper \
-        --notes "Canon TS8350 · matte 200 g · plain-paper setting · CM OFF" --use
-proxdex profile show matte-200        # notes, recipe, every round, the trend
-proxdex profile set matte-200 --note "switched to the rear tray"
-proxdex profile rename matte-200 matte-200-rear
-proxdex profile rm old-glossy
+proxdex profile strip matte-200 --vary saturation --from 1.0 --to 1.6 --steps 4
+#   → one page, four cards at true size, each labelled with its saturation
+#   → print it on the medium (colour management OFF), look at it, then:
+proxdex profile set matte-200 --saturation 1.4
+proxdex profile preview matte-200      # before | after on a card, on screen
 ```
 
-Write the notes down. Six months later they are the only way to reproduce a
-print. Until a profile is calibrated it carries a hand-set **recipe** — the
-built-in `none` / `paper` / `foil` presets are just starting points for one
-(`foil` boosts saturation and ink density, because transparent foil washes out) —
-and a measurement supersedes the recipe entirely.
+One knob at a time: a page where two things changed tells you which page you like,
+not which value to keep. `--vary` takes `saturation`, `contrast`, `brightness` or
+`gamma`, and `profile show` tells you the numbers currently in force.
+
+The web UI has the same thing under **Print → By hand**: the four numbers, an
+inline before/after, and a strip to print.
 
 ## Calibrating a medium (a loop, on one sheet of paper)
 

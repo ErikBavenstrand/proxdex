@@ -230,11 +230,12 @@ reg_inset_mm = 10.0
 
 [print]
 # Which medium a sheet is corrected for, at sheet time — the stored masters stay
-# neutral. Either a built-in preset ("none" | "paper" | "foil") or a profile of
-# your own: `proxdex profile new matte-200 --medium paper --notes "..."`, then
-# calibrate it round by round and the measurement takes over from the preset.
-# Everything about a medium — its notes, its recipe, its calibration — lives in
-# <root>/profiles/<name>.json, not here.
+# neutral. "none" is the identity: no correction at all. Anything else is a profile
+# you made: `proxdex profile new matte-200 --notes "..."`, then either measure it
+# (`calibrate chart` → print → scan → `calibrate add`) or set four numbers by hand
+# off a printed strip (`profile strip`). Nothing ships pre-filled, because numbers
+# for a printer proxdex has never seen would be a guess. Everything about a medium —
+# its notes, its numbers, its calibration — lives in <root>/profiles/<name>.json.
 profile = "none"
 # Card backs, when they are not the same medium as the fronts — the reverse of a
 # one-sided glossy stock, or a backs-only run on other paper. Empty = same as above.
@@ -1952,12 +1953,7 @@ class _Repro:
         ppm = cfg.sheet_dpi / 25.4
         trim_w, trim_h = round(trim[0] * ppm), round(trim[1] * ppm)
         im = sheet_mod.fit(master, trim_w, trim_h, cfg.sheet_fit)
-        profile = self.back_profile if back else self.profile
-        correction = profile.correction
-        if correction is not None:
-            im = correction.apply_to_image(im)
-        elif not profile.recipe.neutral:
-            im = media.compensate(im, profile.recipe)
+        im = _apply_profile(im, self.back_profile if back else self.profile)
         if cfg.bleed_mm <= 0:
             return im
         bp = round(cfg.bleed_mm * ppm)
@@ -2399,12 +2395,6 @@ def printed(ctx: click.Context, name: str) -> None:
 
 # --------------------------------------------------------- print profiles ----
 _PROFILE_ARG = click.argument("name", required=False, metavar="[PROFILE]")
-_MEDIUM = click.option(
-    "--medium",
-    type=click.Choice([p.value for p in media.Preset]),
-    default=None,
-    help="The built-in starting point this profile is based on.",
-)
 
 
 def _round_count(prof: profiles.Profile) -> str:
@@ -2421,34 +2411,15 @@ def _profile(lib: Library, name: str | None) -> profiles.Profile:
 
 
 def _stored(lib: Library, name: str | None) -> profiles.Profile:
-    """A profile that is a real file, creating it from a preset if need be.
-
-    Editing or calibrating a *preset* means you want a profile of your own based
-    on it — so make one rather than refusing and making the user say it twice. The
-    exception is ``none``, which means "correct nothing": there is nothing there to
-    measure, and a profile with that name would shadow the idea.
-    """
+    """A profile that is a real file — the identity is not one, and cannot be."""
     prof = _profile(lib, name)
     if prof.stored:
         return prof
-    if prof.medium is media.Preset.NONE:
-        raise click.UsageError(
-            "'none' means no correction at all, so there is nothing to calibrate. "
-            "Name the medium you are actually printing on: "
-            "`proxdex profile new <name> --medium paper|foil`"
-        )
-    created = profiles.create(
-        lib.root,
-        prof.name,
-        medium=prof.medium,
-        notes=f"Started from the built-in {prof.medium.label.lower()} preset.",
+    raise click.UsageError(
+        f"'{profiles.NONE}' means no correction at all, so there is nothing to "
+        "set or measure. Name the medium you are actually printing on: "
+        "`proxdex profile new <name>`"
     )
-    console.print(
-        f"[green]✓[/] '{created.name}' is now a profile of yours "
-        f"[dim](was a built-in preset) → "
-        f"{profiles.path_for(lib.root, created.name).name}[/]"
-    )
-    return created
 
 
 def _profile_note(prof: profiles.Profile) -> None:
@@ -2465,13 +2436,15 @@ def _profile_note(prof: profiles.Profile) -> None:
         )
     elif not prof.recipe.neutral:
         console.print(
-            f"[cyan]◐[/] profile [bold]{prof.name}[/] — hand-set recipe, "
-            "[yellow]not measured[/]. [dim]`proxdex calibrate chart` measures it.[/]"
+            f"[cyan]◐[/] profile [bold]{prof.name}[/] — set by hand: "
+            f"{prof.recipe.text()}. [dim]`proxdex calibrate chart` measures it "
+            "instead, if you have a scanner.[/]"
         )
-    elif prof.name != media.Preset.NONE.value:
+    elif prof.name != profiles.NONE:
         err.print(
             f"[yellow]⚠[/] profile '{prof.name}' corrects nothing yet — no "
-            "measurement and a neutral recipe"
+            "measurement, and its numbers are all 1. [dim]`proxdex profile set "
+            f"{prof.name} --saturation …`, or measure it.[/]"
         )
 
 
@@ -2492,18 +2465,18 @@ def profile_cmd() -> None:
 @profile_cmd.command("list")
 @click.pass_context
 def profile_list(ctx: click.Context) -> None:
-    """Every profile in this library, and the built-in presets."""
+    """Every profile in this library, plus the identity."""
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     table = Table(box=None, pad_edge=False, header_style="bold")
-    for col in ("", "Profile", "Based on", "Rounds", "Last print off by", "Notes"):
+    for col in ("", "Profile", "Corrects", "Rounds", "Last print off by", "Notes"):
         table.add_column(col)
     for prof in profiles.listing(lib.root):
         residual = prof.residual
         table.add_row(
             "→" if prof.name == cfg.print_profile else "",
             f"[bold]{prof.name}[/]" if prof.stored else f"[dim]{prof.name}[/]",
-            prof.medium.label if prof.stored else "built-in preset",
+            prof.how if prof.stored else "[dim]nothing (identity)[/]",
             _round_count(prof),
             f"mean {residual.mean:.1f} / max {residual.max:.1f}"
             if residual
@@ -2512,8 +2485,8 @@ def profile_list(ctx: click.Context) -> None:
         )
     console.print(table)
     console.print(
-        "[dim]→ is the active profile (\\[print] profile). A dim name is a preset "
-        "you have not saved as a profile yet.[/]"
+        f"[dim]→ is the active profile (\\[print] profile). '{profiles.NONE}' is "
+        "the identity — it corrects nothing, and is not a file.[/]"
     )
 
 
@@ -2521,22 +2494,20 @@ def profile_list(ctx: click.Context) -> None:
 @_PROFILE_ARG
 @click.pass_context
 def profile_show(ctx: click.Context, name: str | None) -> None:
-    """A profile in full: notes, recipe, and every calibration round."""
+    """A profile in full: notes, its numbers, and every calibration round."""
     lib = _lib(ctx)
     prof = _profile(lib, name)
-    console.print(f"[bold]{prof.name}[/]  [dim]{prof.medium.label}[/]")
+    console.print(f"[bold]{prof.name}[/]  [dim]corrects: {prof.how}[/]")
     if not prof.stored:
         console.print(
-            "[dim]a built-in preset — `proxdex profile new` to keep an editable "
-            "copy with your own notes[/]"
+            "[dim]the identity — it corrects nothing and has nothing to edit. "
+            "`proxdex profile new <name>` makes a real one.[/]"
         )
     if prof.notes:
         console.print(f"\n{prof.notes}\n")
-    recipe = prof.recipe
     console.print(
-        "[bold]Recipe[/] [dim](used until a round is measured)[/]  "
-        f"saturation {recipe.saturation:g} · contrast {recipe.contrast:g} · "
-        f"brightness {recipe.brightness:g} · gamma {recipe.gamma:g}"
+        f"[bold]By hand[/] {prof.recipe.text()}"
+        + ("  [dim](superseded by the measurement below)[/]" if prof.live else "")
     )
     _unreadable_note(prof)
     if not prof.rounds:
@@ -2597,37 +2568,46 @@ def profile_show(ctx: click.Context, name: str | None) -> None:
 
 @profile_cmd.command("new")
 @click.argument("name")
-@_MEDIUM
 @click.option("--notes", default="", help="What is special about this medium.")
 @click.option("--use", is_flag=True, help="Also make it the active profile.")
 @click.pass_context
-def profile_new(
-    ctx: click.Context, name: str, medium: str | None, notes: str, use: bool
-) -> None:
-    """Create a profile.
+def profile_new(ctx: click.Context, name: str, notes: str, use: bool) -> None:
+    """Create a profile. It corrects nothing until you say what it does.
 
     Write down what you did — the paper, the printer setting, whether colour
     management was off. In six months the notes are the only way to reproduce it.
+
+    Then define the correction, either way round:
+
+    • [cyan]with a scanner[/] — `calibrate chart` → print → scan →
+    `calibrate add`, repeating on one sheet until the error stops falling. This
+    measures your printer instead of guessing at it.
+
+    • [cyan]by hand[/] — `profile set --saturation … --gamma …`, judged off a
+    test print. `profile strip` prints one page of the same card at a row of
+    values so you can pick the one that looks right, and `profile preview` shows
+    the numbers on screen first.
     """
     lib = _lib(ctx)
-    kind = media.Preset(medium) if medium else media.Preset.NONE
-    prof = profiles.create(lib.root, name, medium=kind, notes=notes)
+    prof = profiles.create(lib.root, name, notes=notes)
     console.print(
-        f"[green]✓[/] profile [bold]{prof.name}[/] created from "
-        f"{kind.label.lower()} → {profiles.path_for(lib.root, prof.name).name}"
+        f"[green]✓[/] profile [bold]{prof.name}[/] created at identity → "
+        f"{profiles.path_for(lib.root, prof.name).name}"
     )
     if use:
         _write_setting(lib, "print", "profile", prof.name)
         console.print(f"[green]✓[/] \\[print] profile = {prof.name}")
     console.print(
-        f"[dim]calibrate it: `proxdex calibrate chart {prof.name}` → print → scan "
-        f"→ `proxdex calibrate add {prof.name} --scan <file>`[/]"
+        f"[dim]measure it: `proxdex calibrate chart {prof.name}` → print → scan → "
+        f"`proxdex calibrate add {prof.name} --scan <file>`\n"
+        f"or set it by hand: `proxdex profile strip {prof.name} --vary saturation` "
+        f"→ print → `proxdex profile set {prof.name} --saturation <what looked "
+        "right>`[/]"
     )
 
 
 @profile_cmd.command("set")
 @_PROFILE_ARG
-@_MEDIUM
 @click.option("--notes", default=None, help="Replace the notes.")
 @click.option("--note", "append", default=None, help="Add a line to the notes.")
 @click.option("--saturation", type=float, default=None, help="Recipe saturation.")
@@ -2644,7 +2624,6 @@ def profile_new(
 def profile_set(
     ctx: click.Context,
     name: str | None,
-    medium: str | None,
     notes: str | None,
     append: str | None,
     saturation: float | None,
@@ -2653,11 +2632,18 @@ def profile_set(
     gamma: float | None,
     grid: str | None,
 ) -> None:
-    """Edit a profile's notes, its starting recipe, or its sheet grid."""
+    """Set a profile's numbers by hand, its notes, or its sheet grid.
+
+    This is the no-scanner path, and it is a real one: four multipliers applied at
+    print time. Judge them off paper — [cyan]profile strip[/] prints one page of a
+    card at a row of values for a single knob, which is how you pick a number
+    without an instrument.
+
+    A measured calibration supersedes these entirely, so on a profile with rounds
+    they are only the record of where it started.
+    """
     lib = _lib(ctx)
     prof = _stored(lib, name)
-    if medium:
-        prof.medium = media.Preset(medium)
     if notes is not None:
         prof.notes = notes.strip()
     if append:
@@ -2671,13 +2657,14 @@ def profile_set(
     if grid:
         prof.grid = _parse_grid(grid)
     profiles.save(lib.root, prof)
-    console.print(f"[green]✓[/] {prof.name} updated")
-    if prof.rounds and any(
+    console.print(f"[green]✓[/] {prof.name} updated — {prof.recipe.text()}")
+    if prof.live and any(
         v is not None for v in (saturation, contrast, brightness, gamma)
     ):
         console.print(
-            "[dim]note: the recipe is only used until a round is measured, and "
-            f"{prof.name} has {len(prof.rounds)} — the measurement wins.[/]"
+            f"[dim]note: {prof.name} has {len(prof.live)} measured round(s), and a "
+            "measurement supersedes numbers set by hand — these are kept as the "
+            "record, but the sheet uses the measurement.[/]"
         )
 
 
@@ -2715,10 +2702,9 @@ def profile_rm(ctx: click.Context, name: str, yes: bool) -> None:
     # never leave [print] pointing at a profile that is gone — the next sheet run
     # would fail on a name nobody typed
     if Config.load(lib.root).print_profile == prof.name:
-        _write_setting(lib, "print", "profile", media.Preset.NONE.value)
+        _write_setting(lib, "print", "profile", profiles.NONE)
         console.print(
-            f"[dim]\\[print] profile was {prof.name}; reset to "
-            f"{media.Preset.NONE.value}[/]"
+            f"[dim]\\[print] profile was {prof.name}; reset to {profiles.NONE}[/]"
         )
 
 
@@ -2748,6 +2734,171 @@ def _unreadable_note(prof: profiles.Profile) -> None:
             "measured on a chart proxdex no longer knows. Re-measure, or keep the "
             "file for the record.[/]"
         )
+
+
+# --------------------------------------------- setting a profile by hand ------
+#: what a variation strip sweeps by default, when the user names no values
+_STRIP_SPREAD = 0.3
+_STRIP_STEPS = 5
+
+
+def _sample_card(lib: Library, cid: str | None) -> tuple[Image.Image, str]:
+    """A card to judge a correction on — the one named, else the first ready one.
+
+    A real card, not a synthetic swatch: you are deciding whether *your cards*
+    look right on this paper, and skin tones and a yellow border tell you things a
+    grey ramp does not.
+    """
+    cards = lib.select((cid,)) if cid else lib.cards()
+    for card in cards:
+        master = _master(card, card.front_face)
+        if master is not None:
+            return Image.open(master).convert("RGB"), card.id
+    raise click.UsageError(
+        "no card image to preview on — fetch one, or pass --card <id>"
+        if not cid
+        else f"{cid} has no image yet"
+    )
+
+
+@profile_cmd.command("preview")
+@_PROFILE_ARG
+@click.option("--card", "cid", default=None, metavar="ID", help="Judge on this card.")
+@click.option(
+    "-o",
+    "--out",
+    "out",
+    type=UserPath(path_type=Path),
+    default=None,
+    help="Where to write the PNG.",
+)
+@click.pass_context
+def profile_preview(
+    ctx: click.Context, name: str | None, cid: str | None, out: Path | None
+) -> None:
+    """Write a before/after PNG of what this profile does to a card.
+
+    On screen, so it costs no paper — but a screen is not the medium, so use this
+    to see the *direction* of a correction and a test print to judge its amount.
+    """
+    lib = _lib(ctx)
+    prof = _profile(lib, name)
+    im, used = _sample_card(lib, cid)
+    after = _apply_profile(im, prof)
+    gap = 16
+    canvas = Image.new("RGB", (im.width * 2 + gap, im.height), (255, 255, 255))
+    canvas.paste(im, (0, 0))
+    canvas.paste(after, (im.width + gap, 0))
+    dst = out or profiles.profiles_dir(lib.root) / f"{prof.name}_preview.png"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(dst)
+    console.print(
+        f"[green]wrote[/] {dst} [dim]— {used} before | after, through "
+        f"'{prof.name}' ({prof.how})[/]"
+    )
+    if prof.how == "identity":
+        console.print("[dim]both halves are the same: this profile corrects nothing[/]")
+
+
+@profile_cmd.command("strip")
+@_PROFILE_ARG
+@click.option(
+    "--vary",
+    type=click.Choice(list(media.RECIPE_KEYS)),
+    default="saturation",
+    show_default=True,
+    help="Which single number to sweep.",
+)
+@click.option(
+    "--from",
+    "low",
+    type=click.FloatRange(media.RECIPE_LOW, media.RECIPE_HIGH),
+    default=None,
+    help="Lowest value (default: the current one, less a little).",
+)
+@click.option(
+    "--to",
+    "high",
+    type=click.FloatRange(media.RECIPE_LOW, media.RECIPE_HIGH),
+    default=None,
+    help="Highest value.",
+)
+@click.option(
+    "--steps",
+    type=click.IntRange(2, 12),
+    default=_STRIP_STEPS,
+    show_default=True,
+    help="How many variations.",
+)
+@click.option("--card", "cid", default=None, metavar="ID", help="Which card to print.")
+@click.option(
+    "-o",
+    "--out",
+    "out",
+    type=UserPath(path_type=Path),
+    default=None,
+    help="Where to write the PDF.",
+)
+@click.pass_context
+def profile_strip(
+    ctx: click.Context,
+    name: str | None,
+    vary: str,
+    low: float | None,
+    high: float | None,
+    steps: int,
+    cid: str | None,
+    out: Path | None,
+) -> None:
+    """Print one card at a row of values for one number, each labelled.
+
+    This is how you set a profile without a scanner. Print it on the medium, look
+    at it, read the label under the one that looks right, and
+    [cyan]profile set --<number> <value>[/]. One number at a time: a page where
+    two things changed tells you which page you like, not which value to keep.
+    """
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    prof = _stored(lib, name)
+    current = float(getattr(prof.recipe, vary))
+    lo = current - _STRIP_SPREAD if low is None else low
+    hi = current + _STRIP_SPREAD if high is None else high
+    if hi <= lo:
+        raise click.UsageError(f"--from {lo:g} is not below --to {hi:g}")
+    values = [round(lo + (hi - lo) * i / (steps - 1), 3) for i in range(steps)]
+    im, used = _sample_card(lib, cid)
+    trim = sheet_mod.trim_mm(lib.find(used) or next(iter(lib.cards())), cfg)
+    fits = sheet_mod.tiles_per_page(cfg, trim)
+    tiles = [
+        (label, media.compensate(im, recipe))
+        for label, recipe in media.vary(prof.recipe, vary, values)
+    ]
+    page = sheet_mod.labelled_page(cfg, tiles, trim)
+    dst = out or profiles.profiles_dir(lib.root) / f"{prof.name}_{vary}_strip.pdf"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    sheet_mod.write_page_pdf(page, dst, cfg)
+    console.print(
+        f"[green]wrote[/] {dst} [dim]— {used} at {vary} "
+        f"{', '.join(f'{v:g}' for v in values)}[/]"
+    )
+    if len(tiles) > fits:
+        err.print(
+            f"[yellow]⚠[/] only {fits} of {len(tiles)} variations fit one page at "
+            f"{trim[0]:g}×{trim[1]:g}mm — the rest were left off. "
+            "[dim]Use fewer --steps.[/]"
+        )
+    console.print(
+        f"[dim]print it on the medium with colour management OFF, then "
+        f"`proxdex profile set {prof.name} --{vary} <the one that looked right>`[/]"
+    )
+
+
+def _apply_profile(im: Image.Image, prof: profiles.Profile) -> Image.Image:
+    """What a sheet would do to this image through that profile."""
+    correction = prof.correction
+    if correction is not None:
+        return correction.apply_to_image(im)
+    return media.compensate(im, prof.recipe)
 
 
 def _pick(value: float | None, current: float) -> float:

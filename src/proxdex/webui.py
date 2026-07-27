@@ -215,7 +215,6 @@ class SheetBody(Body):
 class ProfileBody(Body):
     """Create or edit a print profile. Every field is optional on an edit."""
 
-    medium: media.Preset | None = None
     notes: str | None = Field(default=None, max_length=8000)
     saturation: Annotated[float, Field(ge=0, le=3)] | None = None
     contrast: Annotated[float, Field(ge=0, le=3)] | None = None
@@ -227,8 +226,6 @@ class ProfileBody(Body):
 
     def argv(self) -> list[str]:
         args: list[str] = []
-        if self.medium is not None:
-            args += ["--medium", self.medium.value]
         if self.notes is not None:
             args += ["--notes", self.notes]
         for key in media.RECIPE_KEYS:
@@ -936,11 +933,9 @@ def create_app(lib: Library) -> FastAPI:
         return {
             "active": cfg.print_profile,
             "active_back": cfg.print_back_profile,
-            "media": [
-                {"id": p.value, "label": p.label, "recipe": p.recipe.json()}
-                for p in media.Preset
-            ],
+            "identity": profiles.NONE,
             "recipe_keys": list(media.RECIPE_KEYS),
+            "recipe_range": [media.RECIPE_LOW, media.RECIPE_HIGH],
             "profiles": [p.summary() for p in profiles.listing(lib.root)],
         }
 
@@ -974,6 +969,54 @@ def create_app(lib: Library) -> FastAPI:
     @app.post("/api/profile/{name}/use")
     def api_profile_use(name: ProfileName) -> dict[str, Any]:
         return run_cli(["profile", "use", name])
+
+    @app.get("/api/profile/{name}/preview")
+    def api_profile_preview(name: ProfileName, card: str | None = None) -> Response:
+        """Before/after on a real card, so numbers set by hand are not set blind."""
+        args = ["profile", "preview", name]
+        if card:
+            if not _ID_OK.match(card):
+                return _bad(f"{card}: not a card id")
+            args += ["--card", card]
+        with tempfile.TemporaryDirectory() as tmp:
+            png = Path(tmp) / "preview.png"
+            res = run_cli([*args, "-o", str(png)])
+            if not res["ok"] or not png.is_file():
+                return JSONResponse({"ok": False, "log": res["log"]}, status_code=400)
+            body = png.read_bytes()
+        return Response(
+            body, media_type="image/png", headers={"Cache-Control": "no-store"}
+        )
+
+    @app.get("/api/profile/{name}/strip")
+    def api_profile_strip(
+        name: ProfileName,
+        vary: str = "saturation",
+        steps: Annotated[int, Query(ge=2, le=12)] = 5,
+        card: str | None = None,
+    ) -> Response:
+        """A printable page of one card at a row of values for one number."""
+        if vary not in media.RECIPE_KEYS:
+            return _bad(f"cannot vary {vary!r}")
+        args = ["profile", "strip", name, "--vary", vary, "--steps", str(steps)]
+        if card:
+            if not _ID_OK.match(card):
+                return _bad(f"{card}: not a card id")
+            args += ["--card", card]
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / f"{name}-{vary}.pdf"
+            res = run_cli([*args, "-o", str(pdf)])
+            if not res["ok"] or not pdf.is_file():
+                return JSONResponse({"ok": False, "log": res["log"]}, status_code=400)
+            body = pdf.read_bytes()
+        return Response(
+            body,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="{name}-{vary}-strip.pdf"',
+                "Cache-Control": "no-store",
+            },
+        )
 
     # ---- calibration rounds -------------------------------------------------
     @app.get("/api/calibrate/chart/{name}")

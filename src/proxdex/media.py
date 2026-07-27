@@ -1,49 +1,43 @@
-"""Medium compensation: the starting-point recipes a print profile begins from.
+"""The hand-set half of a print profile: four multipliers, and how to judge them.
 
-Some media wash colours out — notably transparent plastic foil, where ink is
-semi-transparent so the print reads lighter, flatter and less saturated than the
-screen master. A recipe pre-distorts the image to cancel that: push saturation
-and density up so the *printed* result matches what you intended.
+A profile can be defined two ways, and both are legitimate:
 
-These are guesses that look about right, and they are only ever a starting point.
-A profile you have actually calibrated (:mod:`proxdex.profiles`) carries a
-*measured* correction, and that supersedes the recipe entirely.
+* **measured** — print the calibration chart, scan it, and let proxdex fit the
+  correction (:mod:`proxdex.calibrate`). Needs a scanner.
+* **by hand** — set these four numbers yourself. Needs eyes and a test print.
+
+Nothing ships with numbers pre-filled. A recipe that came from nobody's printer
+is not a starting point, it is a guess wearing a label: "foil needs saturation
+1.38" was true of exactly one setup that nobody reading this owns. So a new
+profile starts at identity — changing nothing — and you move it deliberately,
+either by measuring or by looking.
+
+:func:`vary` and the strip it feeds exist so the by-hand path is not blind: print
+one page of the same card at a row of values, look at it, and set the one that
+looks right.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import StrEnum
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
 from PIL import Image, ImageEnhance
 
-
-class Preset(StrEnum):
-    """The built-in starting points.
-
-    The set of *profiles* is open — `proxdex profile new` adds one under any name
-    — so a profile name is a ``str``. These are the ones that ship, and the ones
-    a new profile can be based on.
-    """
-
-    NONE = "none"
-    PAPER = "paper"
-    FOIL = "foil"
-
-    @property
-    def label(self) -> str:
-        return _LABELS[self]
-
-    @property
-    def recipe(self) -> Recipe:
-        return PRESETS[self]
+#: the four multipliers of a hand-set correction, in the order they are applied
+RECIPE_KEYS: tuple[str, ...] = ("saturation", "contrast", "brightness", "gamma")
+#: sensible bounds for each — the same range the CLI and the API enforce
+RECIPE_LOW, RECIPE_HIGH = 0.0, 3.0
 
 
 @dataclass(slots=True, frozen=True)
 class Recipe:
-    """A hand-set medium correction: four multipliers, no measurement."""
+    """A hand-set medium correction: four multipliers, no measurement.
+
+    Identity by default, because a correction nobody has verified should change
+    nothing.
+    """
 
     saturation: float = 1.0
     contrast: float = 1.0
@@ -52,20 +46,18 @@ class Recipe:
 
     @property
     def neutral(self) -> bool:
-        return (self.saturation, self.contrast, self.brightness, self.gamma) == (
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-        )
+        return all(getattr(self, key) == 1.0 for key in RECIPE_KEYS)
 
     def json(self) -> dict[str, float]:
-        return {
-            "saturation": self.saturation,
-            "contrast": self.contrast,
-            "brightness": self.brightness,
-            "gamma": self.gamma,
-        }
+        return {key: float(getattr(self, key)) for key in RECIPE_KEYS}
+
+    def text(self) -> str:
+        return " · ".join(f"{k} {getattr(self, k):g}" for k in RECIPE_KEYS)
+
+    def with_value(self, key: str, value: float) -> Recipe:
+        if key not in RECIPE_KEYS:
+            raise ValueError(f"{key!r} is not one of {', '.join(RECIPE_KEYS)}")
+        return replace(self, **{key: value})
 
     @classmethod
     def read(cls, data: object) -> Recipe:
@@ -73,37 +65,16 @@ class Recipe:
         if not isinstance(data, dict):
             return cls()
         raw: dict[str, Any] = data
-        return cls(
-            saturation=_num(raw.get("saturation"), 1.0),
-            contrast=_num(raw.get("contrast"), 1.0),
-            brightness=_num(raw.get("brightness"), 1.0),
-            gamma=_num(raw.get("gamma"), 1.0),
-        )
+        return cls(**{key: _num(raw.get(key), 1.0) for key in RECIPE_KEYS})
 
 
-PRESETS: dict[Preset, Recipe] = {
-    Preset.NONE: Recipe(),
-    Preset.PAPER: Recipe(saturation=1.02, contrast=1.02),
-    # transparent plastic foil washes out hard → boost saturation + density
-    Preset.FOIL: Recipe(saturation=1.38, contrast=1.16, brightness=0.95, gamma=0.88),
-}
+def vary(recipe: Recipe, key: str, values: list[float]) -> list[tuple[str, Recipe]]:
+    """The recipe at each of ``values`` for one knob, labelled with the value.
 
-_LABELS: dict[Preset, str] = {
-    Preset.NONE: "No correction",
-    Preset.PAPER: "Plain paper",
-    Preset.FOIL: "Transparent foil",
-}
-
-#: the fields of a recipe, for the CLI's and UI's editors
-RECIPE_KEYS: tuple[str, ...] = ("saturation", "contrast", "brightness", "gamma")
-
-
-def preset(name: str) -> Preset | None:
-    """The built-in preset ``name`` refers to, or None if it is a real profile."""
-    try:
-        return Preset(name.strip().lower())
-    except ValueError:
-        return None
+    One variable at a time: a page where two things changed tells you which page
+    you like, not which number to write down.
+    """
+    return [(f"{key} {value:g}", recipe.with_value(key, value)) for value in values]
 
 
 def compensate(im: Image.Image, recipe: Recipe) -> Image.Image:

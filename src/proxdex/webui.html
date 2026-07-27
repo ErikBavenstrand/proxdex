@@ -827,7 +827,7 @@ const state = {
   // `sheet <name>` with no ids does.
   sheet:{name:'deck', picks:new Map(), filter:'', opts:null, plan:null, planning:false},
   // the print screen: which profile is open, and what the server said about it
-  profile:null, profileList:null, profileDetail:null, proofOf:null,
+  profile:null, profileList:null, profileDetail:null, proofOf:null, previewOf:null,
 };
 const card = () => state.cards.find(c => c.id === state.id) || null;
 /* What a card is, when it is not an ordinary one-sided 63×88 print. The names
@@ -3029,8 +3029,9 @@ function paintPlan(){
       <p class="hint mb-0">${res
         ? `Measured over ${prof.rounds} round(s); the last print landed a mean of
            ${res.mean.toFixed(1)} RGB from the target.`
-        : (prof.name === 'none' ? 'No medium correction: the cards print exactly as stored.'
-          : 'A hand-set recipe, not a measurement. Calibrating it is a print and a scan away.')}</p>
+        : (prof.how === 'by hand'
+            ? `Set by hand, not measured. ${esc(prof.recipe ? Object.entries(prof.recipe).map(([k, v]) => `${k} ${v}`).join(' · ') : '')}`
+            : 'Corrects nothing: the cards print exactly as stored.')}</p>
     </div>
     ${plan.back_profile ? `<div class="profline mb-2">
       <div class="d-flex align-items-center gap-2">
@@ -3086,7 +3087,7 @@ async function renderPrint(){
       <div class="secnav" id="profnav">${list.profiles.map(p => `
         <button class="${p.name === state.profile ? 'on' : ''}" onclick="pickProfile('${esc(p.name)}')">
           ${esc(p.name)}
-          <span class="cnt">${p.rounds ? `${p.rounds}r` : (p.stored ? '—' : 'preset')}</span>
+          <span class="cnt">${p.live ? `${p.live}r` : (p.stored ? (p.how === 'by hand' ? 'hand' : '—') : 'identity')}</span>
         </button>`).join('')}
         <hr class="rule" style="margin:.5rem 0">
         <button onclick="newProfile()">+ new profile</button>
@@ -3103,11 +3104,12 @@ const profileSlug = name => String(name).trim().toLowerCase()
   .replace(/[^a-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
 async function newProfile(){
   const name = await askName('Name this medium',
-    '', 'Letters, digits, dashes — e.g. matte-200, foil-clear, glossy-photo.');
+    '', 'Letters, digits, dashes — e.g. matte-200, foil-clear, glossy-photo. '
+      + 'It starts correcting nothing; measure it or set the numbers by hand.');
   if(!name) return;
   const slug = profileSlug(name);
   if(!slug) return toast('That name has nothing usable in it.');
-  const ok = await act(`/api/profile/${encodeURIComponent(slug)}`, {medium:'paper'}, 'Profile created');
+  const ok = await act(`/api/profile/${encodeURIComponent(slug)}`, {}, 'Profile created');
   if(!ok) return;
   state.profileList = null; state.profileDetail = null;
   navigate({view:'print', id:null, step:null, profile:slug}, {replace:true});
@@ -3127,9 +3129,9 @@ async function paintProfile(){
     <div class="panel p-3 mb-3">
       <div class="d-flex align-items-center gap-2 flex-wrap">
         <h5 class="mb-0">${esc(p.name)}</h5>
-        <span class="chip">${esc(p.medium_label)}</span>
+        <span class="chip ${p.how === 'measured' ? 'good' : (p.how === 'by hand' ? '' : 'warn')}"
+              title="How this profile corrects">${esc(p.how)}</span>
         ${active ? '<span class="chip good">active</span>' : ''}
-        ${p.preset && !p.stored ? '<span class="chip">built-in preset</span>' : ''}
         <span class="ms-auto d-flex gap-2">
           ${active ? '' : `<button class="btn btn-sm btn-outline-secondary"
             onclick="useProfile('${esc(p.name)}')">Use for sheets</button>`}
@@ -3137,10 +3139,10 @@ async function paintProfile(){
             <button class="btn btn-sm btn-ghost" onclick="deleteProfile()">Delete</button>` : ''}
         </span>
       </div>
-      ${p.stored ? '' : `<p class="hint mb-0 mt-2">A preset is a starting point, not a
-        measurement — make it a profile of your own to add notes and calibrate it.
-        ${p.medium === 'none' ? 'Except this one: “none” means correct nothing, so there is nothing to measure.'
-          : `<button class="btn btn-sm btn-ghost" onclick="copyPreset()">Make ${esc(p.name)} a profile</button>`}</p>`}
+      ${p.stored ? '' : `<p class="hint mb-0 mt-2">This is the identity — it
+        corrects nothing, and there is nothing in it to set. A medium you print on
+        wants its own profile: <button class="btn btn-sm btn-ghost"
+        onclick="newProfile()">make one</button></p>`}
     </div>
 
     ${p.stored ? `<div class="panel p-3 mb-3">
@@ -3155,21 +3157,67 @@ async function paintProfile(){
       </div>
     </div>` : ''}
 
+    ${p.stored ? byHandPanel(p) : ''}
+    ${p.stored ? calibrationPanel(p) : ''}`;
+}
+
+/* The no-scanner route, stated as an equal. Four numbers, a preview so they are
+   not set blind, and a printable strip so the final call is made on paper — which
+   is the only place a medium can be judged. */
+function byHandPanel(p){
+  const keys = state.profileList.recipe_keys || [];
+  const [lo, hi] = state.profileList.recipe_range || [0, 3];
+  const beaten = p.how === 'measured';
+  return `
     <div class="panel p-3 mb-3">
-      <div class="eyebrow mb-1">Starting recipe</div>
-      <p class="hint">Four multipliers applied at print time. ${p.calibrated
-        ? 'This profile is <b>measured</b>, and the measurement supersedes these — they are kept only as the record of where it started.'
-        : 'Guesswork until you calibrate: it is the best a number typed by hand can do.'}</p>
-      <div class="recipe">${(state.profileList.recipe_keys || []).map(k => `
+      <div class="d-flex align-items-baseline gap-2 mb-1">
+        <div class="eyebrow">By hand</div>
+        ${beaten ? '<span class="chip">superseded by the measurement</span>' : ''}
+      </div>
+      <p class="hint">Four multipliers applied at print time — the route for when
+        you have no scanner. ${beaten
+          ? 'This profile is measured, and a measurement wins: these are kept as the record of where it started.'
+          : 'Set them, print the strip below on the medium, and keep the value that looks right. A screen is not the paper, so the last word belongs to a print.'}</p>
+      <div class="recipe">${keys.map(k => `
         <div class="setting"><label for="pf_${k}">${esc(k)}</label>
           <input class="form-control form-control-sm mono" type="number" id="pf_${k}"
-                 min="0" max="3" step="0.01" value="${p.recipe[k]}"
-                 ${p.stored ? '' : 'disabled'}></div>`).join('')}</div>
-      ${p.stored ? `<div class="mt-2"><button class="btn btn-sm btn-outline-secondary"
-        onclick="saveRecipe()">Save recipe</button></div>` : ''}
-    </div>
-
-    ${p.stored ? calibrationPanel(p) : ''}`;
+                 min="${lo}" max="${hi}" step="0.01" value="${p.recipe[k]}"></div>`).join('')}</div>
+      <div class="d-flex gap-2 mt-2 flex-wrap align-items-center">
+        <button class="btn btn-sm btn-outline-secondary" onclick="saveRecipe()">Save numbers</button>
+        <button class="btn btn-sm btn-ghost" onclick="showPreview()">${
+          state.previewOf === p.name ? 'Hide preview' : 'Preview on a card'}</button>
+      </div>
+      <hr class="rule my-3">
+      <div class="eyebrow mb-1">Decide it on paper</div>
+      <div class="d-flex gap-2 flex-wrap align-items-center">
+        <span class="hint mb-0">One page of the same card at a row of values for</span>
+        <select class="form-select form-select-sm" id="pf_vary" style="max-width:9rem"
+                aria-label="which number to vary">
+          ${keys.map(k => `<option>${esc(k)}</option>`).join('')}</select>
+        <select class="form-select form-select-sm" id="pf_steps" style="max-width:5rem"
+                aria-label="how many variations">
+          ${[3, 5, 7, 9].map(n => `<option ${n === 5 ? 'selected' : ''}>${n}</option>`).join('')}</select>
+        <button class="btn btn-sm btn-outline-secondary" onclick="getStrip()">Get the strip</button>
+        <span class="hint mb-0 w-100">Print it on the medium, read the label under the
+          one that looks right, and set that number above. One knob at a time: a page
+          where two things changed tells you which page you like, not which value to keep.</span>
+      </div>
+      ${state.previewOf === p.name ? `
+        <div class="eyebrow mt-3 mb-1">Before | after</div>
+        <img class="proof" alt="the same card without and with this profile"
+             src="/api/profile/${encodeURIComponent(p.name)}/preview">
+        <p class="hint mb-0 mt-1">Left is the stored card, right is what this
+          profile would print. Judge the direction here and the amount on paper.</p>` : ''}
+    </div>`;
+}
+function showPreview(){
+  state.previewOf = state.previewOf === state.profile ? null : state.profile;
+  paintProfile();
+}
+function getStrip(){
+  const vary = $('#pf_vary').value, steps = $('#pf_steps').value;
+  window.open(`/api/profile/${encodeURIComponent(state.profile)}/strip`
+    + `?vary=${encodeURIComponent(vary)}&steps=${encodeURIComponent(steps)}`, '_blank');
 }
 
 /* The calibration loop, as a screen: where the next chart goes, what every round
@@ -3301,18 +3349,6 @@ function allSlots(p){
 async function useProfile(name){
   if(await act(`/api/profile/${encodeURIComponent(name)}/use`, {}, `Sheets now use ${name}`))
     reloadProfiles();
-}
-/* Keeping the preset's own name is what the CLI does when you calibrate a
-   preset, and a stored profile shadows the built-in of the same name. */
-async function copyPreset(){
-  const p = state.profileDetail;
-  const slug = p.name;
-  if(await act(`/api/profile/${encodeURIComponent(slug)}`,
-               {medium:p.medium, notes:`Started from the built-in ${p.medium_label.toLowerCase()} preset.`},
-               'Profile created')){
-    state.profileList = null; state.profileDetail = null;
-    navigate({view:'print', id:null, step:null, profile:slug}, {replace:true});
-  }
 }
 async function renameProfile(){
   const name = await askName('Rename this profile', state.profileDetail.name,

@@ -505,6 +505,68 @@ def impose_to_pdf(cells: list[Cell], cfg: Config, dst: Path) -> int:
     return _pages_to_pdf(_iter_pages(cells, cfg), dst, cfg)
 
 
+def labelled_page(
+    cfg: Config, tiles: Sequence[tuple[str, Image.Image]], trim: Trim
+) -> Image.Image:
+    """One page of the same card at several settings, each labelled underneath.
+
+    The no-scanner way to choose a number: print this, look at it on the medium,
+    and read off the label under the one that looks right. Every tile is at true
+    card size, because a correction judged at thumbnail size is not judged.
+    """
+    page = blank_page(cfg)
+    draw = ImageDraw.Draw(page)
+    ppm = _ppm(cfg)
+    cell_w, cell_h = round(trim[0] * ppm), round(trim[1] * ppm)
+    label_h = round(_LABEL_MM * ppm)
+    margin = round(cfg.sheet_margin_mm * ppm)
+    gap = round(_TILE_GAP_MM * ppm)
+    cols = max(1, (page.width - 2 * margin + gap) // (cell_w + gap))
+    font = _label_font(round(_LABEL_MM * ppm * 0.55))
+    for i, (label, im) in enumerate(tiles):
+        col, row = i % cols, i // cols
+        x = margin + col * (cell_w + gap)
+        y = margin + row * (cell_h + label_h + gap)
+        if y + cell_h + label_h > page.height - margin:
+            break  # the rest do not fit; the caller is told how many were placed
+        page.paste(fit(im, cell_w, cell_h, cfg.sheet_fit), (x, y))
+        draw.text(
+            (x, y + cell_h + label_h * 0.7),
+            label,
+            fill=(0, 0, 0),
+            font=font,
+            anchor="ls",
+        )
+    return page
+
+
+def tiles_per_page(cfg: Config, trim: Trim) -> int:
+    """How many labelled tiles one page holds, so the caller can say what it cut."""
+    ppm = _ppm(cfg)
+    cell_w, cell_h = round(trim[0] * ppm), round(trim[1] * ppm)
+    label_h = round(_LABEL_MM * ppm)
+    margin = round(cfg.sheet_margin_mm * ppm)
+    gap = round(_TILE_GAP_MM * ppm)
+    page_w, page_h = _page_size_px(cfg)
+    cols = max(1, (page_w - 2 * margin + gap) // (cell_w + gap))
+    rows = max(1, (page_h - 2 * margin + gap) // (cell_h + label_h + gap))
+    return int(cols * rows)
+
+
+#: room under each tile for its label, and the space between tiles
+_LABEL_MM = 6.0
+_TILE_GAP_MM = 4.0
+
+
+def _label_font(size: int) -> Any:
+    from PIL import ImageFont
+
+    try:
+        return ImageFont.load_default(size=max(8, size))
+    except (TypeError, AttributeError):  # pragma: no cover — Pillow < 10.1
+        return ImageFont.load_default()
+
+
 def write_page_pdf(page: Image.Image, dst: Path, cfg: Config) -> None:
     """Write one already-composed page as a lossless PDF (the calibration chart).
 

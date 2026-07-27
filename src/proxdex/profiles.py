@@ -1,9 +1,14 @@
 """Print profiles: one per medium you actually print on.
 
 A profile is everything proxdex needs to know about "matte 200g on the XP-15000
-with colour management off": a name, **your notes**, the starting-point recipe it
-began from, and the calibration rounds measured on it. One library holds as many
-as you like, and `[print] profile` names the one a sheet uses by default.
+with colour management off": a name, **your notes**, and how it corrects — either
+four numbers you set by hand or the calibration rounds measured on it. One library
+holds as many as you like, and `[print] profile` names the one a sheet uses by
+default.
+
+Nothing ships pre-filled. There is one built-in name, ``none``, and it is the
+identity: no correction at all. Every real profile is one you made, because a
+medium is a thing you own and nobody else's numbers describe it.
 
 Why a file per profile rather than settings in ``proxdex.toml``:
 
@@ -37,10 +42,13 @@ from proxdex import calibrate
 from proxdex.calibrate import GRID, Coef, Correction, Error, Patches, Slot
 from proxdex.config import Config
 from proxdex.errors import ProxdexError
-from proxdex.media import Preset, Recipe, preset
+from proxdex.media import RECIPE_KEYS, Recipe
 
 #: where profiles live inside a library
 DIR = "profiles"
+#: the one built-in name: the identity, correcting nothing. Reserved, so a real
+#: profile can never be called it and quietly shadow "leave my cards alone".
+NONE = "none"
 #: a grid is exactly (cols, rows)
 _PAIR = 2
 _NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,47}$")
@@ -122,10 +130,9 @@ class Round:
 
 @dataclass(slots=True)
 class Profile:
-    """A named medium: its notes, its recipe, and its calibration history."""
+    """A named medium: its notes, and how it corrects — by hand, or measured."""
 
     name: str
-    medium: Preset = Preset.NONE
     notes: str = ""
     recipe: Recipe = field(default_factory=Recipe)
     grid: tuple[int, int] = GRID
@@ -133,7 +140,7 @@ class Profile:
     #: the slot the last emitted chart was rendered into, so reading its scan
     #: back needs no arguments
     pending: Slot | None = None
-    #: False for a built-in preset that has never been saved
+    #: False for the built-in identity, which is not a file
     stored: bool = False
     #: rounds in the file that could not be read back — a damaged entry, or one
     #: measured against a chart of a different size. Counted rather than dropped
@@ -145,6 +152,17 @@ class Profile:
     @property
     def calibrated(self) -> bool:
         return bool(self.live)
+
+    @property
+    def how(self) -> str:
+        """How this profile corrects, in one word — and it is one of three.
+
+        ``measured`` beats ``by hand`` beats ``identity``: a scan is evidence, four
+        numbers are a judgement, and neither is nothing.
+        """
+        if self.live:
+            return "measured"
+        return "by hand" if not self.recipe.neutral else "identity"
 
     @property
     def live(self) -> list[Round]:
@@ -272,7 +290,6 @@ class Profile:
     def json(self) -> dict[str, Any]:
         return {
             "name": self.name,
-            "medium": self.medium.value,
             "notes": self.notes,
             "recipe": self.recipe.json(),
             "grid": list(self.grid),
@@ -285,9 +302,8 @@ class Profile:
         residual = self.residual
         return {
             "name": self.name,
-            "medium": self.medium.value,
-            "medium_label": self.medium.label,
             "notes": self.notes,
+            "how": self.how,
             "recipe": self.recipe.json(),
             "rounds": len(self.rounds),
             "live": len(self.live),
@@ -296,7 +312,8 @@ class Profile:
             "next_slot": self.next_slot.json(),
             "grid": list(self.grid),
             "stored": self.stored,
-            "preset": preset(self.name) is not None,
+            "identity": self.name == NONE,
+            "recipe_keys": list(RECIPE_KEYS),
             "unreadable": self.unreadable,
             "patches": len(calibrate.chart()),
         }
@@ -390,7 +407,6 @@ def read(root: Path, name: str) -> Profile | None:
     pending = raw.get("pending")
     return Profile(
         name=slug(_text(raw.get("name")) or path.stem),
-        medium=preset(_text(raw.get("medium"))) or Preset.NONE,
         notes=_text(raw.get("notes")),
         recipe=Recipe.read(raw.get("recipe")),
         grid=_grid(raw.get("grid")),
@@ -402,13 +418,13 @@ def read(root: Path, name: str) -> Profile | None:
 
 
 def names(root: Path) -> list[str]:
-    """Every stored profile, plus the built-in presets, without duplicates."""
+    """Every stored profile, plus the identity, without duplicates."""
     stored = sorted(p.stem for p in profiles_dir(root).glob("*.json"))
-    return stored + [p.value for p in Preset if p.value not in stored]
+    return stored + ([NONE] if NONE not in stored else [])
 
 
 def listing(root: Path) -> list[Profile]:
-    """Every profile a sheet could use — stored ones first, then unsaved presets."""
+    """Every profile a sheet could use — the ones you made, then the identity."""
     out: list[Profile] = []
     for name in names(root):
         profile = resolve(root, name)
@@ -417,17 +433,17 @@ def listing(root: Path) -> list[Profile]:
 
 
 def resolve(root: Path, name: str) -> Profile:
-    """The profile called ``name``: stored, or synthesized from a preset.
+    """The profile called ``name``, or the identity.
 
-    A preset that has never been saved comes back with ``stored=False``, so the
-    caller can offer to keep it rather than pretending it is already a profile.
+    ``none`` is the only name that resolves without a file, and it corrects
+    nothing. Everything else has to have been made, because proxdex has no numbers
+    of its own to offer for your paper.
     """
     stored = read(root, name)
     if stored is not None:
         return stored
-    kind = preset(name)
-    if kind is not None:
-        return Profile(name=kind.value, medium=kind, notes="", recipe=kind.recipe)
+    if slug(name) == NONE:
+        return Profile(name=NONE, notes="", recipe=Recipe())
     raise ProxdexError(
         f"no print profile named '{name}' — `proxdex profile list`, or "
         f"`proxdex profile new {name}`"
@@ -436,7 +452,7 @@ def resolve(root: Path, name: str) -> Profile:
 
 def active(root: Path, cfg: Config, override: str | None = None) -> Profile:
     """The profile card *fronts* print through: the flag, else ``[print] profile``."""
-    return resolve(root, override or cfg.print_profile or Preset.NONE.value)
+    return resolve(root, override or cfg.print_profile or NONE)
 
 
 def active_back(
@@ -458,16 +474,20 @@ def active_back(
     return resolve(root, name)
 
 
-def create(
-    root: Path,
-    name: str,
-    *,
-    medium: Preset = Preset.NONE,
-    notes: str = "",
-) -> Profile:
+def create(root: Path, name: str, *, notes: str = "") -> Profile:
+    """A new profile at identity: it changes nothing until you say what it does.
+
+    From here there are two honest routes — measure it with the chart loop, or set
+    the four numbers by hand and judge them off a test print.
+    """
+    if slug(name) == NONE:
+        raise ProxdexError(
+            f"'{NONE}' is reserved for no correction at all — name the medium you "
+            "are actually printing on"
+        )
     if exists(root, name):
         raise ProxdexError(f"a profile named '{slug(name)}' already exists")
-    profile = Profile(name=slug(name), medium=medium, notes=notes, recipe=medium.recipe)
+    profile = Profile(name=slug(name), notes=notes, recipe=Recipe())
     save(root, profile)
     return profile
 

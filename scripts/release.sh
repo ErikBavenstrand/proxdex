@@ -71,7 +71,10 @@ sys.exit('wheel is missing: ' + ', '.join(missing)) if missing else print(f'  {l
 
 if [[ -n $notes ]]; then
   git commit --quiet -am "Release $tag" || die "nothing to commit — is the version already $version?"
-  git tag -a "$tag" -F "$notes"
+  # --cleanup=verbatim or git strips every line starting with '#' as a comment,
+  # which silently eats the markdown headings out of the release notes — the tag
+  # message *is* the GitHub release, so it has to survive as written
+  git tag -a "$tag" --cleanup=verbatim -F "$notes"
 else
   git commit --quiet -am "Release $tag"
   step "tagging — the message you write becomes the GitHub release notes"

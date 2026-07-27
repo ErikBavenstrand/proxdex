@@ -14,6 +14,10 @@ dependencies = [
     "rich-click>=1.8",
     "cardbleed>=0.4.1",
     "img2pdf>=0.5",
+    # not a UI dependency, though it was declared as one: `sheet` writes its batch
+    # manifest through it and `config set` edits proxdex.toml comment-preservingly,
+    # so a plain `pip install proxdex` crashed on `sheet` with ModuleNotFoundError.
+    "tomlkit>=0.12",
 ]
 keywords = ["pokemon", "card", "proxy", "printing", "tcg", "library", "upscale"]
 classifiers = [
@@ -31,9 +35,9 @@ classifiers = [
 [project.optional-dependencies]
 ui = [
     "fastapi>=0.110",
+    "pydantic>=2.6",            # webui imports it directly; not fastapi's to guarantee
     "uvicorn>=0.29",
     "python-multipart>=0.0.9",  # file uploads (import / back / calibration scan)
-    "tomlkit>=0.12",            # comment-preserving config edits
 ]
 
 [project.urls]
@@ -51,11 +55,12 @@ dev = [
     # commit.
     "ruff==0.16.0",
     "pyright==1.1.407",
-    # so lint/typecheck see the optional web-UI module
-    "fastapi>=0.110",
-    "uvicorn>=0.29",
-    "python-multipart>=0.0.9",
-    "tomlkit>=0.12",
+    # so lint/typecheck see the optional web-UI module. Listed as the *extra*
+    # rather than spelled out again: naming them here is what hid `tomlkit` being
+    # a core import declared under `[ui]` — the dev environment had it either way,
+    # so no test and no CI job could tell. `tests/test_deps.py` now reads the
+    # declaration instead of asking whether an import happens to work.
+    "proxdex[ui]",
     # the test suite (small and deliberate — see CLAUDE.md), pinned for the same
     # reason the linters are: CI resolves fresh, so an unpinned tool can turn a
     # release red on its own account.

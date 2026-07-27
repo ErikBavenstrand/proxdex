@@ -69,3 +69,62 @@ jobs:
           uv run proxdex --root lib where
           uv run proxdex --root lib ls --json
           test -f lib/print-batches/*/fronts.pdf
+
+  # What a *user* installs, which is not what `uv run` gives you. Everything above
+  # runs in the project environment, and that environment has the dev group — so
+  # `tomlkit` was reachable there while being declared only under the `[ui]` extra.
+  # It is imported by `sheet` (the batch manifest) and `config set`, so a plain
+  # `pip install proxdex` shipped a CLI whose `sheet` command died with
+  # ModuleNotFoundError *after* writing the PDF. Green on every platform, in a
+  # matrix of six, for two releases.
+  #
+  # So: build the wheel, install it into a bare venv with no extras and no dev
+  # group, and drive the same pipeline through the installed console script.
+  installed:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: A bare install, driven end to end
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv build --quiet
+          uv venv bare
+          # the venv's own layout differs per platform; ask it where its scripts are
+          if [[ -d bare/Scripts ]]; then bin=bare/Scripts; else bin=bare/bin; fi
+          VIRTUAL_ENV=bare uv pip install --quiet dist/*.whl
+          "$bin/proxdex" --version
+          "$bin/proxdex" init lib
+          "$bin/python" -c "
+          from PIL import Image
+          from pathlib import Path
+          Path('lib/cards/base1-base/base1-4_charizard').mkdir(parents=True)
+          Path('lib/cards/base1-base/.game').write_text('pokemon')
+          im = Image.new('RGB', (600, 825), (240, 200, 60))
+          im.paste(Image.new('RGB', (520, 730), (40, 90, 170)), (40, 48))
+          im.save('card.png')
+          "
+          "$bin/proxdex" --root lib import card.png --id base1-4 --stage original
+          "$bin/proxdex" --root lib border --auto base1-4
+          "$bin/proxdex" --root lib skip upscale base1-4
+          "$bin/proxdex" --root lib skip grade base1-4
+          "$bin/proxdex" --root lib sheet ci --no-open   # <- the command that broke
+          "$bin/proxdex" --root lib config set sheet.dpi=1200  # <- also tomlkit
+          "$bin/proxdex" --root lib batches
+          "$bin/proxdex" --root lib ls --json
+          test -f lib/print-batches/*/fronts.pdf
+      # `proxdex ui` must still refuse *politely* without the extra, rather than
+      # traceback — the one dependency that is genuinely optional.
+      - name: Without the ui extra, the ui command explains itself
+        shell: bash
+        run: |
+          if [[ -d bare/Scripts ]]; then bin=bare/Scripts; else bin=bare/bin; fi
+          out=$("$bin/proxdex" --root lib ui 2>&1 || true)
+          echo "$out"
+          grep -q 'proxdex\[ui\]' <<<"$out" || {
+            echo "expected an install hint, not: $out"; exit 1; }

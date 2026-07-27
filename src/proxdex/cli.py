@@ -3488,7 +3488,11 @@ def main() -> None:
     try:
         cli(args=_hoist_root(sys.argv[1:]))
     except ProxdexError as e:
-        err.print(f"[bold red]error:[/] {e}")
+        # escaped: an error text is arbitrary, and rich reads `[...]` as markup and
+        # *removes* it. The `proxdex ui` hint said `install "proxdex"` — dropping
+        # the `[ui]` that is the entire point of the sentence — and any message
+        # naming a path or a stage list would be silently edited the same way.
+        err.print(f"[bold red]error:[/] {escape(str(e))}")
         raise SystemExit(1) from e
     finally:
         _api_note()

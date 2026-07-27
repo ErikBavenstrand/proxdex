@@ -114,3 +114,36 @@ class TestTheRealCommand:
         done = self.run("ascii", "--help")
         assert done.returncode == 0
         assert b"?" in done.stdout
+
+
+class TestAnErrorSaysWhatItMeans:
+    """An error message is arbitrary text, and rich reads ``[...]`` as markup and
+    *removes* it. So the hint for the one genuinely optional dependency read
+
+        install with `uv tool install "proxdex"`
+
+    on a machine without it — with the ``[ui]`` that is the entire point of the
+    sentence silently deleted. Any message naming a path with brackets, or a
+    stage list, would be edited the same way.
+    """
+
+    def test_the_bracket_survives_the_console(self) -> None:
+        from rich.console import Console
+
+        from proxdex.cli import escape
+
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False, width=200)
+        text = 'install with `pip install "proxdex[ui]"`'
+        console.print(f"[bold red]error:[/] {escape(text)}")
+        assert "proxdex[ui]" in buf.getvalue()
+
+    def test_unescaped_is_the_bug_being_prevented(self) -> None:
+        """Naming what goes wrong, so the guard above cannot be 'simplified'."""
+        from rich.console import Console
+
+        buf = io.StringIO()
+        Console(file=buf, force_terminal=False, width=200).print(
+            'install with `pip install "proxdex[ui]"`'
+        )
+        assert "proxdex[ui]" not in buf.getvalue()

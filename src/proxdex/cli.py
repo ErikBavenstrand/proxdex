@@ -3450,7 +3450,41 @@ def _hoist_root(args: Sequence[str]) -> list[str]:
     return root + rest
 
 
+#: the characters proxdex prints on purpose — the pipeline's state marks, the
+#: size and progress glyphs. If a stream cannot encode *these*, it cannot encode
+#: proxdex's output at all.
+GLYPHS = "→·×⤳⌖✓⚠▤⬗◐↳—"
+
+
+def writable_output() -> None:
+    """Make sure stdout and stderr can carry proxdex's own characters.
+
+    They are used deliberately (see the RUF001 ignore in pyproject) and a stream
+    that cannot encode them must **degrade, not crash**. It crashed: piping
+    ``proxdex --help`` on Windows died with ``UnicodeEncodeError`` on ``→``,
+    because a redirected stream there falls back to the ANSI codepage (cp1252)
+    rather than the console's own UTF-8 path. It is not a Windows quirk either —
+    ``LC_ALL=C`` on Linux, which is what a container or a cron job often has, does
+    exactly the same thing.
+
+    So: UTF-8 where the stream cannot manage as it stands, and ``errors=replace``
+    so the worst case is a ``?`` in place of a tick rather than a traceback in
+    place of the command.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        encoding = getattr(stream, "encoding", None)
+        if reconfigure is None:
+            continue
+        try:
+            GLYPHS.encode(encoding or "ascii")
+        except (UnicodeEncodeError, LookupError):
+            with contextlib.suppress(Exception):
+                reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> None:
+    writable_output()
     try:
         cli(args=_hoist_root(sys.argv[1:]))
     except ProxdexError as e:

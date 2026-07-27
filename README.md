@@ -329,7 +329,30 @@ proxdex config set sheet.dpi=1200 sheet.faces=duplex   # comment-preserving
 proxdex batches                # what has been imposed, and what is printed
 proxdex rm ex3-90              # delete a card (asks first)
 proxdex ls --json              # the same shape /api/cards serves the UI
+proxdex doctor                 # stored images that aren't what proxdex writes now
 ```
+
+### `doctor` — the files you already have
+
+proxdex learns things about how a stage image has to be *stored*, and a library
+filled last year does not benefit from a fix applied at the front door. `doctor`
+reads the header of every stored image and names what a current proxdex would have
+written differently: a die-cut corner left transparent (it prints as whatever was
+under the alpha), a grayscale or CMYK file, an unreadable file, or a bordered
+master that is not the trim aspect — which `sheet` crops to fit, losing border off
+two edges without saying so. Nothing about any of them is visible on screen.
+
+```bash
+proxdex doctor                 # report only; reads headers, writes nothing
+proxdex doctor --fix           # repair what is a repair, in place (asks first)
+proxdex doctor ex3-90          # or scope it to some cards
+```
+
+A repair rewrites only the file it names and leaves every later stage alone — the
+picture does not change, so nothing derived from it went stale. A wrong aspect is
+*not* repaired: re-fitting a border needs to know where the border is, which is a
+decision, so `doctor` names the step to re-run instead. The same check is the
+settings screen's **stored images** panel in the web UI.
 
 ### Two games in one library
 

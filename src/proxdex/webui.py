@@ -40,6 +40,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from proxdex import (
     borders,
     calibrate,
+    doctor,
     frames,
     games,
     imports,
@@ -296,6 +297,12 @@ class RoundBody(Body):
 class BackBody(Body):
     game: GameId | None = None
     url: str | None = Field(default=None, max_length=2048)
+
+
+class DoctorBody(Body):
+    """Which cards to repair. Empty means the whole library, as the CLI's does."""
+
+    ids: list[CardId] = Field(default_factory=list, max_length=512)
 
 
 class ConfigBody(Body):
@@ -994,6 +1001,19 @@ def create_app(lib: Library) -> FastAPI:
     def api_index() -> dict[str, Any]:
         report.write_index(lib)
         return {"ok": True, "log": "INDEX.md regenerated"}
+
+    # ---- doctor ------------------------------------------------------------
+    # `proxdex doctor`, both halves of it. The report is read directly (it opens
+    # headers and writes nothing); the repair shells out like every other
+    # mutation, so the CLI stays the only thing that rewrites a stored master.
+    @app.get("/api/doctor")
+    def api_doctor(ids: str = "") -> dict[str, Any]:
+        cards = lib.select(tuple(i for i in ids.split(",") if i))
+        return doctor.json_report(doctor.examine(cards, Config.load(lib.root)))
+
+    @app.post("/api/doctor/fix")
+    def api_doctor_fix(body: DoctorBody) -> dict[str, Any]:
+        return run_cli(["doctor", "--fix", "--yes", *body.ids])
 
     @app.post("/api/back")
     def api_back(body: BackBody) -> dict[str, Any]:

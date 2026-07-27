@@ -47,6 +47,7 @@ from proxdex import (
     steps,
 )
 from proxdex import calibrate as calibrate_mod
+from proxdex import doctor as doctor_mod
 from proxdex import grade as grade_mod
 from proxdex import sheet as sheet_mod
 from proxdex import upscale as upscale_mod
@@ -81,7 +82,17 @@ click.rich_click.COMMAND_GROUPS = {
     "proxdex": [
         {
             "name": "Library",
-            "commands": ["init", "where", "ls", "show", "rm", "config", "index", "ui"],
+            "commands": [
+                "init",
+                "where",
+                "ls",
+                "show",
+                "rm",
+                "config",
+                "doctor",
+                "index",
+                "ui",
+            ],
         },
         {"name": "Acquire", "commands": ["search", "fetch", "import"]},
         {"name": "Prepare", "commands": ["border", "upscale", "grade", "frames"]},
@@ -892,7 +903,7 @@ def import_(
 
 
 def _flatten_filed(path: Path) -> None:
-    """Composite away any transparency in a file just written into a stage.
+    """Put a file just written into a stage in the form proxdex stores: **RGB**.
 
     **No stage image in the library carries an alpha channel**, and that has to be
     enforced everywhere one is written, not once at the front door. ``fetch``
@@ -903,11 +914,17 @@ def _flatten_filed(path: Path) -> None:
     on a real library that is near-white on one card (212,225,229 against a
     143,171,174 border) and near-black on an upscaled one (mean 51, min 0).
 
-    Cheap and non-destructive: a file with nothing to remove is not rewritten, so
-    an imported file's bytes stay verbatim in the ordinary case.
+    A mode that is merely not RGB — a grayscale or CMYK scan ``import`` copied in —
+    is the same problem one step further out: every tool downstream converts it its
+    own way, so the pixels that reach the imposition are not the ones proxdex
+    measured. Both are the one call, and both are what `proxdex doctor` reports on
+    a library filed before this ran here.
+
+    Cheap and non-destructive: a file already stored as RGB is not rewritten, so an
+    imported file's bytes stay verbatim in the ordinary case.
     """
     with Image.open(path) as im:
-        if not sources.transparent(im):
+        if im.mode == "RGB" and not sources.transparent(im):
             return
         flat = sources.flatten(im)
     flat.save(path)
@@ -2020,6 +2037,104 @@ def border(
     _each(lib.select(ids), one, "bordering")
     if not dry_run:
         _reindex(lib)
+
+
+@cli.command()
+@click.argument("ids", nargs=-1, metavar="[ID...]")
+@click.option(
+    "--fix", is_flag=True, help="Repair, in place, every finding that can be repaired."
+)
+@click.option("-y", "--yes", is_flag=True, help="Repair without confirming.")
+@click.pass_context
+def doctor(ctx: click.Context, ids: tuple[str, ...], fix: bool, yes: bool) -> None:
+    """Check stored images against what proxdex would write today.
+
+    A library outlives the code that filled it, and every difference this looks
+    for is one you cannot see on screen — a transparent die-cut corner, a
+    grayscale file, a bordered master that is not the trim aspect. They show up on
+    paper.
+
+    Reads headers only and writes nothing until you pass [cyan]--fix[/], which
+    repairs the two findings that *are* a repair (both are the same call every
+    filing point already makes) and names the step to re-run for the rest.
+    Downstream stages are left alone: the picture does not change, so nothing
+    derived from it went stale.
+    """
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    cards = lib.select(ids)
+    found = doctor_mod.examine(cards, cfg)
+    scanned = (
+        f"[dim]checked {found.images} image(s) across {found.cards} card(s)[/]"
+        if found.images
+        else "[dim]no stage images to check[/]"
+    )
+    if found.clean:
+        console.print("[green]✓[/] every stored image is what proxdex writes today")
+        console.print(scanned)
+        return
+
+    by_id = {c.id: c for c in cards}
+    table = Table(box=None, pad_edge=False, header_style="dim")
+    for col in ("card", "stage", "finding", "measured"):
+        table.add_column(col)
+    for f in found.findings:
+        card = by_id.get(f.id)
+        tone = "yellow" if f.repairable else "red"
+        table.add_row(
+            _label(card, f.face) if card else f.id,
+            f.stage.label,
+            f"[{tone}]{f.check.label}[/]",
+            f"[dim]{escape(f.detail)}[/]",
+        )
+    console.print(table)
+    console.print(scanned)
+    # one explanation per *kind* found, not per file: the sentence is the same for
+    # every file with the same defect, and it is the reason to act on it. Under
+    # `--fix` only the kinds that cannot be repaired are explained — the rest are
+    # about to be dealt with, and the reasons would bury what actually happened.
+    for ailment, n in found.counts().items():
+        check = doctor_mod.CHECK[ailment]
+        if fix and check.repairable:
+            continue
+        console.print(f"\n[bold]{check.label}[/] [dim]× {n}[/] — {check.why}")
+        if check.hint:
+            console.print(f"  [dim]↳ {escape(check.hint)}[/]")
+
+    if not fix:
+        if found.repairable:
+            console.print(
+                f"\n[cyan]→[/] {len(found.repairable)} of {len(found.findings)} can be "
+                "repaired in place — run `proxdex doctor --fix`"
+            )
+        else:
+            console.print("\n[dim]nothing here is a repair — see the hints above.[/]")
+        return
+    if not found.repairable:
+        console.print("\n[dim]nothing to repair.[/]")
+        return
+    if not yes:
+        if not sys.stdin.isatty():
+            raise click.UsageError("not a terminal — pass --yes to repair these")
+        if not click.confirm(
+            f"\nRepair {len(found.repairable)} file(s)?", default=True
+        ):
+            console.print("[dim]nothing repaired.[/]")
+            return
+
+    def one(finding: doctor_mod.Finding) -> None:
+        doctor_mod.repair(finding)
+        console.print(
+            f"[green]✓[/] {finding.path.name} [dim]({finding.check.label})[/]"
+        )
+
+    failed = _each(found.repairable, one, "repairing")
+    console.print(
+        f"[dim]{len(found.repairable) - failed} repaired"
+        + (f", {failed} failed" if failed else "")
+        + (f", {len(found.stuck)} left for a step re-run" if found.stuck else "")
+        + "[/]"
+    )
 
 
 @cli.command()

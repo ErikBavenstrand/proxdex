@@ -23,6 +23,8 @@ Compact backlog. `- [ ]` = to do, `- [x]` = done. Keep each item to one terse li
 - [x] `mtg-extended-art` (sides 0) and `mtg-yellow-band` ship; both answered from the printing like `borderless`
 - [x] `Match.EFFECT` + game-wide rules (empty set) so a treatment can be assigned at all; `frame:future` re-aliased to `mtg-2003` (surveys within 0.05mm)
 - [ ] **Waiting on calipers**: measure the 5 MTG cards in `docs/measuring-frames.md`, then `frames set` each — shipped numbers are provisional
+- [ ] **Oversized cards resolve to a 63×88 spec**: `opca-9` (89×127mm) takes `mtg-m15`, whose inset is a fraction of 63×88 — ~3.5mm applied where ~2.45mm belongs. Needs an oversized spec (`ref_mm` already supports it) picked off the card's `.oversized` marker
+- [ ] Token frames never surveyed — they resolve to `mtg-m15` by default; measure or exclude explicitly
 - [ ] `frame:1993` has ±0.39mm internal spread (Alpha/Beta/Unlimited/Revised/4ed + foreign black-border runs all differ) — that era may want per-printing pins rather than one spec
 - [ ] Measure a modern Pokémon card (SV + SWSH) and add specs — 160 sets still on `pokemon-generic`, which is the WOTC numbers reused on an unchecked assumption
 - [x] Frame specs are library data: `specs.py` registry + rules (ranges/traits), per-card pin, `frames` group + UI screen, set coverage from the provider lists, `doctor` stale-spec

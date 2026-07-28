@@ -211,6 +211,50 @@ strip being read as border. The real bottom cannot be measured off a scan, which
 that one number is assumed symmetric with the top. **It is the single most useful thing
 your calipers can settle.**
 
+## One card per spec, and the ones that only look different
+
+Six geometries, not six appearances: there are hundreds of border *designs* and six
+distinct answers to "how far in from each cut edge does the border reach". Sol Ring
+alone has been printed in seven of these categories, which makes it a good way to see
+that most of the variety is picture rather than border.
+
+| spec | one card | `frame` | `border_color` | `frame_effects` |
+|---|---|---|---|---|
+| `mtg-1993` | [Sol Ring `leb-270`](https://scryfall.com/card/leb/270/sol-ring) | 1993 | black | – |
+| `mtg-1997` | [Sol Ring `me4-227`](https://scryfall.com/card/me4/227/sol-ring) | 1997 | black | – |
+| `mtg-2003` | [Sol Ring `c13-259`](https://scryfall.com/card/c13/259/sol-ring) | 2003 | black | – |
+| `mtg-m15` | [Sol Ring `msc-211`](https://scryfall.com/card/msc/211/sol-ring) | 2015 | black | – |
+| `mtg-extended-art` | [Sol Ring `cmr-700`](https://scryfall.com/card/cmr/700/sol-ring) | 2015 | black | `extendedart` |
+| `mtg-yellow-band` | [Bleachbone Verge `dft-501`](https://scryfall.com/card/dft/501/bleachbone-verge) | 2015 | yellow | `inverted` |
+| `borderless` | [Sol Ring `sld-2807`](https://scryfall.com/card/sld/2807/sol-ring) | 2015 | borderless | – |
+
+And the near misses — each measured, each resolving to one of the above:
+
+| looks like its own border | card | resolves to |
+|---|---|---|
+| `future` frame | [Sol Ring `mb2-233`](https://scryfall.com/card/mb2/233/sol-ring) | `mtg-2003`, within 0.05mm |
+| showcase | [Evolving Wilds `afr-353`](https://scryfall.com/card/afr/353/evolving-wilds) | `mtg-m15` |
+| retro frame in a modern set | [Sol Ring `sld-1664`](https://scryfall.com/card/sld/1664/sol-ring) | `mtg-1997` |
+| full art | [Sol Ring `sld-912`](https://scryfall.com/card/sld/912/sol-ring) | `mtg-m15` |
+| silver border | [Water Gun Balloon Game `und-85`](https://scryfall.com/card/und/85/water-gun-balloon-game) | `mtg-m15` |
+| gold border | [Swords to Plowshares `wc97-jk54`](https://scryfall.com/card/wc97/jk54/swords-to-plowshares) | `mtg-1997` |
+| white border | [Rampant Growth `8ed-274`](https://scryfall.com/card/8ed/274/rampant-growth) | `mtg-2003` |
+| etched foil | [Arcane Signet `p30m-1F★`](https://scryfall.com/card/p30m/1F%E2%98%85/arcane-signet) | `mtg-m15` |
+| legendary crown | [Urborg `tsr-287`](https://scryfall.com/card/tsr/287/urborg-tomb-of-yawgmoth) | `mtg-m15` |
+| art series | [Aang and Katara `atle-8`](https://scryfall.com/card/atle/8/aang-and-katara-aang-and-katara) | `borderless` |
+
+**Where six is a simplification rather than a fact.** The number depends on the 0.15mm
+tolerance the grouping uses: loosen it and 1997 / 2003 / future merge, tighten it and
+showcase (0.2–0.3mm off its generation) becomes a seventh. Showcase is excluded because
+a showcase frame is a different bespoke design *per set*, so that is variance across
+designs and not an offset worth encoding — a judgement, not a proof they are identical.
+
+**Two things genuinely wrong rather than simplified**, both on TODO.md:
+[`opca-9`](https://scryfall.com/card/opca/9/academy-at-tolaria-west) is an 89×127mm
+Planechase card and resolves to `mtg-m15`, whose inset is a fraction of 63×88 — so it
+targets ~3.5mm where ~2.45mm belongs. And token frames were never surveyed at all;
+they take `mtg-m15` by default.
+
 ## Checking it landed
 
 Two checks, cheap then real:

@@ -7,9 +7,5 @@ build/
 uv.lock
 .DS_Store
 
-# local-only, not part of the package
-CLAUDE.md
-TODO.md
-
 # browser-automation screenshots
 .playwright-mcp/

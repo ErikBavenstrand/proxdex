@@ -198,6 +198,9 @@ h6 { font-size: .9375rem; }
 .chip.good  { color: var(--proof); border-color: rgba(91,214,138,.4); }
 .chip.flip  { color: var(--mark);  border-color: rgba(242,65,140,.45); }
 .chip.bad   { color: var(--bad);   border-color: rgba(255,107,107,.4); }
+/* cyan is measurement everywhere in this UI, and a scanned spec is exactly that:
+   a number read off the publisher's own card, not a caliper reading and not a guess */
+.chip.reg   { color: var(--reg);   border-color: rgba(34,201,214,.4); }
 .pill {
   display: inline-flex; align-items: center; gap: .25rem; border-radius: 999px;
   padding: .1rem .55rem; font-size: .6875rem; font-weight: 600; white-space: nowrap;
@@ -777,6 +780,7 @@ img.proof { width: 100%; max-width: 32rem; border: 1px solid var(--rule); border
       <button class="navlink" data-view="search">Search</button>
       <button class="navlink" data-view="import">Import</button>
       <button class="navlink" data-view="sheet">Sheet</button>
+      <button class="navlink" data-view="frames">Frames</button>
       <button class="navlink" data-view="print">Print</button>
       <button class="navlink" data-view="settings">Settings</button>
     </nav>
@@ -911,6 +915,10 @@ function kindChips(c){
   }
   if(c.frame === 'borderless')
     out.push('<span class="chip" title="No printed frame, so the border step only corrects the aspect">borderless</span>');
+  // a pin is a decision somebody made about this one card, so it is worth a chip
+  // of its own: it outranks every rule, and nothing else on the tile would say so
+  if(c.pin)
+    out.push(`<span class="chip" title="Pinned to the ${esc(c.pin)} frame spec, whatever this set's rules say">pin: ${esc(c.pin)}</span>`);
   return out.join('');
 }
 const cardIndex = () => visible().findIndex(c => c.id === state.id);
@@ -1046,6 +1054,7 @@ function currentUrl(){
     return '/search' + (p.toString() ? '?' + p : '');
   }
   if(state.view === 'import') return '/import';
+  if(state.view === 'frames') return '/frames';
   if(state.view === 'settings') return '/settings';
   if(state.view === 'sheet') return '/sheet';
   if(state.view === 'print')
@@ -1067,6 +1076,7 @@ function routeFromUrl(){
     }};
   }
   if(parts[0] === 'import') return {view:'import', id:null, step:null};
+  if(parts[0] === 'frames') return {view:'frames', id:null, step:null};
   if(parts[0] === 'settings') return {view:'settings', id:null, step:null};
   if(parts[0] === 'sheet') return {view:'sheet', id:null, step:null};
   if(parts[0] === 'print')
@@ -1143,6 +1153,7 @@ function render(){
     } else if(state.search.q.trim()) doSearch();   // a /search?q=… link
   }
   else if(state.view === 'import') renderImport();
+  else if(state.view === 'frames') renderFrames();
   else if(state.view === 'sheet') renderSheet();
   else if(state.view === 'print') renderPrint();
   else if(state.view === 'settings') renderSettings();
@@ -1213,14 +1224,17 @@ function viewLibrary(){
     </a>`;
   }).join('');
 
-  const unmeasured = state.cards.filter(c => c.frame_measured === false).length;
-  const notice = unmeasured ? `
+  // not "this spec is only an estimate" — every shipped MTG spec is provisional,
+  // so that chip was on every card and meant nothing. This is the real fault: the
+  // card resolves through a dangling id or a rule nothing can decide.
+  const unsure = state.cards.filter(c => c.frame_sure === false).length;
+  const notice = unsure ? `
     <div class="panel p-2 px-3 mb-3 d-flex align-items-center gap-2 flex-wrap">
-      <span class="chip warn">estimated frame</span>
-      <span class="hint">${unmeasured === 1
-        ? 'One card belongs' : unmeasured + ' cards belong'} to a set with no measured border
-      spec. Border still runs, but against an estimate — run
-      <code>proxdex frames</code> to see which sets.</span>
+      <span class="chip warn">frame undecided</span>
+      <span class="hint">${unsure === 1
+        ? 'One card cannot be' : unsure + ' cards cannot be'} resolved to a spec with
+      confidence — a rule needs traits this card has no record of, or something names a
+      spec that is gone. <code>proxdex frames check</code> lists them.</span>
     </div>` : '';
 
   return `
@@ -2136,7 +2150,7 @@ async function delCard(){
    arrow keys, or typed as a percentage — because "close enough by eye" is
    exactly what the border step exists to avoid. */
 const align = {
-  on:false, meas:null, blue:{t:.08, r:.08, b:.08, l:.08},
+  on:false, meas:null, facts:null, blue:{t:.08, r:.08, b:.08, l:.08},
   plan:null, guide:'', sel:null, img:null,
   // which card+side the current marks were placed on, so switching either one
   // starts from a fresh rectangle instead of inheriting someone else's border
@@ -2163,6 +2177,20 @@ function setSearchRelated(on){ state.search.related = on; }
 const marksOn = c => align.show === null
   ? stStatus(c, SPEC('border').stage) !== 'done' : align.show;
 const EDGE_NAME = {t:'top', r:'right', b:'bottom', l:'left'};
+
+/* Read this side's image size and frame resolution without turning the marks on.
+   Keyed by card and side so a repaint cannot start a second request, and cleared
+   by every action that could change the answer (a pin, a run). */
+async function loadSpecFacts(c){
+  const key = `${c.id}/${state.face}`;
+  if(align.meas || align.facts === key) return;
+  align.facts = key;
+  try{
+    const m = await get(`/api/frame/${encodeURIComponent(c.id)}`
+      + `?stage=${PIPE()[0].stage}&face=${state.face}`);
+    if(m && !m.error && align.facts === key){ align.meas = m; renderAlignPanel(); }
+  } catch { /* the panel simply says nothing about the spec */ }
+}
 
 async function startAlign(){
   const c = card(); if(!c) return;
@@ -2430,6 +2458,26 @@ function marksToggle(c){
     <label class="form-check-label" style="font-size:.8125rem" for="al_show">
       Show the align marks on the card</label></div>`;
 }
+/* Which spec is in force, *why*, and the one control that changes it for good.
+   Shown whether or not the marks are up: it is a fact about the card, not about
+   the align tool. A per-run override lives in the step's own Frame setting; a pin
+   is a decision about this card, so it is offered where the card is. */
+function whyThisSpec(){
+  const res = align.meas && align.meas.resolution;
+  if(!res) return '';
+  return `
+    <div class="d-flex gap-2 align-items-center flex-wrap mt-2">
+      <span class="chip ${res.sure ? 'good' : 'warn'}">${esc(res.via_label)}</span>
+      <span class="hint mono">${esc(res.spec.id)}</span>
+      ${align.meas.pin
+        ? `<button class="btn btn-sm btn-ghost ms-auto" onclick="unpinCard()"
+             title="Back to whatever the rules resolve">Unpin</button>`
+        : `<button class="btn btn-sm btn-ghost ms-auto" onclick="pinCard()"
+             title="Pin this card to the spec selected above, for every later run">Pin this spec</button>`}
+    </div>
+    ${res.missing || res.undecided.length ? `<p class="hint mb-0 mt-1"
+      style="color:var(--hold)">${esc(res.note)}</p>` : ''}`;
+}
 function renderAlignPanel(){
   const p = $('#alpanel'), c = card(); if(!p || !c) return;
   if(!align.on){
@@ -2440,15 +2488,21 @@ function renderAlignPanel(){
         ? `<p class="hint mb-0">Fetch this side's original first — the fit is measured
            against it.</p>`
         : marksToggle(c) + `<p class="hint mb-0">Turn the marks on to place the inner
-           border edge again and reshape from the original.</p>`}`;
+           border edge again and reshape from the original.</p>` + whyThisSpec()}`;
+    // which spec is in force is a fact about the card, so it is read even with the
+    // marks down — once per card and side, and the panel repaints when it lands
+    if(!noSource) loadSpecFacts(c);
     return;
   }
   const g = activeGuide();
-  const warn = g.measured ? '' : `
+  // the spec's own account of where its numbers came from, verbatim and unchipped.
+  // There is no grade to show: a spec is four numbers and this sentence.
+  const warn = g.note ? `
     <div class="d-flex gap-2 align-items-start mt-2">
-      <span class="chip warn flex-shrink-0">estimated</span>
+      <span class="chip faint flex-shrink-0">${g.frameless ? 'no border' : 'this spec'}</span>
       <span class="hint">${esc(g.note)}</span>
-    </div>`;
+    </div>` : '';
+  const why = whyThisSpec();
   p.innerHTML = `
     <hr class="rule" style="margin:.875rem 0">
     <div class="eyebrow mb-1">Where the border is now</div>
@@ -2471,10 +2525,29 @@ function renderAlignPanel(){
     </div>
     <div id="al_measured"></div>
     ${warn}
+    ${why}
     <div id="al_read" class="mt-2"></div>`;
   positionLines();
   renderExtReadout();
   syncRunLabel();
+}
+
+/* Pin this card to the frame spec the panel is showing — the one thing on this
+   screen that outlives the run. The selected spec is the step's own Frame setting
+   when one is chosen, else whatever the rules resolved. */
+async function pinCard(){
+  const c = card(); if(!c || !align.meas) return;
+  const spec = align.guide || (align.meas.resolution && align.meas.resolution.spec.id);
+  if(!spec) return;
+  if(!await act('/api/frames/pin', {ids:[c.id], spec}, `Pinned ${c.id} to ${spec}`)) return;
+  align.meas = null; align.facts = null;
+  renderCard();
+}
+async function unpinCard(){
+  const c = card(); if(!c) return;
+  if(!await act('/api/frames/pin', {ids:[c.id], spec:null}, `Unpinned ${c.id}`)) return;
+  align.meas = null; align.facts = null;
+  renderCard();
 }
 
 /* The border button either measures first or uses the marks, and the marks come
@@ -3039,6 +3112,392 @@ function impDone(){
    the raw TOML key kept visible so nothing becomes untraceable. Nothing is
    written until you say so, and the save bar only exists while something is
    actually different. */
+/* ---------- frame specs: /frames ----------
+   `proxdex frames`, as a screen. Three things live here, and they are three
+   different kinds of fact: a *spec* is four border widths, a *rule* says which
+   cards take which spec, and *warnings* is everything about this library's frames
+   that needs a person to decide. Reads come straight from the library; every
+   mutation posts to the CLI, like everywhere else in this app.
+
+   Warnings replaced a coverage report that graded every set that has ever printed,
+   and the replacement is not a simplification — the report could not work. MTG's
+   border follows the *printing's* frame generation, so a set-level row has no
+   printing to read: it called 1046 sets unmeasured while every card in them
+   resolves exactly. What is left is four faults, all of them a broken reference or
+   a question nothing recorded can answer.
+
+   The preview is still the point of the whole screen: a rule matching on rarity or
+   frame generation is a claim about data you cannot see, so it is shown card by
+   card before anybody trusts it. */
+const framesUi = {tab:'specs', reg:null, game:'', preview:null, busy:false,
+                  editing:null};
+
+async function renderFrames(){
+  if(!framesUi.reg){
+    $('#main').innerHTML = '<p class="hint">Loading frame specs…</p>';
+    try{ framesUi.reg = await get('/api/frames'); }
+    catch(e){ $('#main').innerHTML = `<p class="hint">Could not read frame specs: ${esc(''+e)}</p>`; return; }
+  }
+  const tabs = [['specs','Specs'],['rules','Rules'],['warnings','Warnings']];
+  $('#main').innerHTML = `
+    <div class="d-flex align-items-baseline gap-2 mb-3 flex-wrap">
+      <div><div class="eyebrow">border widths</div><h5 class="mb-0">Frame specs</h5></div>
+      <span class="hint ms-auto" style="max-width:44rem">The border step reshapes a card
+        until its printed border matches a spec. One set can need more than one — a
+        secret-rare tail is not the same frame as its set's ordinary cards — so rules
+        pick per card, and nobody chooses a spec by hand.</span>
+    </div>
+    <div class="secnav mb-3" style="display:flex;gap:.25rem;flex-wrap:wrap">
+      ${tabs.map(([k,label]) => `<button class="${framesUi.tab === k ? 'on' : ''}"
+        onclick="pickFramesTab('${k}')">${label}</button>`).join('')}
+    </div>
+    <div id="framesbody"></div>`;
+  paintFrames();
+}
+function pickFramesTab(tab){ framesUi.tab = tab; renderFrames(); }
+
+function paintFrames(){
+  const host = $('#framesbody'); if(!host) return;
+  const reg = framesUi.reg || {specs:[], rules:[], matches:[], mine:[]};
+  if(framesUi.tab === 'rules'){ host.innerHTML = rulesPanel(reg); return; }
+  if(framesUi.tab === 'warnings'){ host.innerHTML = warningsPanel(reg); return; }
+  host.innerHTML = specsPanel(reg);
+}
+
+/* Every spec, its numbers in millimetres (a border is a physical width — nobody
+   measures a percentage with calipers) and the note saying where they came from.
+   That note is the *whole* account of how much to trust a spec: there is no
+   confidence chip, because the one that used to sit here graded a border read off
+   a publisher's scan as trustworthy, and a scan's crop shifts every reading taken
+   from it by the same unknown amount. */
+function specsPanel(reg){
+  const rows = reg.specs.map(g => `<tr>
+      <td class="mono">${esc(g.id)}</td>
+      <td>${esc(g.name)}<div class="hint">${esc(g.note || '—')}</div></td>
+      <td class="faint">${esc(g.game || 'any')}</td>
+      <td class="mono">${g.frameless ? '<span class="faint">none</span>'
+        : g.mm.map(v => v.toFixed(2)).join(' / ')}</td>
+      <td class="mono faint">${g.ref_mm.map(v => (+v).toFixed(1)).join('×')}</td>
+      <td class="text-end">
+        ${reg.reserved.includes(g.id) ? '<span class="chip faint">reserved</span>' :
+          `<button class="btn btn-sm btn-ghost" onclick="editSpec('${esc(g.id)}')">Edit</button>`}
+        ${g.shipped || reg.reserved.includes(g.id) ? '' :
+          `<button class="btn btn-sm btn-ghost" onclick="removeSpec('${esc(g.id)}')">Remove</button>`}
+      </td>
+    </tr>`).join('');
+  return `<div class="panel p-3 mb-3">
+    <div class="tblwrap"><table class="tbl">
+      <thead><tr><th>Spec</th><th>Name &amp; where the numbers came from</th><th>Game</th>
+        <th>T / R / B / L mm</th><th>Of a card</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+  </div>
+  ${specForm()}`;
+}
+
+/* Add or correct one spec — one form and one verb (`frames set`), because a spec
+   is four numbers however you arrived at them. Correcting a shipped one is the
+   expected case, not an override: the MTG numbers that ship are working defaults
+   read off scans, and a caliper reading should replace them. */
+function specForm(){
+  const e = framesUi.editing || {};
+  const num = (k, label) => `<div>
+    <label class="eyebrow d-block mb-1" for="sp_${k}">${label} mm</label>
+    <input class="form-control form-control-sm" id="sp_${k}" type="number" step="0.05"
+      min="0" max="20" value="${e[k] ?? ''}"></div>`;
+  return `<div class="panel p-3">
+    <div class="eyebrow mb-2">${e.id ? 'Correct ' + esc(e.id) : 'Add a spec'}</div>
+    <p class="hint">Four border widths off a real card, measured from the cut edge to
+      the inner edge of the printed border, at the middle of each edge. Say which card
+      in the note — that sentence is the only record of how much to trust these
+      numbers, and it is shown wherever the fit is reported.</p>
+    <div class="row g-2 mb-2">
+      <div class="col-sm-4"><label class="eyebrow d-block mb-1" for="sp_id">Id</label>
+        <input class="form-control form-control-sm mono" id="sp_id" placeholder="pokemon-swsh"
+          value="${esc(e.id || '')}" ${e.id ? 'readonly' : ''}></div>
+      <div class="col-sm-5"><label class="eyebrow d-block mb-1" for="sp_name">Name</label>
+        <input class="form-control form-control-sm" id="sp_name" placeholder="Pokémon · Sword &amp; Shield"
+          value="${esc(e.name || '')}"></div>
+      <div class="col-sm-3"><label class="eyebrow d-block mb-1" for="sp_game">Game</label>
+        <select class="form-select form-select-sm" id="sp_game">
+          <option value="">any</option>
+          ${(state.meta.games || []).map(g => `<option value="${esc(g.id)}"
+            ${e.game === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}
+        </select></div>
+    </div>
+    <div class="edges mb-2">${num('top','Top')}${num('right','Right')}${num('bottom','Bottom')}${num('left','Left')}</div>
+    <div class="form-check mb-2">
+      <input class="form-check-input" type="checkbox" id="sp_oversized" ${e.oversized ? 'checked' : ''}>
+      <label class="form-check-label" for="sp_oversized">Measured on an oversized card (89×127 mm)</label>
+    </div>
+    <div class="row g-2 mb-2">
+      <div class="col-sm-3"><label class="eyebrow d-block mb-1" for="sp_card_w">Card width mm</label>
+        <input class="form-control form-control-sm" id="sp_card_w" type="number" step="0.1"
+          min="0" max="200" placeholder="63" value="${e.card_w ?? ''}"></div>
+      <div class="col-sm-3"><label class="eyebrow d-block mb-1" for="sp_card_h">Card height mm</label>
+        <input class="form-control form-control-sm" id="sp_card_h" type="number" step="0.1"
+          min="0" max="300" placeholder="88" value="${e.card_h ?? ''}"></div>
+      <div class="col-sm-6"><p class="hint mb-0 mt-4">Leave blank for the standard 63×88.
+        A real Magic or Pokémon card is <b>63.5×88.9 mm</b> — if you put calipers on one,
+        say so here: the insets stored are fractions of whatever you measured.</p></div>
+    </div>
+    <label class="eyebrow d-block mb-1" for="sp_note">Where these numbers came from</label>
+    <input class="form-control form-control-sm mb-2" id="sp_note"
+      placeholder="calipers on m15-281 Forest, 3 readings per edge" value="${esc(e.note || '')}">
+    <div class="d-flex gap-2">
+      <button class="btn btn-sm btn-primary" onclick="saveSpec()">Save spec</button>
+      ${e.id ? '<button class="btn btn-sm btn-ghost" onclick="cancelSpec()">Cancel</button>' : ''}
+    </div>
+  </div>`;
+}
+function editSpec(id){
+  const g = (framesUi.reg.specs || []).find(s => s.id === id);
+  if(!g) return;
+  const oversized = Math.round(g.ref_mm[0]) === 89;
+  framesUi.editing = {id:g.id, name:g.name, game:g.game || '', note:g.note,
+                      oversized:oversized,
+                      card_w:oversized ? '' : (g.ref_mm[0] === 63 ? '' : g.ref_mm[0]),
+                      card_h:oversized ? '' : (g.ref_mm[1] === 88 ? '' : g.ref_mm[1]),
+                      top:+g.mm[0].toFixed(3), right:+g.mm[1].toFixed(3),
+                      bottom:+g.mm[2].toFixed(3), left:+g.mm[3].toFixed(3)};
+  framesUi.tab = 'specs';
+  renderFrames();
+}
+function cancelSpec(){ framesUi.editing = null; renderFrames(); }
+
+async function saveSpec(){
+  const v = k => $('#sp_' + k) ? $('#sp_' + k).value : '';
+  const body = {
+    id: (v('id') || '').trim().toLowerCase(),
+    name: v('name').trim(),
+    game: v('game') || null,
+    top:+v('top') || 0, right:+v('right') || 0,
+    bottom:+v('bottom') || 0, left:+v('left') || 0,
+    note: v('note').trim(),
+    oversized: !!($('#sp_oversized') && $('#sp_oversized').checked),
+    card_w: +v('card_w') || null, card_h: +v('card_h') || null,
+  };
+  if(!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(body.id))
+    return toast('An id is lowercase letters, digits and single dashes — it becomes a filename.', 9000);
+  if(!await act('/api/frames/spec', body, `Saved ${body.id}`)) return;
+  framesUi.editing = null;
+  await reloadFrames();
+}
+async function removeSpec(id){
+  if(!await ask(`Remove the frame spec ${id}? Rules and pinned cards that name it must go first.`, 'Remove')) return;
+  if(!await act(`/api/frames/spec/${encodeURIComponent(id)}`, {_method:'DELETE'}, `Removed ${id}`)) return;
+  await reloadFrames();
+}
+
+/* The rules, in the order they are tried. First match wins, and a set's default
+   is tried last — so an exception never has to be ordered by hand. */
+function rulesPanel(reg){
+  const rows = reg.rules.map(r => `<tr>
+      <td class="mono">${esc(r.id)}</td>
+      <td class="faint">${esc(r.game)}</td>
+      <td class="mono">${r.global ? '<span class="faint">every set</span>' : esc(r.set)}</td>
+      <td>${esc(r.describes)}</td>
+      <td class="mono">${esc(r.spec)}</td>
+      <td class="text-end">
+        ${r.global ? '' : `<button class="btn btn-sm btn-ghost" onclick="previewSet('${esc(r.set)}','${esc(r.game)}')">Preview</button>`}
+        <button class="btn btn-sm btn-ghost" onclick="removeRule('${esc(r.id)}')">Remove</button>
+      </td>
+    </tr>`).join('');
+  const needs = (reg.matches || []).filter(m => m.needs_traits).map(m => m.id);
+  return `<div class="panel p-3 mb-3">
+    ${reg.rules.length ? `<div class="tblwrap"><table class="tbl">
+      <thead><tr><th>Rule</th><th>Game</th><th>Set</th><th>Catches</th><th>Spec</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`
+      : `<p class="hint mb-0">No rules yet — every set falls back to its era, or to its
+         game's generic spec. Add one below.</p>`}
+  </div>
+  <div class="panel p-3 mb-3">
+    <div class="eyebrow mb-2">Assign a spec</div>
+    <p class="hint">Point a whole set at a spec, or just part of one. Collector-number
+      ranges and id lists are read off the card id, so they always work; the rest match
+      on what the provider said about the printing (<span class="mono">${needs.map(esc).join(', ')}</span>),
+      which a card records when it is fetched. <b>Leave the set blank</b> for a rule
+      covering every set of the game — the only way to express a frame treatment, which
+      is not a property of any one set. A set's own rule always beats a game-wide one.</p>
+    <div class="row g-2 mb-2">
+      <div class="col-sm-3"><label class="eyebrow d-block mb-1" for="ru_spec">Spec</label>
+        <select class="form-select form-select-sm" id="ru_spec">
+          ${reg.specs.map(g => `<option value="${esc(g.id)}">${esc(g.id)}</option>`).join('')}
+        </select></div>
+      <div class="col-sm-2"><label class="eyebrow d-block mb-1" for="ru_game">Game</label>
+        <select class="form-select form-select-sm" id="ru_game">
+          ${(state.meta.games || []).map(g => `<option value="${esc(g.id)}"
+            ${g.id === state.meta.default_game ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}
+        </select></div>
+      <div class="col-sm-2"><label class="eyebrow d-block mb-1" for="ru_set">Set</label>
+        <input class="form-control form-control-sm mono" id="ru_set" placeholder="every set"></div>
+      <div class="col-sm-3"><label class="eyebrow d-block mb-1" for="ru_match">Catches</label>
+        <select class="form-select form-select-sm" id="ru_match" onchange="paintRuleValue()">
+          ${(reg.matches || []).map(m => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('')}
+        </select></div>
+      <div class="col-sm-2"><label class="eyebrow d-block mb-1" for="ru_value">Value</label>
+        <input class="form-control form-control-sm mono" id="ru_value" placeholder="188-216"></div>
+    </div>
+    <button class="btn btn-sm btn-primary" onclick="addRule()">Add rule</button>
+  </div>
+  ${previewPanel()}`;
+}
+function paintRuleValue(){
+  const sel = $('#ru_match'), box = $('#ru_value');
+  if(!sel || !box) return;
+  const m = (framesUi.reg.matches || []).find(x => x.id === sel.value);
+  box.disabled = !(m && m.takes_value);
+  box.placeholder = !m ? '' : m.id === 'numbers' ? '188-216'
+    : m.id === 'ids' ? 'swsh4-188,swsh4-189'
+    : m.id === 'rarity' ? 'Rare Secret'
+    : m.id === 'frame' ? '1997'
+    : m.id === 'effect' ? 'extendedart'
+    : m.id === 'border' ? 'yellow' : m.takes_value ? '' : 'not needed';
+}
+async function addRule(){
+  const v = k => $('#ru_' + k) ? $('#ru_' + k).value.trim() : '';
+  const body = {spec:v('spec'), set:v('set').toLowerCase(), match:v('match'),
+                value:v('value'), game:v('game') || null};
+  // a whole-set rule with no set would claim every card of the game, which is what
+  // the game's default spec already is — the CLI refuses it, so say so first
+  if(!body.set && body.match === 'set')
+    return toast('A whole-set rule needs a set — without one it would claim every '
+      + 'card of the game. Match on something narrower for a game-wide rule.', 9000);
+  const where = body.set || 'every set';
+  if(!await act('/api/frames/rule', body, `Assigned ${body.spec} to ${where}`)) return;
+  await reloadFrames();
+  if(body.set) previewSet(body.set, body.game || state.meta.default_game);
+}
+async function removeRule(id){
+  if(!await act(`/api/frames/rule/${encodeURIComponent(id)}`, {_method:'DELETE'}, `Removed ${id}`)) return;
+  await reloadFrames();
+}
+
+/* Everything about this library's frames that needs a person to decide, plus what
+   the cards actually resolve to and a way to preview any set's rules.
+
+   Four faults, no grades. Each one is a broken reference or a question nothing
+   recorded can answer — never "this spec's numbers are only an estimate", which was
+   true of nearly every spec and so told nobody anything. `specs.audit` produces this
+   list and `proxdex frames check` prints the same one. */
+function warningsPanel(reg){
+  const issues = reg.issues || [];
+  const mine = reg.mine || [];
+  const counts = (reg.faults || []).map(f =>
+    [f, issues.filter(i => i.fault === f.id).length]).filter(([, n]) => n);
+  const head = `<div class="panel p-3 mb-3">
+    <div class="d-flex gap-2 align-items-baseline flex-wrap mb-2">
+      <div class="eyebrow">Needs a decision</div>
+      <div class="d-flex gap-2 flex-wrap ms-auto">${counts.length
+        ? counts.map(([f, n]) => `<span class="chip warn">${esc(f.label)} ${n}</span>`).join('')
+        : '<span class="chip good">nothing outstanding</span>'}</div>
+    </div>
+    <p class="hint mb-0">A spec that will not parse, something pointing at a spec that is
+      gone, a trait rule on a card whose traits were never recorded, or a printing whose
+      frame nothing knows. Not a coverage report: MTG's border follows the printing's
+      frame generation, so grading whole sets called 1046 of them unmeasured while every
+      card in them resolved exactly.</p>
+  </div>`;
+  const table = issues.length ? `<div class="panel p-3 mb-3">
+    <div class="tblwrap" style="max-height:26rem;overflow:auto"><table class="tbl">
+      <thead><tr><th>What</th><th>Where</th><th>Detail</th><th>What to do</th></tr></thead>
+      <tbody>${issues.map(i => `<tr>
+        <td><span class="chip warn">${esc(i.label)}</span></td>
+        <td class="mono">${esc(i.subject)}</td>
+        <td class="faint">${esc(i.detail || '')}</td>
+        <td class="hint">${esc(i.hint)}</td>
+      </tr>`).join('')}</tbody></table></div>
+  </div>` : '';
+  return head + table + `${mine.length ? `<div class="panel p-3 mb-3">
+    <div class="eyebrow mb-2">Sets in this library</div>
+    <div class="tblwrap"><table class="tbl">
+      <thead><tr><th>Set</th><th>Game</th><th>Cards</th><th>Resolves to</th><th>From</th>
+        <th>Pinned</th><th></th></tr></thead>
+      <tbody>${mine.map(g => `<tr>
+        <td class="mono">${esc(g.set)}</td><td class="faint">${esc(g.game)}</td>
+        <td class="mono">${g.cards}</td><td class="mono">${esc(g.spec)}</td>
+        <td class="faint">${esc(g.via_label)}${g.rule ? ' (' + esc(g.rule) + ')' : ''}</td>
+        <td class="mono">${g.pinned || ''}</td>
+        <td class="text-end"><button class="btn btn-sm btn-ghost"
+          onclick="previewSet('${esc(g.set)}','${esc(g.game)}')">Preview</button></td>
+      </tr>`).join('')}</tbody></table></div>
+  </div>` : ''}
+  <div class="panel p-3 mb-3">
+    <div class="eyebrow mb-2">Preview any set</div>
+    <p class="hint">Which spec every card of one set gets, and which rule decided it. Reads
+      that set's cards from the provider, so what it shows is what a fetched card will get —
+      a rule that cannot be previewed is a rule nobody should trust.</p>
+    <div class="d-flex gap-2 flex-wrap align-items-end">
+      <div><label class="eyebrow d-block mb-1" for="pv_set">Set code</label>
+        <input class="form-control form-control-sm mono" id="pv_set" style="max-width:9rem"
+          placeholder="swsh4" value="${esc(framesUi.preview ? framesUi.preview.set : '')}"></div>
+      <div><label class="eyebrow d-block mb-1" for="pv_game">Game</label>
+        <select class="form-select form-select-sm" id="pv_game" style="max-width:11rem">
+          ${(state.meta.games || []).map(g => `<option value="${esc(g.id)}"
+            ${framesUi.game === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}
+        </select></div>
+      <button class="btn btn-sm btn-primary" onclick="previewTyped()">Preview</button>
+    </div>
+  </div>
+  ${framesUi.busy ? '<p class="hint">Reading that set&rsquo;s cards…</p>' : ''}
+  ${previewPanel()}`;
+}
+function previewTyped(){
+  const set = ($('#pv_set') && $('#pv_set').value || '').trim();
+  if(!set) return toast('Which set? Type its code — swsh4, neo, dmr.', 6000);
+  previewSet(set, $('#pv_game') ? $('#pv_game').value : '');
+}
+
+/* Which spec every card of one set gets, and which rule decided it. A rule that
+   cannot be previewed is a rule nobody should trust. */
+function previewPanel(){
+  const p = framesUi.preview;
+  if(!p) return '';
+  if(p.error) return `<div class="panel p-3"><div class="eyebrow mb-2">Preview
+    ${esc(p.set)}</div><p class="hint mb-0" style="color:var(--hold)">${esc(p.error)}</p></div>`;
+  const undecided = p.rows.filter(r => r.undecided.length);
+  // a set is up to ~250 cards and the point is the *pattern*, not the roll call:
+  // the tally above says how many take each spec, and the rows show which ones do
+  const shown = p.rows.slice(0, 60);
+  return `<div class="panel p-3">
+    <div class="d-flex align-items-baseline gap-2 mb-2 flex-wrap">
+      <div class="eyebrow">Preview · <span class="mono">${esc(p.set)}</span></div>
+      <div class="d-flex gap-2 flex-wrap ms-auto">${Object.entries(p.tally).map(([spec, n]) =>
+        `<span class="chip"><span class="mono">${esc(spec)}</span> ${n}</span>`).join('')}</div>
+      <button class="btn btn-sm btn-ghost" onclick="closePreview()">Close</button>
+    </div>
+    <div class="tblwrap" style="max-height:26rem;overflow:auto"><table class="tbl">
+      <thead><tr><th>Card</th><th>No.</th><th>Name</th><th>Rarity</th><th>Spec</th><th>From</th></tr></thead>
+      <tbody>${shown.map(r => `<tr>
+        <td class="mono">${esc(r.id)}</td><td class="mono">${esc(r.number)}</td>
+        <td>${esc(r.name)}</td><td class="faint">${esc(r.rarity || '—')}</td>
+        <td class="mono">${esc(r.spec)}</td>
+        <td class="faint">${esc(r.via_label)}${r.rule ? ' (' + esc(r.rule) + ')' : ''}</td>
+      </tr>`).join('')}</tbody></table></div>
+    ${p.rows.length > shown.length ? `<p class="hint mb-0 mt-2">… ${p.rows.length - shown.length}
+      more card(s). The tally above covers all ${p.rows.length}.</p>` : ''}
+    ${undecided.length ? `<p class="hint mb-0 mt-2" style="color:var(--hold)">${undecided.length}
+      card(s) could not be decided by a trait rule — the provider did not say. They take
+      the set's default; pin the ones that need something else.</p>` : ''}
+  </div>`;
+}
+async function previewSet(setId, game){
+  framesUi.preview = null;
+  try{
+    framesUi.preview = await get(`/api/frames/preview/${encodeURIComponent(setId)}?game=${encodeURIComponent(game || '')}`);
+  } catch(e){ toast('Could not read that set\n' + e, 9000); return; }
+  paintFrames();
+}
+function closePreview(){ framesUi.preview = null; paintFrames(); }
+
+/* A spec, a rule or a pin changes what every card resolves to — so the registry,
+   the warnings and the contact sheet's chips are all re-read, not patched. The
+   warnings arrive with /api/frames, so one request restates all of it. */
+async function reloadFrames(){
+  framesUi.reg = await get('/api/frames');
+  state.meta = await get('/api/meta');
+  renderFrames();
+}
+
 const settingsUi = {section:null, dirty:new Map()};
 
 async function renderSettings(){
@@ -3192,60 +3651,26 @@ function backsPanel(){
           accept="image/*" onchange="uploadBack(this)"></div>
     </div></div>`;
 }
-/* The frame specs, and which of them this library's cards actually resolve to.
-   The same two tables `proxdex frames` prints — a spec is only honest if you can
-   see whether it was measured or guessed, and which of your cards ride on it. */
+/* Frame specs have their own screen — this is the pointer to it, so the settings
+   nav still leads there without a second copy of the tables living here. */
 function framesPanel(){
   const specs = state.meta.frames || [];
-  const rows = specs.map(g => `<tr>
-      <td class="mono">${esc(g.id)}</td>
-      <td>${esc(g.name)}</td>
-      <td class="mono">${g.inset.map(v => (v * 100).toFixed(2)).join(' / ')}</td>
-      <td>${g.measured ? '<span class="chip good">measured</span>'
-                       : '<span class="chip warn">estimated</span>'}</td>
-    </tr>`).join('');
-
-  // one row per (set, override) — a borderless print inside a bordered set
-  // resolves differently from its neighbours, and hiding that would claim a fit
-  // that is not the one that runs
-  const groups = new Map();
-  for(const c of state.cards){
-    const key = `${c.game}|${c.set}|${c.frame || ''}`;
-    const g = groups.get(key) || {game:c.game, set:c.set, frame:c.frame,
-                                  spec:c.frame_spec, measured:c.frame_measured, n:0};
-    g.n++; groups.set(key, g);
-  }
-  const mine = [...groups.values()].sort((a, b) => a.set.localeCompare(b.set));
-  const unmeasured = mine.filter(g => !g.measured).length;
-
-  return `<div class="panel p-3 mb-3">
+  const unsure = state.cards.filter(c => c.frame_sure === false).length;
+  return `<div class="panel p-3">
     <div class="eyebrow mb-2">Frame specs</div>
-    <p class="hint">Where each era's printed border sits, as a percentage of the card
-      per edge (top / right / bottom / left). The border step reshapes a card until its
-      border matches — so a spec nobody has measured makes the fit a guess, and says so.</p>
-    <div class="tblwrap"><table class="tbl">
-      <thead><tr><th>Spec</th><th>Frame</th><th>T / R / B / L %</th><th>Confidence</th></tr></thead>
-      <tbody>${rows}</tbody></table></div>
-  </div>
-  <div class="panel p-3">
-    <div class="eyebrow mb-2">Sets in this library</div>
-    ${mine.length ? `<div class="tblwrap"><table class="tbl">
-      <thead><tr><th>Set</th><th>Game</th><th>Cards</th><th>Resolves to</th><th>From</th><th>Confidence</th></tr></thead>
-      <tbody>${mine.map(g => `<tr>
-        <td class="mono">${esc(g.set)}</td>
-        <td>${esc(g.game)}</td>
-        <td class="mono">${g.n}</td>
-        <td class="mono">${esc(g.spec || '')}</td>
-        <td class="faint">${g.frame ? 'the printing' : 'its era'}</td>
-        <td>${g.measured ? '<span class="chip good">measured</span>'
-                         : '<span class="chip warn">estimated</span>'}</td>
-      </tr>`).join('')}</tbody></table></div>`
-      : '<p class="hint mb-0">No cards yet.</p>'}
-    ${unmeasured ? `<p class="hint mb-0 mt-2" style="color:var(--hold)">${unmeasured} set(s)
-      fall back to an estimated spec. Measure a real card and add a guide in
-      <code class="mono">frames.py</code> to fix it.</p>` : ''}
+    <p class="hint">Where each printing's border sits, per edge. The border step
+      reshapes a card until its border matches that. Rules decide which of your cards
+      take which spec, and a set can need more than one. The numbers that ship are
+      working defaults — measure a real card and correct them.</p>
+    <div class="d-flex gap-2 flex-wrap mb-3">
+      <span class="chip">${specs.length} spec(s)</span>
+      ${unsure ? `<span class="chip warn">${unsure} card(s) undecided</span>` : ''}
+    </div>
+    <button class="btn btn-sm btn-primary" onclick="goFrames()">Open frame specs</button>
   </div>`;
 }
+function goFrames(){ navigate({view:'frames', id:null, step:null}); }
+
 /* `proxdex doctor`, as a screen: what is stored against what proxdex would write
    today. Every check's own words come from the server (`doctor.CHECKS`), so the
    terminal and this panel explain a finding with the same sentence — and the

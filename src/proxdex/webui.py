@@ -44,12 +44,14 @@ from proxdex import (
     frames,
     games,
     imports,
+    inventory,
     media,
     net,
     profiles,
     report,
     scratch,
     sources,
+    specs,
     steps,
 )
 from proxdex import sheet as sheet_mod
@@ -70,7 +72,16 @@ _VIEW_BOX = (1400, 1960)
 _JPEG_CACHE: dict[tuple[str, int, int, int], bytes] = {}
 _JPEG_CACHE_MAX = 64
 #: the client routes are real URLs, so a deep link has to reach the SPA shell
-_SPA_ROUTES = ("library", "card", "search", "import", "settings", "sheet", "print")
+_SPA_ROUTES = (
+    "library",
+    "card",
+    "search",
+    "import",
+    "settings",
+    "sheet",
+    "print",
+    "frames",
+)
 # card ids are <set>-<number>, and MTG collector numbers can carry their own
 # hyphen ("ymid-A-123"). No dots or slashes: these reach the CLI as argv.
 _ID_OK = re.compile(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+){1,2}$")
@@ -89,6 +100,14 @@ CardId = Annotated[str, Field(pattern=_ID_OK.pattern)]
 #: a profile name — it reaches the CLI as argv and becomes a filename, so it is
 #: pattern-checked here rather than sanitized later
 ProfileName = Annotated[str, PathParam(pattern=r"^[a-z0-9][a-z0-9._-]{0,47}$")]
+#: a frame spec id. Open where an enum used to be — a library measures its own
+#: specs — so the *shape* is pinned here instead, because it reaches the CLI as
+#: argv and becomes a filename. The same pattern `frames.valid_id` enforces.
+SpecName = Annotated[
+    str, PathParam(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=48)
+]
+#: a rule id, as `specs.Rule` numbers them
+RuleName = Annotated[str, PathParam(pattern=r"^r\d{1,6}$")]
 Side = Annotated[int, Field(ge=1, le=_MAX_FACE)]
 #: a stage by the name every other surface spells it with. :class:`Stage` is an
 #: IntEnum, so the closed set of *labels* has to be written out for a request
@@ -155,6 +174,98 @@ class FetchBody(Body):
 class FlipBody(Body):
     ids: list[CardId] = Field(min_length=1, max_length=512)
     face: Side | None = None
+
+
+class SpecBody(Body):
+    """One frame spec, as the frames screen states it.
+
+    The four numbers are millimetres, like the CLI's — a border is a physical
+    width, and nobody measures a fraction with calipers. There is no confidence
+    field: a spec is its numbers plus a note about where they came from, and the
+    grade that used to sit here called a border read off a publisher's scan
+    trustworthy (see :mod:`proxdex.frames`).
+    """
+
+    id: SpecName
+    name: str = Field(default="", max_length=80)
+    game: GameId | None = None
+    top: Annotated[float, Field(ge=0, le=20)]
+    right: Annotated[float, Field(ge=0, le=20)]
+    bottom: Annotated[float, Field(ge=0, le=20)]
+    left: Annotated[float, Field(ge=0, le=20)]
+    note: str = Field(default="", max_length=500)
+    #: the numbers were taken off an oversized card, not a 63×88 one
+    oversized: bool = False
+    #: the card actually measured, when it was neither — a real Magic/Pokémon card
+    #: is 63.5×88.9mm, and the insets are fractions of whatever was measured
+    card_w: Annotated[float, Field(gt=0, le=200)] | None = None
+    card_h: Annotated[float, Field(gt=0, le=300)] | None = None
+
+    def argv(self) -> list[str]:
+        """This spec as CLI arguments — the one place the flags are spelled."""
+        args = [
+            "frames",
+            "set",
+            self.id,
+            "--top",
+            f"{self.top:g}",
+            "--right",
+            f"{self.right:g}",
+            "--bottom",
+            f"{self.bottom:g}",
+            "--left",
+            f"{self.left:g}",
+        ]
+        if self.name:
+            args += ["--name", self.name]
+        if self.game is not None:
+            args += ["--game", self.game.value]
+        if self.oversized:
+            args.append("--oversized")
+        if self.card_w:
+            args += ["--card-w", f"{self.card_w:g}"]
+        if self.card_h:
+            args += ["--card-h", f"{self.card_h:g}"]
+        if self.note:
+            args += ["--note", self.note]
+        return args
+
+
+class RuleBody(Body):
+    """One rule: which cards of which set take which spec."""
+
+    spec: SpecName
+    #: empty means every set of the game — the only way to express a frame
+    #: treatment, which is not a property of any one set. Not `min_length=1`, and
+    #: the pattern still has to reject anything that is not a set code, because
+    #: this becomes argv.
+    set: str = Field(default="", max_length=16, pattern=r"^[A-Za-z0-9]*$")
+    match: specs.Match = specs.Match.SET
+    value: str = Field(default="", max_length=200)
+    game: GameId | None = None
+
+    def argv(self) -> list[str]:
+        args = [
+            "frames",
+            "assign",
+            self.spec,
+            "--match",
+            self.match.value,
+        ]
+        if self.set:
+            args += ["--set", self.set]
+        if self.value:
+            args += ["--value", self.value]
+        if self.game is not None:
+            args += ["--game", self.game.value]
+        return args
+
+
+class PinBody(Body):
+    """Pin these cards to a spec, or (``spec = None``) drop their pins."""
+
+    ids: list[CardId] = Field(min_length=1, max_length=512)
+    spec: SpecName | None = None
 
 
 class SheetCard(Body):
@@ -474,7 +585,9 @@ def create_app(lib: Library) -> FastAPI:
             # settings schema with this library's defaults. The UI renders its
             # stepper and its control panels from this and spells nothing itself,
             # so a new step appears in the UI as soon as it exists in Python.
-            "pipeline": steps.json_pipeline(cfg),
+            # the border step's frame list depends on the library, so the root
+            # travels with it — an OPEN option cannot be filled in from `cfg`
+            "pipeline": steps.json_pipeline(cfg, lib.root),
             "profiles": profiles.names(lib.root),
             "active_profile": cfg.print_profile,
             "active_back_profile": cfg.print_back_profile,
@@ -516,7 +629,7 @@ def create_app(lib: Library) -> FastAPI:
                 for g in games.GAMES.values()
             ],
             "default_game": lib.default_game.value,
-            "frames": [_guide_json(g) for g in frames.GUIDES.values()],
+            "frames": [_guide_json(g) for g in specs.load(lib.root).specs.values()],
             # the print-kind vocabulary, so the UI names a layout the same way
             # the CLI does instead of keeping its own copy
             "layouts": [
@@ -568,6 +681,9 @@ def create_app(lib: Library) -> FastAPI:
     @app.get("/api/cards")
     def api_cards() -> list[dict[str, Any]]:
         by_card = report.card_batch_index(lib)
+        # one registry read for the whole listing rather than one per card: the
+        # answer cannot change halfway down a response
+        reg = specs.load(lib.root)
         result: list[dict[str, Any]] = []
         for card in lib.cards():
             batch = by_card.get(card.id)
@@ -595,18 +711,16 @@ def create_app(lib: Library) -> FastAPI:
                     # meld half or an oversized card without asking the API
                     "layout": card.layout.value,
                     "oversized": card.oversized,
-                    "frame": card.frame.value if card.frame else None,
+                    "frame": card.printing_frame,
+                    "pin": card.pin,
                     # the card's own state for the contact sheet: a card is only
                     # done at a stage when every one of its sides is
                     "status": {s.label: card.rollup(s).value for s in _STAGES},
-                    # the guide this card's border step will actually fit to —
-                    # its own recorded frame if it has one, else its set's era
-                    "frame_spec": frames.resolve(
-                        card.set_id, card.game, card.frame
-                    ).id.value,
-                    "frame_measured": frames.resolve(
-                        card.set_id, card.game, card.frame
-                    ).measured,
+                    # the spec this card's border step will actually fit to, and
+                    # *why* — a pin, its printing, a rule, its era or nothing
+                    "frame_spec": (found := _resolution(reg, card)).spec.id,
+                    "frame_sure": found.sure,
+                    "frame_via": found.via.value,
                     "batch": batch.name if batch else None,
                     "printed": bool(batch and batch.printed),
                     "rev": _rev(card),
@@ -722,7 +836,9 @@ def create_app(lib: Library) -> FastAPI:
             return {"error": "no image"}
         cfg = Config.load(lib.root)
         w, h = borders.size(src)
-        guide = frames.resolve(card.set_id, card.game, card.frame)
+        reg = specs.load(lib.root)
+        found = _resolution(reg, card)
+        guide = found.spec
         return {
             "w": w,
             "h": h,
@@ -734,7 +850,11 @@ def create_app(lib: Library) -> FastAPI:
             # frame-size guide: inner border inset [top,right,bottom,left], plus
             # how much to trust it — the UI warns on an unmeasured set.
             "guide": _guide_json(guide),
-            "guides": [_guide_json(g) for g in frames.choices(card.game)],
+            "guides": [_guide_json(g) for g in reg.choices(card.game)],
+            # which of the seven ways this spec was arrived at, and anything the
+            # align panel has to say out loud about it
+            "resolution": found.json(),
+            "pin": card.pin,
         }
 
     @app.get("/api/detect/{cid}")
@@ -759,8 +879,8 @@ def create_app(lib: Library) -> FastAPI:
         )
         if src is None or not src.exists():
             return {"error": "no image to measure"}
-        guide = frames.resolve(card.set_id, card.game, card.frame)
-        if not any(guide.inset):
+        guide = _resolution(specs.load(lib.root), card).spec
+        if guide.frameless:
             return {
                 "inset": [0.0, 0.0, 0.0, 0.0],
                 "support": [1.0, 1.0, 1.0, 1.0],
@@ -779,6 +899,85 @@ def create_app(lib: Library) -> FastAPI:
             "frameless": found.frameless,
             "note": found.note,
         }
+
+    # ---- frame specs -------------------------------------------------------
+    # Read directly; every mutation shells out to `proxdex frames …`, so the CLI
+    # stays the only implementation of what a spec, a rule and a pin mean.
+    @app.get("/api/frames")
+    def api_frames() -> dict[str, Any]:
+        """Every spec, every rule, what this library's cards resolve to, and the
+        warnings — one read, because the frames screen shows all four at once."""
+        reg = specs.load(lib.root)
+        held: dict[tuple[str, str], dict[str, Any]] = {}
+        resolved: list[tuple[str, specs.Resolution]] = []
+        for card in lib.cards():
+            found = _resolution(reg, card)
+            resolved.append((card.id, found))
+            key = (card.game.value, card.set_id)
+            row = held.setdefault(
+                key,
+                {
+                    "game": card.game.value,
+                    "set": card.set_id,
+                    "cards": 0,
+                    "spec": found.spec.id,
+                    "via": found.via.value,
+                    "via_label": found.via.label,
+                    "rule": found.rule,
+                    "pinned": 0,
+                    "undecided": 0,
+                },
+            )
+            row["cards"] += 1
+            if card.pin:
+                row["pinned"] += 1
+            if found.undecided:
+                row["undecided"] += 1
+        return {
+            **specs.json_registry(reg),
+            "mine": sorted(held.values(), key=lambda r: (r["game"], r["set"])),
+            "issues": [i.json() for i in specs.audit(reg, resolved)],
+            "faults": [{"id": f.value, "label": f.label} for f in specs.Fault],
+        }
+
+    @app.get("/api/frames/preview/{set_id}")
+    def api_frames_preview(set_id: str, game: str | None = None) -> dict[str, Any]:
+        """Which spec every card of one set gets, and which rule decided it."""
+        try:
+            found = inventory.preview(
+                set_id,
+                Config.load(lib.root),
+                specs.load(lib.root),
+                games.coerce(game, lib.default_game),
+            )
+        except ProxdexError as exc:
+            return {"error": str(exc), "set": set_id, "rows": []}
+        return found.json()
+
+    @app.post("/api/frames/spec")
+    def api_frames_spec(body: SpecBody) -> Any:
+        """Add or correct a spec. One verb, `frames set`, and the CLI is what
+        decides what a spec means — this only spells the flags."""
+        return run_cli(body.argv())
+
+    @app.delete("/api/frames/spec/{spec_id}")
+    def api_frames_spec_delete(spec_id: SpecName) -> Any:
+        return run_cli(["frames", "rm", spec_id])
+
+    @app.post("/api/frames/rule")
+    def api_frames_rule(body: RuleBody) -> Any:
+        return run_cli(body.argv())
+
+    @app.delete("/api/frames/rule/{rule_id}")
+    def api_frames_rule_delete(rule_id: RuleName) -> Any:
+        return run_cli(["frames", "unassign", rule_id])
+
+    @app.post("/api/frames/pin")
+    def api_frames_pin(body: PinBody) -> Any:
+        """Pin cards to a spec, or drop their pins when ``spec`` is absent."""
+        if body.spec is None:
+            return run_cli(["frames", "unpin", *body.ids])
+        return run_cli(["frames", "pin", body.spec, *body.ids])
 
     @app.delete("/api/card/{cid}")
     def api_delete(cid: str) -> dict[str, Any]:
@@ -894,15 +1093,8 @@ def create_app(lib: Library) -> FastAPI:
         spec = steps.get(body.cmd)
         if spec is None or spec.step is None:
             return _bad(f"bad step {body.cmd!r}")
-        # every setting is checked against the step's own schema here, at the
-        # boundary — an undeclared or malformed one is a 400, never an argv string
-        # that fails later inside an external tool, per card
-        for key, value in body.settings.items():
-            option = spec.option(key)
-            if option is None:
-                return _bad(f"{spec.key} has no setting {key!r}")
-            if option.coerce(value) is None:
-                return _bad(f"bad {key} {value!r}")
+        if (wrong := _bad_setting(spec, body.settings, lib.root)) is not None:
+            return _bad(wrong)
         args = [spec.step.value, *body.ids, *side, *spec.argv(body.settings)]
         if spec.step is Step.BORDER:
             if body.auto:  # measure the inner border off the image
@@ -1009,7 +1201,9 @@ def create_app(lib: Library) -> FastAPI:
     @app.get("/api/doctor")
     def api_doctor(ids: str = "") -> dict[str, Any]:
         cards = lib.select(tuple(i for i in ids.split(",") if i))
-        return doctor.json_report(doctor.examine(cards, Config.load(lib.root)))
+        return doctor.json_report(
+            doctor.examine(cards, Config.load(lib.root), specs.load(lib.root))
+        )
 
     @app.post("/api/doctor/fix")
     def api_doctor_fix(body: DoctorBody) -> dict[str, Any]:
@@ -1307,14 +1501,63 @@ def _bad(log: str) -> JSONResponse:
 
 def _guide_json(guide: frames.FrameGuide) -> dict[str, Any]:
     return {
-        "id": guide.id.value,
+        "id": guide.id,
         "name": guide.name,
         "game": guide.game.value if guide.game else None,
         "inset": list(guide.inset),
-        "confidence": guide.confidence.value,
-        "measured": guide.measured,
+        "mm": list(guide.mm()),
+        "ref_mm": list(guide.ref_mm),
+        "shipped": frames.is_shipped(guide.id),
+        "frameless": guide.frameless,
         "note": guide.note,
     }
+
+
+def _bad_setting(
+    spec: steps.StepSpec, settings: dict[str, SettingValue], root: Path
+) -> str | None:
+    """What is wrong with these step settings, or ``None`` if nothing is.
+
+    Every value is checked against the step's own schema here, at the boundary — an
+    undeclared or malformed one is a 400, never an argv string that fails later
+    inside an external tool, once per card.
+    """
+    for key, value in settings.items():
+        option = spec.option(key)
+        if option is None:
+            return f"{spec.key} has no setting {key!r}"
+        clean = option.coerce(value)
+        if clean is None:
+            return f"bad {key} {value!r}"
+        # an OPEN option's values live in the library, not in an enum, so the
+        # *existence* check happens here rather than in `coerce` — and it names
+        # every option, which is exactly what a closed choice would have done
+        if option.kind is steps.OptKind.OPEN:
+            offered = [c.value for c in option.values(root)]
+            if str(clean) not in offered:
+                return (
+                    f"no {option.label.lower()} {value!r} in this library. "
+                    f"Known: {', '.join(offered) or 'none'}"
+                )
+    return None
+
+
+def _resolution(reg: specs.Registry, card: Card) -> specs.Resolution:
+    """The spec this card's border step will fit to, and why.
+
+    The same call `cli._resolve_spec` makes, with the same arguments — so the
+    align ghost, the contact-sheet chip and the fit that actually runs cannot
+    disagree about which spec is in force.
+    """
+    return specs.resolve(
+        reg,
+        card.id,
+        card.set_id,
+        card.game,
+        pin=card.pin,
+        printing=card.printing_frame,
+        traits=card.traits,
+    )
 
 
 def _unwrap(value: Any) -> Any:

@@ -1,0 +1,2897 @@
+{
+  "samples": 15,
+  "min_prints": 20,
+  "trusted": 0.8,
+  "results": [
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "",
+      "prints": 44136,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "2x2",
+        "bbd",
+        "c19",
+        "cmr",
+        "dtk",
+        "frc",
+        "j25",
+        "ltr",
+        "mkc",
+        "one",
+        "piko",
+        "plst",
+        "ptdm",
+        "soi",
+        "unf"
+      ],
+      "set_mix": {
+        "2x2": 1,
+        "bbd": 1,
+        "c19": 1,
+        "cmr": 1,
+        "dtk": 1,
+        "frc": 1,
+        "j25": 1,
+        "ltr": 1
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.482,
+          "sd": 0.142
+        },
+        "right": {
+          "n": 14,
+          "mean": 2.438,
+          "sd": 0.074
+        },
+        "bottom": {
+          "n": 1,
+          "mean": 2.877,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 14,
+          "mean": 2.453,
+          "sd": 0.067
+        }
+      }
+    },
+    {
+      "frame": "2003",
+      "border": "black",
+      "effects": "",
+      "prints": 14526,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "10e",
+        "8ed",
+        "avr",
+        "chk",
+        "csp",
+        "ddk",
+        "dst",
+        "hop",
+        "m10",
+        "m14",
+        "mrd",
+        "plst",
+        "prtr",
+        "rtr",
+        "ths"
+      ],
+      "set_mix": {
+        "10e": 1,
+        "8ed": 1,
+        "avr": 1,
+        "chk": 1,
+        "csp": 1,
+        "ddk": 1,
+        "dst": 1,
+        "hop": 1
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.961,
+          "sd": 0.195
+        },
+        "right": {
+          "n": 14,
+          "mean": 2.936,
+          "sd": 0.096
+        },
+        "bottom": {
+          "n": 14,
+          "mean": 2.937,
+          "sd": 0.062
+        },
+        "left": {
+          "n": 14,
+          "mean": 2.905,
+          "sd": 0.063
+        }
+      }
+    },
+    {
+      "frame": "1997",
+      "border": "black",
+      "effects": "",
+      "prints": 7914,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "30a",
+        "7ed",
+        "brr",
+        "inr",
+        "jud",
+        "mir",
+        "nem",
+        "ons",
+        "palp",
+        "plst",
+        "pmei",
+        "scg",
+        "tmp",
+        "tsr",
+        "usg"
+      ],
+      "set_mix": {
+        "30a": 1,
+        "7ed": 1,
+        "brr": 1,
+        "inr": 1,
+        "jud": 1,
+        "mir": 1,
+        "nem": 1,
+        "ons": 1
+      },
+      "edges": {
+        "top": {
+          "n": 14,
+          "mean": 3.372,
+          "sd": 0.128
+        },
+        "right": {
+          "n": 15,
+          "mean": 3.028,
+          "sd": 0.107
+        },
+        "bottom": {
+          "n": 14,
+          "mean": 3.384,
+          "sd": 0.148
+        },
+        "left": {
+          "n": 13,
+          "mean": 3.057,
+          "sd": 0.128
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "legendary",
+      "prints": 5750,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "2x2",
+        "c20",
+        "cmr",
+        "eld",
+        "hob",
+        "ltr",
+        "moc",
+        "msh",
+        "pblb",
+        "pfdn",
+        "plst",
+        "pmom",
+        "ptla",
+        "spm",
+        "tsr"
+      ],
+      "set_mix": {
+        "2x2": 1,
+        "c20": 1,
+        "cmr": 1,
+        "eld": 1,
+        "hob": 1,
+        "ltr": 1,
+        "moc": 1,
+        "msh": 1
+      },
+      "edges": {
+        "top": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 13,
+          "mean": 2.424,
+          "sd": 0.104
+        },
+        "bottom": {
+          "n": 1,
+          "mean": 2.792,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 13,
+          "mean": 2.421,
+          "sd": 0.074
+        }
+      }
+    },
+    {
+      "frame": "1993",
+      "border": "black",
+      "effects": "",
+      "prints": 3754,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "4bb",
+        "all",
+        "atq",
+        "ced",
+        "cei",
+        "drk",
+        "fbb",
+        "fem",
+        "hml",
+        "ice",
+        "lea",
+        "leb",
+        "leg"
+      ],
+      "set_mix": {
+        "4bb": 2,
+        "leg": 2,
+        "all": 1,
+        "atq": 1,
+        "ced": 1,
+        "cei": 1,
+        "drk": 1,
+        "fbb": 1
+      },
+      "edges": {
+        "top": {
+          "n": 14,
+          "mean": 3.149,
+          "sd": 0.534
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.712,
+          "sd": 0.443
+        },
+        "bottom": {
+          "n": 13,
+          "mean": 3.411,
+          "sd": 0.707
+        },
+        "left": {
+          "n": 12,
+          "mean": 2.868,
+          "sd": 0.432
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "extendedart",
+      "prints": 2824,
+      "read": 15,
+      "frameless": 1,
+      "sets": [
+        "acr",
+        "bro",
+        "cmm",
+        "dmu",
+        "fdn",
+        "ltc",
+        "mh3",
+        "moc",
+        "ncc",
+        "otc",
+        "pip",
+        "sld",
+        "stx",
+        "vow",
+        "who"
+      ],
+      "set_mix": {
+        "acr": 1,
+        "bro": 1,
+        "cmm": 1,
+        "dmu": 1,
+        "fdn": 1,
+        "ltc": 1,
+        "mh3": 1,
+        "moc": 1
+      },
+      "edges": {
+        "top": {
+          "n": 13,
+          "mean": 2.398,
+          "sd": 0.3
+        },
+        "right": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "inverted",
+      "prints": 2643,
+      "read": 15,
+      "frameless": 9,
+      "sets": [
+        "2x2",
+        "cmm",
+        "dmr",
+        "eos",
+        "fic",
+        "ltc",
+        "mh3",
+        "rvr",
+        "sld",
+        "slp",
+        "spg"
+      ],
+      "set_mix": {
+        "sld": 5,
+        "2x2": 1,
+        "cmm": 1,
+        "dmr": 1,
+        "eos": 1,
+        "fic": 1,
+        "ltc": 1,
+        "mh3": 1
+      },
+      "edges": {
+        "top": {
+          "n": 3,
+          "mean": 3.215,
+          "sd": 0.816
+        },
+        "right": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "1997",
+      "border": "white",
+      "effects": "",
+      "prints": 1901,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "5ed",
+        "6ed",
+        "7ed",
+        "brb",
+        "btd",
+        "dkm",
+        "ptk",
+        "s99"
+      ],
+      "set_mix": {
+        "5ed": 4,
+        "6ed": 3,
+        "7ed": 3,
+        "brb": 1,
+        "btd": 1,
+        "dkm": 1,
+        "ptk": 1,
+        "s99": 1
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 3.384,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 15,
+          "mean": 3.05,
+          "sd": 0.022
+        },
+        "bottom": {
+          "n": 15,
+          "mean": 3.384,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 15,
+          "mean": 3.055,
+          "sd": 0.03
+        }
+      }
+    },
+    {
+      "frame": "1993",
+      "border": "white",
+      "effects": "",
+      "prints": 1552,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "2ed",
+        "3ed",
+        "4ed",
+        "chr",
+        "itp",
+        "rqs",
+        "sum"
+      ],
+      "set_mix": {
+        "4ed": 4,
+        "2ed": 3,
+        "3ed": 3,
+        "sum": 2,
+        "chr": 1,
+        "itp": 1,
+        "rqs": 1
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 3.069,
+          "sd": 0.412
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.706,
+          "sd": 0.219
+        },
+        "bottom": {
+          "n": 15,
+          "mean": 3.035,
+          "sd": 0.439
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.695,
+          "sd": 0.239
+        }
+      }
+    },
+    {
+      "frame": "2003",
+      "border": "white",
+      "effects": "",
+      "prints": 1495,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "8ed",
+        "9ed",
+        "psal"
+      ],
+      "set_mix": {
+        "psal": 7,
+        "8ed": 4,
+        "9ed": 4
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.973,
+          "sd": 0.03
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.965,
+          "sd": 0.022
+        },
+        "bottom": {
+          "n": 15,
+          "mean": 2.995,
+          "sd": 0.077
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.965,
+          "sd": 0.022
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "inverted,legendary",
+      "prints": 1142,
+      "read": 15,
+      "frameless": 5,
+      "sets": [
+        "2x2",
+        "cmm",
+        "dsc",
+        "fca",
+        "fin",
+        "hoc",
+        "ltc",
+        "mar",
+        "msh",
+        "ps19",
+        "sld",
+        "slx",
+        "tla"
+      ],
+      "set_mix": {
+        "sld": 3,
+        "2x2": 1,
+        "cmm": 1,
+        "dsc": 1,
+        "fca": 1,
+        "fin": 1,
+        "hoc": 1,
+        "ltc": 1
+      },
+      "edges": {
+        "top": {
+          "n": 1,
+          "mean": 3.808,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 3,
+          "mean": 3.074,
+          "sd": 0.098
+        },
+        "left": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "extendedart,legendary",
+      "prints": 1121,
+      "read": 15,
+      "frameless": 2,
+      "sets": [
+        "acr",
+        "c21",
+        "eoe",
+        "fic",
+        "fin",
+        "ltc",
+        "m3c",
+        "msc",
+        "msh",
+        "neo",
+        "pip",
+        "sos",
+        "tmt",
+        "who"
+      ],
+      "set_mix": {
+        "who": 2,
+        "acr": 1,
+        "c21": 1,
+        "eoe": 1,
+        "fic": 1,
+        "fin": 1,
+        "ltc": 1,
+        "m3c": 1
+      },
+      "edges": {
+        "top": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 1,
+          "mean": 3.131,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "enchantment",
+      "prints": 818,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "2x2",
+        "drc",
+        "ecc",
+        "fdn",
+        "fin",
+        "inr",
+        "msc",
+        "neo",
+        "peoe",
+        "plst",
+        "ptdm",
+        "soc",
+        "spm",
+        "tdm",
+        "tla"
+      ],
+      "set_mix": {
+        "2x2": 1,
+        "drc": 1,
+        "ecc": 1,
+        "fdn": 1,
+        "fin": 1,
+        "inr": 1,
+        "msc": 1,
+        "neo": 1
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.499,
+          "sd": 0.054
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.488,
+          "sd": 0.071
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.454,
+          "sd": 0.033
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "inverted",
+      "prints": 709,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "2x2",
+        "dbl",
+        "khm",
+        "pgrn",
+        "sch",
+        "sld",
+        "ss1"
+      ],
+      "set_mix": {
+        "dbl": 9,
+        "2x2": 1,
+        "khm": 1,
+        "pgrn": 1,
+        "sch": 1,
+        "sld": 1,
+        "ss1": 1
+      },
+      "edges": {
+        "top": {
+          "n": 14,
+          "mean": 2.481,
+          "sd": 0.074
+        },
+        "right": {
+          "n": 10,
+          "mean": 2.397,
+          "sd": 0.04
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 12,
+          "mean": 2.477,
+          "sd": 0.077
+        }
+      }
+    },
+    {
+      "frame": "1997",
+      "border": "gold",
+      "effects": "",
+      "prints": 692,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "wc00",
+        "wc01",
+        "wc02",
+        "wc97",
+        "wc98",
+        "wc99"
+      ],
+      "set_mix": {
+        "wc00": 3,
+        "wc01": 3,
+        "wc97": 3,
+        "wc02": 2,
+        "wc98": 2,
+        "wc99": 2
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 3.362,
+          "sd": 0.067
+        },
+        "right": {
+          "n": 15,
+          "mean": 3.163,
+          "sd": 0.062
+        },
+        "bottom": {
+          "n": 15,
+          "mean": 3.373,
+          "sd": 0.044
+        },
+        "left": {
+          "n": 15,
+          "mean": 3.157,
+          "sd": 0.076
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "",
+      "prints": 670,
+      "read": 15,
+      "frameless": 6,
+      "sets": [
+        "2x2",
+        "fdn",
+        "m21",
+        "mp2",
+        "neo",
+        "slc",
+        "sld",
+        "snc",
+        "sta",
+        "ust"
+      ],
+      "set_mix": {
+        "sld": 5,
+        "sta": 2,
+        "2x2": 1,
+        "fdn": 1,
+        "m21": 1,
+        "mp2": 1,
+        "neo": 1,
+        "slc": 1
+      },
+      "edges": {
+        "top": {
+          "n": 4,
+          "mean": 2.348,
+          "sd": 0.709
+        },
+        "right": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 1,
+          "mean": 1.861,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "showcase",
+      "prints": 610,
+      "read": 15,
+      "frameless": 2,
+      "sets": [
+        "afr",
+        "clb",
+        "eld",
+        "ltc",
+        "ltr",
+        "m21",
+        "mh2",
+        "mid",
+        "plst",
+        "spg",
+        "trk"
+      ],
+      "set_mix": {
+        "ltr": 4,
+        "afr": 2,
+        "clb": 1,
+        "eld": 1,
+        "ltc": 1,
+        "m21": 1,
+        "mh2": 1,
+        "mid": 1
+      },
+      "edges": {
+        "top": {
+          "n": 13,
+          "mean": 2.695,
+          "sd": 0.491
+        },
+        "right": {
+          "n": 5,
+          "mean": 2.368,
+          "sd": 0.26
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 5,
+          "mean": 2.267,
+          "sd": 0.192
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "etched,inverted,legendary",
+      "prints": 535,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "2x2",
+        "acr",
+        "clb",
+        "cmm",
+        "cmr",
+        "m3c",
+        "mh3",
+        "mul"
+      ],
+      "set_mix": {
+        "clb": 3,
+        "cmr": 3,
+        "2x2": 2,
+        "cmm": 2,
+        "mul": 2,
+        "acr": 1,
+        "m3c": 1,
+        "mh3": 1
+      },
+      "edges": {
+        "top": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.414,
+          "sd": 0.064
+        },
+        "bottom": {
+          "n": 1,
+          "mean": 2.539,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.453,
+          "sd": 0.079
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "legendary,showcase",
+      "prints": 486,
+      "read": 15,
+      "frameless": 1,
+      "sets": [
+        "afr",
+        "clb",
+        "khm",
+        "ltc",
+        "ltr",
+        "mkm",
+        "mom",
+        "mul",
+        "sld",
+        "trk",
+        "unf"
+      ],
+      "set_mix": {
+        "ltr": 3,
+        "clb": 2,
+        "ltc": 2,
+        "afr": 1,
+        "khm": 1,
+        "mkm": 1,
+        "mom": 1,
+        "mul": 1
+      },
+      "edges": {
+        "top": {
+          "n": 3,
+          "mean": 2.369,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 5,
+          "mean": 2.419,
+          "sd": 0.283
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 6,
+          "mean": 2.115,
+          "sd": 0.427
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "inverted,showcase",
+      "prints": 404,
+      "read": 15,
+      "frameless": 1,
+      "sets": [
+        "dft",
+        "dsk",
+        "iko",
+        "mat",
+        "mkm",
+        "neo",
+        "one",
+        "pip",
+        "plst",
+        "sld",
+        "snc",
+        "vow"
+      ],
+      "set_mix": {
+        "neo": 3,
+        "snc": 2,
+        "dft": 1,
+        "dsk": 1,
+        "iko": 1,
+        "mat": 1,
+        "mkm": 1,
+        "one": 1
+      },
+      "edges": {
+        "top": {
+          "n": 13,
+          "mean": 2.76,
+          "sd": 0.471
+        },
+        "right": {
+          "n": 9,
+          "mean": 2.378,
+          "sd": 0.131
+        },
+        "bottom": {
+          "n": 2,
+          "mean": 2.919,
+          "sd": 0.299
+        },
+        "left": {
+          "n": 11,
+          "mean": 2.384,
+          "sd": 0.164
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "showcase",
+      "prints": 330,
+      "read": 15,
+      "frameless": 9,
+      "sets": [
+        "ecl",
+        "otp",
+        "soa",
+        "sta"
+      ],
+      "set_mix": {
+        "soa": 6,
+        "ecl": 3,
+        "otp": 3,
+        "sta": 3
+      },
+      "edges": {
+        "top": {
+          "n": 3,
+          "mean": 1.523,
+          "sd": 0.293
+        },
+        "right": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 1,
+          "mean": 1.693,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "inverted,legendary,showcase",
+      "prints": 326,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "ala",
+        "dmu",
+        "dsk",
+        "mat",
+        "mom",
+        "mul",
+        "neo",
+        "pip",
+        "sld",
+        "snc",
+        "tdm"
+      ],
+      "set_mix": {
+        "dmu": 3,
+        "mul": 3,
+        "ala": 1,
+        "dsk": 1,
+        "mat": 1,
+        "mom": 1,
+        "neo": 1,
+        "pip": 1
+      },
+      "edges": {
+        "top": {
+          "n": 5,
+          "mean": 2.792,
+          "sd": 0.545
+        },
+        "right": {
+          "n": 4,
+          "mean": 2.368,
+          "sd": 0.069
+        },
+        "bottom": {
+          "n": 1,
+          "mean": 2.961,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 4,
+          "mean": 2.537,
+          "sd": 0.138
+        }
+      }
+    },
+    {
+      "frame": "1993",
+      "border": "gold",
+      "effects": "",
+      "prints": 307,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "ptc"
+      ],
+      "set_mix": {
+        "ptc": 15
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.775,
+          "sd": 0.065
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.458,
+          "sd": 0.05
+        },
+        "bottom": {
+          "n": 15,
+          "mean": 2.64,
+          "sd": 0.035
+        },
+        "left": {
+          "n": 14,
+          "mean": 2.325,
+          "sd": 0.064
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "silver",
+      "effects": "",
+      "prints": 297,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "h17",
+        "ulst",
+        "und",
+        "ust"
+      ],
+      "set_mix": {
+        "ust": 9,
+        "und": 3,
+        "ulst": 2,
+        "h17": 1
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.403,
+          "sd": 0.204
+        },
+        "right": {
+          "n": 14,
+          "mean": 2.44,
+          "sd": 0.346
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.441,
+          "sd": 0.356
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "etched,inverted",
+      "prints": 294,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "2x2",
+        "acr",
+        "cmm",
+        "mat"
+      ],
+      "set_mix": {
+        "2x2": 6,
+        "cmm": 6,
+        "acr": 2,
+        "mat": 1
+      },
+      "edges": {
+        "top": {
+          "n": 14,
+          "mean": 2.623,
+          "sd": 0.393
+        },
+        "right": {
+          "n": 14,
+          "mean": 2.593,
+          "sd": 0.571
+        },
+        "bottom": {
+          "n": 2,
+          "mean": 2.581,
+          "sd": 0.06
+        },
+        "left": {
+          "n": 14,
+          "mean": 2.647,
+          "sd": 0.605
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "inverted,showcase",
+      "prints": 287,
+      "read": 15,
+      "frameless": 7,
+      "sets": [
+        "blb",
+        "eoe",
+        "iko",
+        "one",
+        "soa",
+        "tdm",
+        "tmt",
+        "wot"
+      ],
+      "set_mix": {
+        "soa": 3,
+        "wot": 3,
+        "blb": 2,
+        "one": 2,
+        "tdm": 2,
+        "eoe": 1,
+        "iko": 1,
+        "tmt": 1
+      },
+      "edges": {
+        "top": {
+          "n": 1,
+          "mean": 2.2,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 1,
+          "mean": 3.131,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "inverted,legendary,showcase",
+      "prints": 252,
+      "read": 15,
+      "frameless": 2,
+      "sets": [
+        "blb",
+        "mat",
+        "mul",
+        "one",
+        "spm",
+        "tdm",
+        "tmt",
+        "who"
+      ],
+      "set_mix": {
+        "mul": 3,
+        "one": 3,
+        "who": 3,
+        "blb": 2,
+        "mat": 1,
+        "spm": 1,
+        "tdm": 1,
+        "tmt": 1
+      },
+      "edges": {
+        "top": {
+          "n": 4,
+          "mean": 2.073,
+          "sd": 0.65
+        },
+        "right": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 2,
+          "mean": 2.814,
+          "sd": 0.389
+        },
+        "left": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "future",
+      "border": "black",
+      "effects": "",
+      "prints": 226,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "fut",
+        "mb2",
+        "pfut"
+      ],
+      "set_mix": {
+        "mb2": 8,
+        "fut": 6,
+        "pfut": 1
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.944,
+          "sd": 0.035
+        },
+        "right": {
+          "n": 12,
+          "mean": 2.955,
+          "sd": 0.025
+        },
+        "bottom": {
+          "n": 15,
+          "mean": 2.99,
+          "sd": 0.076
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.939,
+          "sd": 0.04
+        }
+      }
+    },
+    {
+      "frame": "2003",
+      "border": "gold",
+      "effects": "",
+      "prints": 206,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "wc03",
+        "wc04"
+      ],
+      "set_mix": {
+        "wc03": 9,
+        "wc04": 6
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.961,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.96,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 15,
+          "mean": 2.961,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.977,
+          "sd": 0.035
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "devoid",
+      "prints": 195,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "bfz",
+        "j22",
+        "m3c",
+        "mh3",
+        "ogw",
+        "pbfz",
+        "plst",
+        "pogw"
+      ],
+      "set_mix": {
+        "bfz": 5,
+        "ogw": 3,
+        "mh3": 2,
+        "j22": 1,
+        "m3c": 1,
+        "pbfz": 1,
+        "plst": 1,
+        "pogw": 1
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.499,
+          "sd": 0.054
+        },
+        "right": {
+          "n": 12,
+          "mean": 2.496,
+          "sd": 0.056
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 13,
+          "mean": 2.525,
+          "sd": 0.047
+        }
+      }
+    },
+    {
+      "frame": "2003",
+      "border": "silver",
+      "effects": "",
+      "prints": 175,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "hho",
+        "pal04",
+        "unh"
+      ],
+      "set_mix": {
+        "unh": 13,
+        "hho": 1,
+        "pal04": 1
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.942,
+          "sd": 0.08
+        },
+        "right": {
+          "n": 14,
+          "mean": 2.869,
+          "sd": 0.04
+        },
+        "bottom": {
+          "n": 14,
+          "mean": 2.919,
+          "sd": 0.055
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.892,
+          "sd": 0.08
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "legendary,showcase",
+      "prints": 144,
+      "read": 15,
+      "frameless": 1,
+      "sets": [
+        "acr",
+        "inr",
+        "ltr",
+        "mom",
+        "mul",
+        "otj",
+        "sld"
+      ],
+      "set_mix": {
+        "ltr": 6,
+        "acr": 4,
+        "inr": 1,
+        "mom": 1,
+        "mul": 1,
+        "otj": 1,
+        "sld": 1
+      },
+      "edges": {
+        "top": {
+          "n": 6,
+          "mean": 2.383,
+          "sd": 1.307
+        },
+        "right": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "1997",
+      "border": "black",
+      "effects": "tombstone",
+      "prints": 138,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "brc",
+        "dmr",
+        "inr",
+        "jud",
+        "ody",
+        "plst",
+        "rvr",
+        "sld",
+        "tor"
+      ],
+      "set_mix": {
+        "jud": 3,
+        "ody": 3,
+        "inr": 2,
+        "plst": 2,
+        "brc": 1,
+        "dmr": 1,
+        "rvr": 1,
+        "sld": 1
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 3.424,
+          "sd": 0.077
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.997,
+          "sd": 0.083
+        },
+        "bottom": {
+          "n": 15,
+          "mean": 3.379,
+          "sd": 0.155
+        },
+        "left": {
+          "n": 15,
+          "mean": 3.028,
+          "sd": 0.101
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "enchantment,inverted",
+      "prints": 114,
+      "read": 15,
+      "frameless": 5,
+      "sets": [
+        "eoe",
+        "fdn",
+        "fic",
+        "fin",
+        "mar",
+        "pza",
+        "tdm",
+        "tle"
+      ],
+      "set_mix": {
+        "fin": 3,
+        "mar": 3,
+        "fdn": 2,
+        "tdm": 2,
+        "tle": 2,
+        "eoe": 1,
+        "fic": 1,
+        "pza": 1
+      },
+      "edges": {
+        "top": {
+          "n": 2,
+          "mean": 3.639,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 4,
+          "mean": 3.11,
+          "sd": 0.042
+        },
+        "left": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "2003",
+      "border": "black",
+      "effects": "enchantment",
+      "prints": 112,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "bng",
+        "jou",
+        "plst",
+        "ths"
+      ],
+      "set_mix": {
+        "jou": 5,
+        "bng": 4,
+        "plst": 3,
+        "ths": 3
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.944,
+          "sd": 0.047
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.96,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 14,
+          "mean": 2.931,
+          "sd": 0.042
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.954,
+          "sd": 0.022
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "white",
+      "effects": "",
+      "prints": 107,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "mb2"
+      ],
+      "set_mix": {
+        "mb2": 15
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.453,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.456,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.456,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "enchantment,extendedart",
+      "prints": 99,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "cmm",
+        "drc",
+        "dsk",
+        "eoe",
+        "fdn",
+        "fic",
+        "msc",
+        "msh",
+        "soc",
+        "spm",
+        "tdc",
+        "thb",
+        "tle"
+      ],
+      "set_mix": {
+        "dsk": 2,
+        "msc": 2,
+        "cmm": 1,
+        "drc": 1,
+        "eoe": 1,
+        "fdn": 1,
+        "fic": 1,
+        "msh": 1
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.471,
+          "sd": 0.035
+        },
+        "right": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "enchantment,legendary",
+      "prints": 95,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "blc",
+        "cmm",
+        "eoc",
+        "lcc",
+        "nec",
+        "p22",
+        "plst",
+        "pmh2",
+        "pthb",
+        "thb"
+      ],
+      "set_mix": {
+        "pthb": 3,
+        "thb": 3,
+        "cmm": 2,
+        "blc": 1,
+        "eoc": 1,
+        "lcc": 1,
+        "nec": 1,
+        "p22": 1
+      },
+      "edges": {
+        "top": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.397,
+          "sd": 0.101
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.465,
+          "sd": 0.064
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "snow",
+      "prints": 90,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "2x2",
+        "j22",
+        "khm",
+        "pkhm",
+        "plst"
+      ],
+      "set_mix": {
+        "khm": 8,
+        "pkhm": 3,
+        "j22": 2,
+        "2x2": 1,
+        "plst": 1
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.335,
+          "sd": 0.07
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.328,
+          "sd": 0.054
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.328,
+          "sd": 0.044
+        }
+      }
+    },
+    {
+      "frame": "1997",
+      "border": "silver",
+      "effects": "",
+      "prints": 87,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "ugl"
+      ],
+      "set_mix": {
+        "ugl": 15
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 3.227,
+          "sd": 0.044
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.825,
+          "sd": 0.043
+        },
+        "bottom": {
+          "n": 14,
+          "mean": 3.24,
+          "sd": 0.052
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.864,
+          "sd": 0.03
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "legendary",
+      "prints": 85,
+      "read": 15,
+      "frameless": 6,
+      "sets": [
+        "ltr",
+        "msh",
+        "sld"
+      ],
+      "set_mix": {
+        "sld": 7,
+        "ltr": 6,
+        "msh": 2
+      },
+      "edges": {
+        "top": {
+          "n": 1,
+          "mean": 1.523,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 1,
+          "mean": 3.131,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "lesson",
+      "prints": 83,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "plst",
+        "pstx",
+        "stx",
+        "tla",
+        "tle"
+      ],
+      "set_mix": {
+        "tla": 6,
+        "stx": 4,
+        "pstx": 2,
+        "tle": 2,
+        "plst": 1
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.516,
+          "sd": 0.199
+        },
+        "right": {
+          "n": 12,
+          "mean": 2.447,
+          "sd": 0.112
+        },
+        "bottom": {
+          "n": 1,
+          "mean": 3.131,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 12,
+          "mean": 2.405,
+          "sd": 0.068
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "inverted,legendary",
+      "prints": 67,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "acr",
+        "dbl",
+        "otj",
+        "sch",
+        "sld"
+      ],
+      "set_mix": {
+        "dbl": 6,
+        "sld": 6,
+        "acr": 1,
+        "otj": 1,
+        "sch": 1
+      },
+      "edges": {
+        "top": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 12,
+          "mean": 2.411,
+          "sd": 0.093
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 14,
+          "mean": 2.514,
+          "sd": 0.07
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "fullart",
+      "prints": 64,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "neo",
+        "p23",
+        "sld",
+        "snc",
+        "spm",
+        "woe",
+        "znr"
+      ],
+      "set_mix": {
+        "sld": 5,
+        "neo": 3,
+        "znr": 3,
+        "p23": 1,
+        "snc": 1,
+        "spm": 1,
+        "woe": 1
+      },
+      "edges": {
+        "top": {
+          "n": 14,
+          "mean": 2.435,
+          "sd": 0.111
+        },
+        "right": {
+          "n": 14,
+          "mean": 2.414,
+          "sd": 0.083
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 13,
+          "mean": 2.421,
+          "sd": 0.082
+        }
+      }
+    },
+    {
+      "frame": "2003",
+      "border": "black",
+      "effects": "colorshifted",
+      "prints": 62,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "plc",
+        "plst"
+      ],
+      "set_mix": {
+        "plc": 11,
+        "plst": 4
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.975,
+          "sd": 0.156
+        },
+        "right": {
+          "n": 13,
+          "mean": 2.937,
+          "sd": 0.037
+        },
+        "bottom": {
+          "n": 15,
+          "mean": 2.973,
+          "sd": 0.09
+        },
+        "left": {
+          "n": 13,
+          "mean": 2.947,
+          "sd": 0.032
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "yellow",
+      "effects": "inverted",
+      "prints": 54,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "dft"
+      ],
+      "set_mix": {
+        "dft": 15
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 4.146,
+          "sd": 0.328
+        },
+        "right": {
+          "n": 14,
+          "mean": 4.742,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 1,
+          "mean": 3.131,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 14,
+          "mean": 4.657,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "enchantment,inverted,legendary,showcase",
+      "prints": 43,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "eoe",
+        "mat",
+        "mul",
+        "plst",
+        "sld",
+        "thb"
+      ],
+      "set_mix": {
+        "sld": 6,
+        "mul": 3,
+        "thb": 3,
+        "eoe": 1,
+        "mat": 1,
+        "plst": 1
+      },
+      "edges": {
+        "top": {
+          "n": 1,
+          "mean": 2.453,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 14,
+          "mean": 2.325,
+          "sd": 0.055
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 14,
+          "mean": 2.44,
+          "sd": 0.056
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "silver",
+      "effects": "legendary",
+      "prints": 37,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "p30m",
+        "ptg",
+        "sld",
+        "ulst",
+        "und"
+      ],
+      "set_mix": {
+        "ulst": 7,
+        "und": 4,
+        "sld": 2,
+        "p30m": 1,
+        "ptg": 1
+      },
+      "edges": {
+        "top": {
+          "n": 5,
+          "mean": 2.301,
+          "sd": 0.038
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.289,
+          "sd": 0.039
+        },
+        "bottom": {
+          "n": 1,
+          "mean": 2.961,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.328,
+          "sd": 0.071
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "miracle",
+      "prints": 31,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "40k",
+        "c16",
+        "c18",
+        "dsc",
+        "inr",
+        "mm3",
+        "plst"
+      ],
+      "set_mix": {
+        "40k": 3,
+        "c18": 3,
+        "mm3": 3,
+        "dsc": 2,
+        "plst": 2,
+        "c16": 1,
+        "inr": 1
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.442,
+          "sd": 0.071
+        },
+        "right": {
+          "n": 13,
+          "mean": 2.395,
+          "sd": 0.107
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.436,
+          "sd": 0.036
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "companion,legendary",
+      "prints": 31,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "iko",
+        "piko"
+      ],
+      "set_mix": {
+        "piko": 10,
+        "iko": 5
+      },
+      "edges": {
+        "top": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 11,
+          "mean": 2.406,
+          "sd": 0.044
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 12,
+          "mean": 2.375,
+          "sd": 0.057
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "draft",
+      "prints": 28,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "cn2"
+      ],
+      "set_mix": {
+        "cn2": 15
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.465,
+          "sd": 0.03
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.441,
+          "sd": 0.03
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.458,
+          "sd": 0.022
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "white",
+      "effects": "inverted,showcase",
+      "prints": 28,
+      "read": 15,
+      "frameless": 6,
+      "sets": [
+        "dft",
+        "ecl",
+        "eoe",
+        "tdm"
+      ],
+      "set_mix": {
+        "dft": 4,
+        "ecl": 4,
+        "eoe": 4,
+        "tdm": 3
+      },
+      "edges": {
+        "top": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 2,
+          "mean": 3.131,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "yellow",
+      "effects": "inverted,legendary",
+      "prints": 25,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "dft"
+      ],
+      "set_mix": {
+        "dft": 15
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 4.231,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 15,
+          "mean": 4.742,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 15,
+          "mean": 4.657,
+          "sd": 0.0
+        }
+      }
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "spree",
+      "prints": 22,
+      "read": 15,
+      "frameless": 0,
+      "sets": [
+        "otj"
+      ],
+      "set_mix": {
+        "otj": 15
+      },
+      "edges": {
+        "top": {
+          "n": 15,
+          "mean": 2.539,
+          "sd": 0.0
+        },
+        "right": {
+          "n": 15,
+          "mean": 2.456,
+          "sd": 0.0
+        },
+        "bottom": {
+          "n": 0,
+          "mean": null,
+          "sd": 0.0
+        },
+        "left": {
+          "n": 15,
+          "mean": 2.54,
+          "sd": 0.0
+        }
+      }
+    }
+  ],
+  "unsampled": [
+    {
+      "frame": "2003",
+      "border": "gold",
+      "effects": "tombstone",
+      "prints": 19
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "mooneldrazidfc",
+      "prints": 18
+    },
+    {
+      "frame": "2015",
+      "border": "white",
+      "effects": "showcase",
+      "prints": 17
+    },
+    {
+      "frame": "2015",
+      "border": "white",
+      "effects": "inverted,legendary,showcase",
+      "prints": 16
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "enchantment,showcase",
+      "prints": 16
+    },
+    {
+      "frame": "2003",
+      "border": "black",
+      "effects": "miracle",
+      "prints": 14
+    },
+    {
+      "frame": "1997",
+      "border": "gold",
+      "effects": "tombstone",
+      "prints": 14
+    },
+    {
+      "frame": "future",
+      "border": "black",
+      "effects": "legendary",
+      "prints": 12
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "enchantment,inverted,legendary",
+      "prints": 11
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "extendedart,lesson",
+      "prints": 11
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "legendary,snow",
+      "prints": 10
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "companion,etched,inverted,legendary",
+      "prints": 10
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "companion,extendedart,legendary",
+      "prints": 10
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "fullart,inverted,showcase",
+      "prints": 10
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "enchantment,extendedart,legendary",
+      "prints": 9
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "extendedart,snow",
+      "prints": 9
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "enchantment,inverted",
+      "prints": 9
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "enchantment,inverted,showcase",
+      "prints": 9
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "enchantment,etched,inverted,legendary",
+      "prints": 9
+    },
+    {
+      "frame": "2015",
+      "border": "yellow",
+      "effects": "fullart,inverted",
+      "prints": 8
+    },
+    {
+      "frame": "2003",
+      "border": "black",
+      "effects": "tombstone",
+      "prints": 7
+    },
+    {
+      "frame": "2015",
+      "border": "white",
+      "effects": "snow",
+      "prints": 7
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "enchantment,showcase",
+      "prints": 7
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "extendedart,spree",
+      "prints": 7
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "enchantment,inverted,showcase",
+      "prints": 7
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "fullart,inverted,legendary",
+      "prints": 6
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "fullart",
+      "prints": 6
+    },
+    {
+      "frame": "1997",
+      "border": "black",
+      "effects": "showcase",
+      "prints": 6
+    },
+    {
+      "frame": "2015",
+      "border": "white",
+      "effects": "enchantment,inverted,showcase",
+      "prints": 6
+    },
+    {
+      "frame": "2003",
+      "border": "black",
+      "effects": "inverted",
+      "prints": 6
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "enchantment",
+      "prints": 6
+    },
+    {
+      "frame": "2015",
+      "border": "white",
+      "effects": "legendary",
+      "prints": 5
+    },
+    {
+      "frame": "1997",
+      "border": "silver",
+      "effects": "tombstone",
+      "prints": 4
+    },
+    {
+      "frame": "2003",
+      "border": "white",
+      "effects": "tombstone",
+      "prints": 4
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "fullart,inverted",
+      "prints": 3
+    },
+    {
+      "frame": "2015",
+      "border": "yellow",
+      "effects": "enchantment,inverted",
+      "prints": 3
+    },
+    {
+      "frame": "1997",
+      "border": "black",
+      "effects": "inverted",
+      "prints": 3
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "fullart,inverted",
+      "prints": 2
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "lesson,showcase",
+      "prints": 2
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "extendedart,miracle",
+      "prints": 2
+    },
+    {
+      "frame": "2015",
+      "border": "white",
+      "effects": "legendary,showcase",
+      "prints": 2
+    },
+    {
+      "frame": "2015",
+      "border": "white",
+      "effects": "companion,legendary",
+      "prints": 2
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "enchantment,legendary",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "fullart,inverted,legendary",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "enchantment,inverted,legendary",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "fullart,legendary",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "inverted,lesson",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "companion,inverted,legendary",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "white",
+      "effects": "lesson",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "silver",
+      "effects": "miracle",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "fullart,inverted,legendary,showcase",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "white",
+      "effects": "enchantment,inverted,legendary,showcase",
+      "prints": 1
+    },
+    {
+      "frame": "future",
+      "border": "black",
+      "effects": "inverted",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "enchantment,inverted,legendary,showcase",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "enchantment,legendary,showcase",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "inverted,snow",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "borderless",
+      "effects": "inverted,miracle",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "etched,inverted,snow",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "white",
+      "effects": "enchantment",
+      "prints": 1
+    },
+    {
+      "frame": "2015",
+      "border": "black",
+      "effects": "devoid,legendary",
+      "prints": 1
+    }
+  ]
+}

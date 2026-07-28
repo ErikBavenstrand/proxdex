@@ -22,7 +22,7 @@ import pytest
 
 from proxdex.bleed import fit_plan
 from proxdex.config import Config
-from proxdex.frames import Confidence, FrameGuide, GuideId
+from proxdex.frames import FrameGuide, GuideId
 
 WEBUI = Path(__file__).resolve().parents[1] / "src" / "proxdex" / "webui.html"
 EDGES = ("top", "right", "bottom", "left")
@@ -76,11 +76,10 @@ CASES = (
 
 def guide_of(inset: tuple[float, float, float, float]) -> FrameGuide:
     return FrameGuide(
-        id=GuideId.MTG_BORDERED,
+        id=GuideId.MTG_2003.value,
         name="test",
         game=None,
         inset=inset,
-        confidence=Confidence.ESTIMATED,
     )
 
 

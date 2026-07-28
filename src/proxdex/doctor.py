@@ -5,7 +5,7 @@ about how a stage image has to be *stored* that it did not know when the first
 cards were filed. Every one of them shares the property that makes this whole
 project careful: nothing about it is visible on screen. It reaches paper.
 
-Four findings, and they are the only four claimed here — a check nobody can act on
+Six findings, and they are the only six claimed here — a check nobody can act on
 is noise, and a repair nobody measured is worse than the defect:
 
 ``alpha``
@@ -35,6 +35,22 @@ is noise, and a repair nobody measured is worse than the defect:
     A stage file Pillow cannot open at all. Not repairable — the pixels are gone;
     the step that made it has to run again.
 
+``stale-spec``
+    A bordered master fitted to frame-spec numbers that are no longer the numbers
+    this library's rules resolve — the spec was corrected, a rule was added, or the
+    card was pinned since. Everything else here is about *pixels*; this one is
+    about a *number*, which is why it needs recording rather than measuring: the
+    border step writes what it fitted to beside the file (``.fit-bordered``) and
+    this compares that against what would happen today. Not repairable — re-fitting
+    needs to know where the border currently is, which is a decision. A master
+    filed before proxdex recorded the fit is **not** a finding: nothing is known
+    about it, and inventing a comparison would be worse than staying quiet.
+
+``dangling-pin``
+    A card pinned to a frame spec that no longer exists. The fit falls back to the
+    game's generic spec, which is a different border, silently. Not repairable —
+    only a person knows whether the pin or the spec was the mistake.
+
 Examining is cheap and never destructive: Pillow is asked for the header, not for
 the pixels, and only :func:`repair` ever writes. A repair replaces the file
 atomically through :func:`proxdex.scratch.file` and ``Path.replace``, and it does
@@ -50,8 +66,8 @@ from typing import TYPE_CHECKING
 
 from PIL import Image, UnidentifiedImageError
 
-from proxdex import scratch, sources
-from proxdex.library import Stage
+from proxdex import scratch, sources, specs
+from proxdex.library import PIN_MARKER, Stage
 from proxdex.steps import STAGES
 
 if TYPE_CHECKING:
@@ -60,6 +76,7 @@ if TYPE_CHECKING:
 
     from proxdex.config import Config
     from proxdex.library import Card
+    from proxdex.specs import Registry
 
 #: the one stage whose aspect proxdex dictates. Everything after it inherits that
 #: aspect from it, so checking them too would report one cause three times.
@@ -73,6 +90,8 @@ class Ailment(StrEnum):
     ALPHA = "alpha"
     MODE = "mode"
     ASPECT = "aspect"
+    STALE_SPEC = "stale-spec"
+    DANGLING_PIN = "dangling-pin"
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,17 +158,51 @@ CHECKS: tuple[Check, ...] = (
             "Re-run the border step on that side, placing the marks (`proxdex border`)."
         ),
     ),
+    Check(
+        id=Ailment.STALE_SPEC,
+        label="fitted to a frame spec that has changed",
+        why=(
+            "This master was reshaped to border widths that are no longer the ones "
+            "this library resolves for the card — a spec was corrected, a rule was "
+            "added, or the card was pinned since. The picture is fine and the "
+            "border is the wrong width, which is exactly the defect nobody sees "
+            "until two cards are side by side on cut paper."
+        ),
+        repairable=False,
+        hint=(
+            "Re-run the border step on that side (`proxdex border <id> --force`), "
+            "placing the marks again."
+        ),
+    ),
+    Check(
+        id=Ailment.DANGLING_PIN,
+        label="pinned to a frame spec that no longer exists",
+        why=(
+            "The pin names a spec this library does not have, so the fit falls back "
+            "to the game's generic one — a different border, chosen by nothing."
+        ),
+        repairable=False,
+        hint=(
+            "Pin it to a spec that exists (`proxdex frames pin`), or drop the pin "
+            "(`proxdex frames unpin`) and let the rules answer."
+        ),
+    ),
 )
 CHECK: dict[Ailment, Check] = {c.id: c for c in CHECKS}
 
 
 @dataclass(frozen=True, slots=True)
 class Finding:
-    """One stored file, and the one thing wrong with it."""
+    """One stored file, and the one thing wrong with it.
+
+    ``stage``/``face`` are ``None`` for a finding about the *card* rather than one
+    of its images — a dangling pin belongs to the card, and pretending it belongs
+    to a stage would put a fake row in the table.
+    """
 
     id: str  # the card
-    stage: Stage
-    face: int
+    stage: Stage | None
+    face: int | None
     ailment: Ailment
     #: what was measured, in the fewest words that let someone check it by hand
     detail: str
@@ -205,8 +258,13 @@ class Report:
 _ASPECT_SLACK_PX = 2.0
 
 
-def examine(cards: Sequence[Card], cfg: Config) -> Report:
-    """Walk every stored stage image of every side, reading headers only."""
+def examine(cards: Sequence[Card], cfg: Config, reg: Registry | None = None) -> Report:
+    """Walk every stored stage image of every side, reading headers only.
+
+    ``reg`` is this library's frame-spec registry. Without it the two frame
+    findings are simply not claimed — an absent registry is not evidence that a
+    master is stale, and a check that guesses is worse than one that stays quiet.
+    """
     report = Report(cards=len(cards))
     for card in cards:
         for face in card.faces:
@@ -216,7 +274,61 @@ def examine(cards: Sequence[Card], cfg: Config) -> Report:
                     continue
                 report.images += 1
                 report.findings.extend(_examine(card, stage, face, path, cfg))
+        if reg is not None:
+            report.findings.extend(_examine_specs(card, reg))
     return report
+
+
+def _examine_specs(card: Card, reg: Registry) -> list[Finding]:
+    """The two findings that are about a *number* rather than about pixels."""
+    out: list[Finding] = []
+    pin = card.pin
+    if pin and reg.get(pin) is None:
+        out.append(
+            Finding(
+                id=card.id,
+                stage=None,
+                face=None,
+                ailment=Ailment.DANGLING_PIN,
+                detail=f"pinned to '{pin}'",
+                path=card.dir / PIN_MARKER,
+            )
+        )
+    for face in card.faces:
+        if not card.has(_FITTED, face):
+            continue
+        fit = card.fit(_FITTED, face)
+        if fit is None:
+            # filed before proxdex recorded what it fitted to: unknown, not stale
+            continue
+        want = specs.resolve(
+            reg,
+            card.id,
+            card.set_id,
+            card.game,
+            pin=pin,
+            printing=card.printing_frame,
+            traits=card.traits,
+        ).spec
+        if fit.matches(want.id, want.inset):
+            continue
+        out.append(
+            Finding(
+                id=card.id,
+                stage=_FITTED,
+                face=face,
+                ailment=Ailment.STALE_SPEC,
+                detail=(
+                    f"fitted to '{fit.spec}' "
+                    + " / ".join(f"{v * 100:.2f}" for v in fit.inset)
+                    + f"% — '{want.id}' now wants "
+                    + " / ".join(f"{v * 100:.2f}" for v in want.inset)
+                    + "%"
+                ),
+                path=card.stage_path(_FITTED, face),
+            )
+        )
+    return out
 
 
 def _examine(
@@ -315,8 +427,8 @@ def json_report(report: Report) -> dict[str, object]:
         "findings": [
             {
                 "id": f.id,
-                "stage": f.stage.label,
-                "face": f.face + 1,
+                "stage": f.stage.label if f.stage else None,
+                "face": f.face + 1 if f.face is not None else None,
                 "ailment": f.ailment.value,
                 "detail": f.detail,
                 "file": f.path.name,

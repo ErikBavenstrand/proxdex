@@ -3,7 +3,10 @@
 All card state is derived from the filesystem — which ``<id>_<n>_<stage>.png``
 files exist, plus the marker files ``.skip-<stage>``, ``.game``, ``.faces``,
 ``.front`` (which side prints on the front) and, for what the *printing* is,
-``.layout`` / ``.oversized`` / ``.frame``. There is no database, so nothing can
+``.layout`` / ``.oversized`` / ``.frame`` / ``.traits``. Those four are *derived*
+— a re-fetch rewrites them — while ``.pin`` holds the frame spec somebody
+**chose** for this card, which nothing but that person may change. There is no
+database, so nothing can
 drift out of sync with the images on disk, and nothing has to call an API again to
 remember that a card is a meld half or has no printed border.
 
@@ -18,7 +21,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from pathlib import Path
@@ -26,7 +29,6 @@ from pathlib import Path
 from proxdex import games
 from proxdex.config import MARKER, Config
 from proxdex.errors import LibraryError
-from proxdex.frames import GuideId
 from proxdex.games import GameId, Layout
 
 ENV_ROOT = "PROXDEX_ROOT"
@@ -41,9 +43,18 @@ LAYOUT_MARKER = ".layout"
 #: printed at 89×127mm rather than 63×88 (planar, scheme, Vanguard). A flag file:
 #: present means oversized, and `sheet` says so instead of shrinking it silently.
 OVERSIZED_MARKER = ".oversized"
-#: the frame guide this card needs, overriding its set's era — written at fetch
-#: when the provider said the printing is borderless or full-art
+#: the frame spec this *printing* needs, overriding its set's era — written at
+#: fetch when the provider said the printing is borderless or full-art. Derived,
+#: so a re-fetch is free to rewrite it.
 FRAME_MARKER = ".frame"
+#: the frame spec somebody *chose* for this card. A decision, not derived: a
+#: re-fetch must never touch it, and it outranks both the printing and every
+#: rule, because it is the one answer a person typed about this exact card.
+PIN_MARKER = ".pin"
+#: what the provider said about this printing, ``key=value`` per line — the facts
+#: a frame rule can match on (rarity, subtypes, finishes, full-art). Written at
+#: fetch beside ``.layout`` so choosing a spec never needs another API call.
+TRAITS_MARKER = ".traits"
 #: the front face — its files carry no suffix, so old libraries just work
 FRONT = 0
 
@@ -101,6 +112,32 @@ _STEP_STAGES: dict[Step, Stage] = {
 
 #: which face prints as the sheet's front (a face index). Absent = the front.
 FRONT_MARKER = ".front"
+#: which frame spec a stored *bordered* master was actually fitted to, and the
+#: four insets used — ``.fit-bordered[_f2]``. Written by the border step, read by
+#: ``doctor``: everything else proxdex invalidates is *pixels*, but a spec is a
+#: number, and a master fitted to numbers that have since been corrected is wrong
+#: in a way nothing on screen shows.
+FIT_MARKER = ".fit"
+
+
+@dataclass(frozen=True, slots=True)
+class Fit:
+    """What a stored bordered master was fitted to."""
+
+    spec: str
+    inset: tuple[float, float, float, float]
+
+    def matches(self, spec: str, inset: tuple[float, float, float, float]) -> bool:
+        """Same spec, same numbers — to a tolerance a rounded file can't beat.
+
+        The insets are written back at six decimals, so equality has to be
+        approximate or every master would read as stale the moment it was written.
+        """
+        return self.spec == spec and all(
+            abs(a - b) <= 5e-6 for a, b in zip(self.inset, inset, strict=True)
+        )
+
+
 #: ``<id>_<stage>_<label>`` plus an optional ``_f<n>`` face suffix
 _STAGE_FILE = re.compile(
     r"^(?P<id>.+)_(?P<n>\d+)_(?P<label>[a-z]+)(?:_f(?P<face>\d+))?$"
@@ -145,6 +182,21 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text).strip("-")
 
 
+def _read_marker(path: Path) -> str | None:
+    """A one-line marker's value, or ``None`` when it isn't there."""
+    if not path.is_file():
+        return None
+    return path.read_text(encoding="utf-8").strip().lower() or None
+
+
+def _write_marker(path: Path, value: str | None) -> None:
+    """Write a one-line marker, or remove it when ``value`` is ``None``."""
+    if value:
+        path.write_text(value + "\n", encoding="utf-8", newline="\n")
+    else:
+        path.unlink(missing_ok=True)
+
+
 def read_game(folder: Path, default: GameId = games.DEFAULT) -> GameId:
     """The game a card or set folder belongs to: its own marker, then its set
     folder's, then ``default`` (libraries predating markers are all one game)."""
@@ -181,9 +233,19 @@ class Card:
     # Three facts the provider knows and the filesystem then remembers, so the
     # card page and `sheet` can act on them without another API call.
     def write_kind(
-        self, layout: Layout, *, oversized: bool = False, frame: GuideId | None = None
+        self,
+        layout: Layout,
+        *,
+        oversized: bool = False,
+        frame: str | None = None,
+        traits: Mapping[str, str] | None = None,
     ) -> None:
-        """Record the print kind, as the provider stated it at fetch time."""
+        """Record the print kind, as the provider stated it at fetch time.
+
+        All of it is *derived*, so a re-fetch rewrites it freely. The card's pin
+        (:meth:`set_pin`) is deliberately not here: that is a decision someone
+        made, and fetching a card again must not throw it away.
+        """
         (self.dir / LAYOUT_MARKER).write_text(
             layout.value + "\n", encoding="utf-8", newline="\n"
         )
@@ -192,11 +254,40 @@ class Card:
             flag.touch()
         else:
             flag.unlink(missing_ok=True)
-        marker = self.dir / FRAME_MARKER
-        if frame is not None:
-            marker.write_text(frame.value + "\n", encoding="utf-8", newline="\n")
+        _write_marker(self.dir / FRAME_MARKER, frame)
+        self.write_traits(traits or {})
+
+    def write_traits(self, traits: Mapping[str, str]) -> None:
+        """Record what the provider said about this printing, for frame rules.
+
+        Only the keys with a value are written, and an empty mapping removes the
+        marker — a card whose provider says nothing must read as "no traits
+        recorded" rather than as "no rarity", so a rule that needs them can say
+        it could not decide instead of quietly not matching.
+        """
+        lines = [
+            f"{key}={' '.join(str(value).split())}"
+            for key, value in sorted(traits.items())
+            if str(value).strip()
+        ]
+        marker = self.dir / TRAITS_MARKER
+        if lines:
+            marker.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
         else:
             marker.unlink(missing_ok=True)
+
+    @property
+    def traits(self) -> dict[str, str] | None:
+        """This printing's recorded traits, or ``None`` if none were recorded."""
+        marker = self.dir / TRAITS_MARKER
+        if not marker.is_file():
+            return None
+        out: dict[str, str] = {}
+        for line in marker.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.partition("=")
+            if sep and key.strip():
+                out[key.strip()] = value.strip()
+        return out or None
 
     @property
     def layout(self) -> Layout:
@@ -214,15 +305,67 @@ class Card:
         return (self.dir / OVERSIZED_MARKER).exists()
 
     @property
-    def frame(self) -> GuideId | None:
-        """The frame guide this card overrides its set's era with, if any."""
-        marker = self.dir / FRAME_MARKER
+    def printing_frame(self) -> str | None:
+        """The frame spec this *printing* needs, as the provider described it.
+
+        Written at fetch (a borderless or full-art print has no frame to fit
+        whatever era its set belongs to). Derived, so a re-fetch may change it.
+        """
+        return _read_marker(self.dir / FRAME_MARKER)
+
+    @property
+    def pin(self) -> str | None:
+        """The frame spec chosen for this card, if somebody chose one.
+
+        Outranks the printing and every rule. Kept in its own marker precisely so
+        the two cannot be confused: this one is a decision, and a re-fetch that
+        rewrote it would throw away the only answer proxdex did not guess.
+        """
+        return _read_marker(self.dir / PIN_MARKER)
+
+    def set_pin(self, spec_id: str | None) -> None:
+        """Pin this card to a spec, or clear the pin with ``None``.
+
+        The id is *not* validated here — a library knows which specs exist, a card
+        folder does not, and a pin left dangling by a removed spec has to stay
+        readable so it can be reported instead of vanishing.
+        """
+        _write_marker(self.dir / PIN_MARKER, spec_id)
+
+    # -- what a stored master was fitted to -----------------------------------
+    def fit_marker(self, stage: Stage, face: int = FRONT) -> Path:
+        return self.dir / f"{FIT_MARKER}-{stage.label}{face_suffix(face)}"
+
+    def write_fit(
+        self,
+        stage: Stage,
+        face: int,
+        spec: str,
+        inset: tuple[float, float, float, float],
+    ) -> None:
+        """Record the spec and the four numbers this stage was fitted to."""
+        body = spec + "\n" + " ".join(f"{v:.6f}" for v in inset) + "\n"
+        self.fit_marker(stage, face).write_text(body, encoding="utf-8", newline="\n")
+
+    def fit(self, stage: Stage, face: int = FRONT) -> Fit | None:
+        """What that stage was fitted to, if it was written by a proxdex that
+        recorded it. ``None`` for a master filed before — which is not a finding:
+        nothing is known about it, and inventing a comparison would be worse."""
+        marker = self.fit_marker(stage, face)
         if not marker.is_file():
             return None
+        lines = marker.read_text(encoding="utf-8").splitlines()
+        if len(lines) < 2:
+            return None
         try:
-            return GuideId(marker.read_text(encoding="utf-8").strip().lower())
+            nums = [float(v) for v in lines[1].split()]
         except ValueError:
             return None
+        if len(nums) != 4:
+            return None
+        return Fit(
+            spec=lines[0].strip().lower(), inset=(nums[0], nums[1], nums[2], nums[3])
+        )
 
     # -- faces ---------------------------------------------------------------
     def write_faces(self, names: Sequence[str]) -> None:
@@ -333,6 +476,7 @@ class Card:
     def mark_skip(self, stage: Stage, face: int = FRONT) -> None:
         """Bypass this step: drop any output and record the skip."""
         self.stage_path(stage, face).unlink(missing_ok=True)
+        self.fit_marker(stage, face).unlink(missing_ok=True)
         self.skip_marker(stage, face).touch()
 
     def clear_skip(self, stage: Stage, face: int = FRONT) -> None:
@@ -341,6 +485,7 @@ class Card:
     def reset(self, stage: Stage, face: int = FRONT) -> None:
         """Back to pending: remove the output and any skip marker."""
         self.stage_path(stage, face).unlink(missing_ok=True)
+        self.fit_marker(stage, face).unlink(missing_ok=True)
         self.clear_skip(stage, face)
 
     def invalidate_downstream(self, stage: Stage, face: int = FRONT) -> list[Stage]:
@@ -351,6 +496,7 @@ class Card:
         removed = [s for s in Stage if s > stage and self.has(s, face)]
         for s in removed:
             self.stage_path(s, face).unlink(missing_ok=True)
+            self.fit_marker(s, face).unlink(missing_ok=True)
         return removed
 
 

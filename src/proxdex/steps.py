@@ -18,11 +18,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
+from pathlib import Path
 from typing import Any, TypeVar, cast
 
-from proxdex import upscale
+from proxdex import frames, specs, upscale
 from proxdex.config import Config, UpscaylModel, UpscaylScale
-from proxdex.frames import GuideId
 from proxdex.library import Stage, Step
 
 #: a click command callback, which is all `click_options` ever decorates
@@ -35,6 +35,20 @@ class OptKind(StrEnum):
     BOOL = "bool"
     CHOICE = "choice"
     NUMBER = "number"
+    #: a choice whose members are not known until a library is open — the frame
+    #: spec list, which a library adds to. Validated against that library's
+    #: registry at the boundary, never against a list frozen at import time.
+    OPEN = "open"
+
+
+@dataclass(frozen=True, slots=True)
+class Choice:
+    """One selectable value of an :attr:`OptKind.OPEN` setting."""
+
+    value: str
+    label: str
+    #: a word of context the UI shows beside the label (a spec's confidence)
+    note: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +62,10 @@ class StepOption:
     kind: OptKind
     #: for CHOICE, the enum whose members are the allowed values
     enum: type[Enum] | None = None
+    #: for OPEN, what this library's values are. Takes the library root, because
+    #: that is the only thing that knows — a frame spec can be measured tonight,
+    #: so the list cannot be frozen when this module is imported.
+    open_values: Callable[[Path], list[Choice]] | None = None
     #: the :class:`Config` field holding this library's default, if any
     config_field: str = ""
     #: an option with no default is simply omitted when unset (border's frame
@@ -64,6 +82,15 @@ class StepOption:
     @property
     def choices(self) -> tuple[str, ...]:
         return tuple(str(m.value) for m in self.enum) if self.enum else ()
+
+    def values(self, root: Path | None) -> tuple[Choice, ...]:
+        """Selectable values, labelled. For an OPEN option this reads the library,
+        so a spec measured a minute ago is offered without a restart."""
+        if self.kind is OptKind.OPEN:
+            if self.open_values is None or root is None:
+                return ()
+            return tuple(self.open_values(root))
+        return tuple(Choice(value=c, label=c) for c in self.choices)
 
     def default(self, cfg: Config) -> Any:
         """This library's value for the setting, as JSON."""
@@ -82,6 +109,11 @@ class StepOption:
             return _boolean(value)
         if self.kind is OptKind.CHOICE and self.enum is not None:
             return _member(self.enum, value)
+        if self.kind is OptKind.OPEN:
+            # only the *shape* is checked here: whether a spec by this id exists
+            # is a question for the library's registry, and this option does not
+            # have one. `cli._spec` and `/api/step` ask it, and name the options.
+            return frames.parse(value)
         if self.kind is OptKind.NUMBER:
             return self._number(value)
         return None
@@ -109,15 +141,25 @@ class StepOption:
             return [f"--{self.key}" if clean else f"--no-{self.key}"]
         if isinstance(clean, Enum):
             return [f"--{self.key}", str(clean.value)]
+        if self.kind is OptKind.OPEN:
+            return [f"--{self.key}", str(clean)]
         return [f"--{self.key}", f"{clean:g}"]
 
-    def json(self, cfg: Config) -> dict[str, Any]:
+    def json(self, cfg: Config, root: Path | None = None) -> dict[str, Any]:
+        offered = self.values(root)
         return {
             "key": self.key,
             "label": self.label,
             "help": self.help,
-            "kind": self.kind.value,
-            "choices": list(self.choices),
+            # an OPEN option renders exactly like a CHOICE; the difference is
+            # only in who knows the list, so the UI needs no second control
+            "kind": OptKind.CHOICE.value
+            if self.kind is OptKind.OPEN
+            else self.kind.value,
+            "choices": [c.value for c in offered],
+            "labels": [
+                {"value": c.value, "label": c.label, "note": c.note} for c in offered
+            ],
             "default": self.default(cfg),
             "optional": self.optional,
             "low": self.low,
@@ -170,7 +212,7 @@ class StepSpec:
                 out += opt.argv(opts[opt.key])
         return out
 
-    def json(self, cfg: Config) -> dict[str, Any]:
+    def json(self, cfg: Config, root: Path | None = None) -> dict[str, Any]:
         found = self.availability(cfg)
         return {
             "key": self.key,
@@ -179,7 +221,7 @@ class StepSpec:
             "blurb": self.blurb,
             "skippable": self.skippable,
             "run_label": self.run_label or f"Run {self.label.lower()}",
-            "options": [o.json(cfg) for o in self.options],
+            "options": [o.json(cfg, root) for o in self.options],
             # a step that needs an external tool reports whether it is there.
             # Named `tool_ready` and not `ready`, because "ready" already means
             # "this step is next" everywhere else — a step can be next and
@@ -196,6 +238,27 @@ class StepSpec:
                 "message": found.message,
             },
         }
+
+
+def _spec_choices(root: Path) -> list[Choice]:
+    """This library's frame specs, for the border step's dropdown and its flag.
+
+    Read from the registry every time rather than cached: a spec measured a minute
+    ago has to be offered without restarting anything, and the list is four files.
+    """
+    reg = specs.load(root)
+    return [
+        Choice(
+            value=spec.id,
+            label=spec.name,
+            # the border it will fit to, which is the fact worth seeing next to the
+            # name. A spec carries no grade to show here — see `proxdex.frames`.
+            note="no border"
+            if spec.frameless
+            else "/".join(f"{v:.2f}" for v in spec.mm()) + "mm",
+        )
+        for spec in reg.specs.values()
+    ]
 
 
 # --------------------------------------------------------------- the pipeline --
@@ -221,10 +284,11 @@ BORDER = StepSpec(
         StepOption(
             key="frame",
             label="Frame spec",
-            help="Which era's border widths to fit to. Defaults to the card's "
-            "own set; pick borderless for a full-art print.",
-            kind=OptKind.CHOICE,
-            enum=GuideId,
+            help="Which border widths to fit to. Defaults to whatever this "
+            "library's rules resolve for the card — override it here for one run, "
+            "or pin it to the card with `proxdex frames pin`.",
+            kind=OptKind.OPEN,
+            open_values=_spec_choices,
             optional=True,
         ),
         StepOption(
@@ -363,8 +427,8 @@ def steps() -> tuple[StepSpec, ...]:
     return tuple(s for s in PIPELINE if s.step is not None)
 
 
-def json_pipeline(cfg: Config) -> list[dict[str, Any]]:
-    return [s.json(cfg) for s in PIPELINE]
+def json_pipeline(cfg: Config, root: Path | None = None) -> list[dict[str, Any]]:
+    return [s.json(cfg, root) for s in PIPELINE]
 
 
 def _boolean(value: Any) -> bool | None:
@@ -417,6 +481,13 @@ def click_options(key: str) -> Callable[[F], F]:
             elif opt.kind is OptKind.CHOICE:
                 flag = f"--{opt.key}"
                 kind = click.Choice(list(opt.choices))
+            elif opt.kind is OptKind.OPEN:
+                # deliberately *not* a click.Choice: the allowed values live in a
+                # library that has not been opened yet when this decorator runs.
+                # The command validates against that library's registry and names
+                # the options in the error, which is the same text a Choice gives.
+                flag = f"--{opt.key}"
+                kind = str
             else:
                 flag = f"--{opt.key}"
                 # the same bounds the API enforces, so a number out of range is

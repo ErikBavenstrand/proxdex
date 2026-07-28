@@ -100,10 +100,16 @@ class CardMeta:
     layout: Layout = Layout.SINGLE
     #: printed at 89×127mm rather than 63×88 (planar, scheme, Vanguard)
     oversized: bool = False
-    #: the frame guide this printing needs, when the provider knows — a
-    #: borderless or full-art print has no frame to fit against, whatever its
-    #: set's era says. None = decide from the set.
-    frame: GuideId | None = None
+    #: the frame spec this printing needs, when the provider says outright — a
+    #: borderless print has no frame to fit against whatever its set's era says.
+    #: Full-art is *not* one of these: its border is ordinary. None = the rules
+    #: decide, which is the case for every card whose border is a normal one.
+    frame: str | None = None
+    #: what the provider said about this printing, as the facts a frame rule can
+    #: match on (rarity, subtypes, finishes, full-art). Recorded per card at fetch
+    #: so picking a spec never needs a second API call — see
+    #: :meth:`proxdex.library.Card.write_traits`.
+    traits: dict[str, str] = field(default_factory=dict)
 
     @property
     def image_url(self) -> str:
@@ -138,7 +144,8 @@ class SearchResult:
     faces: tuple[FaceImage, ...]
     layout: Layout = Layout.SINGLE
     oversized: bool = False
-    frame: GuideId | None = None
+    frame: str | None = None
+    traits: dict[str, str] = field(default_factory=dict)
 
     @property
     def image_url(self) -> str:
@@ -155,7 +162,24 @@ class SearchResult:
             layout=self.layout,
             oversized=self.oversized,
             frame=self.frame,
+            traits=dict(self.traits),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class CardBrief:
+    """One card of a set, reduced to what choosing a frame spec needs.
+
+    Not a :class:`SearchResult`: no image, no artist, no prices. This exists so a
+    rule can be *previewed* over a whole set cheaply, and it carries exactly the
+    traits :func:`proxdex.specs.Rule.selects` reads.
+    """
+
+    id: str
+    name: str
+    number: str
+    rarity: str
+    traits: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +274,19 @@ def search(
     return [r for r in found if _keep(r, rarity, year, set_filter)]
 
 
+def set_cards(
+    set_id: str, cfg: Config, game: GameId = games.DEFAULT
+) -> list[CardBrief]:
+    """Every card in one set, with the traits a frame rule matches on.
+
+    Deliberately per-set and never "every card of every set": one set is a page or
+    two, and the only thing this is for is showing which cards a rule catches
+    *before* it is saved.
+    """
+    provider = _pokemon_set_cards if game is GameId.POKEMON else _mtg_set_cards
+    return provider(set_id, cfg)
+
+
 def download(meta: CardMeta, face: int = 0) -> Image.Image:
     """Download one face of a card's image, normalized to RGB."""
     if face >= len(meta.faces):
@@ -306,7 +343,68 @@ def _pokemon_meta(data: dict[str, Any], cfg: Config) -> CardMeta:
         game=GameId.POKEMON,
         # Pokémon cards are printed on one side; the back is the shared TPC back
         faces=one_face(cfg.scrydex_url.format(id=data["id"])),
+        traits=_pokemon_traits(data),
     )
+
+
+def _pokemon_base(cfg: Config) -> str:
+    """The API root behind the configured card URL — ``…/v2`` out of
+    ``…/v2/cards/{id}``, so the sets endpoint needs no second setting to drift."""
+    return cfg.api_url.split("/cards")[0].rstrip("/")
+
+
+#: pokemontcg.io's maximum, and roughly the number of sets that exist — so the
+#: whole list is one request in practice, with the loop there for the year it isn't
+_PAGE = 250
+#: how many pages a paged read will ever ask for. A set with more than 1000 cards
+#: does not exist; a provider looping forever does.
+_MAX_PAGES = 4
+
+
+def _pokemon_set_cards(set_id: str, cfg: Config) -> list[CardBrief]:
+    out: list[CardBrief] = []
+    for page in range(1, _MAX_PAGES + 1):
+        resp = _get(
+            f"{_pokemon_base(cfg)}/cards",
+            params={
+                "q": f"set.id:{set_id}",
+                "page": page,
+                "pageSize": _PAGE,
+                "orderBy": "number",
+                "select": "id,name,number,rarity,subtypes",
+            },
+        )
+        if not resp.ok:
+            raise FileError(f"Pokémon TCG API returned {resp.status} listing {set_id}")
+        rows = _objs(resp.json().get("data"))
+        out += [
+            CardBrief(
+                id=str(row.get("id") or ""),
+                name=str(row.get("name") or ""),
+                number=str(row.get("number") or ""),
+                rarity=str(row.get("rarity") or ""),
+                traits=_pokemon_traits(row),
+            )
+            for row in rows
+            if row.get("id")
+        ]
+        if len(rows) < _PAGE:
+            break
+    return out
+
+
+def _pokemon_traits(data: dict[str, Any]) -> dict[str, str]:
+    """The facts a frame rule can match a Pokémon printing on.
+
+    Rarity and subtypes only: pokemontcg.io has no full-art or finish flag, and a
+    trait proxdex invents is a trait a rule would silently mismatch on. What is
+    *not* recorded is as much the point as what is — a rule needing a finish then
+    reports that it cannot decide rather than quietly not matching.
+    """
+    return {
+        "rarity": str(data.get("rarity") or ""),
+        "subtypes": ",".join(_strs(data.get("subtypes"))),
+    }
 
 
 def _pokemon_groups(data: dict[str, Any]) -> list[FactGroup]:
@@ -514,7 +612,8 @@ def _mtg_meta(data: dict[str, Any]) -> CardMeta:
         faces=_mtg_faces(data),
         layout=_mtg_layout(data),
         oversized=data.get("oversized") is True,
-        frame=_mtg_frame(data),
+        frame=mtg_frame(data),
+        traits=mtg_traits(data),
     )
 
 
@@ -535,7 +634,8 @@ def _mtg_result(data: dict[str, Any]) -> SearchResult:
         faces=_mtg_faces(data),
         layout=_mtg_layout(data),
         oversized=data.get("oversized") is True,
-        frame=_mtg_frame(data),
+        frame=mtg_frame(data),
+        traits=mtg_traits(data),
     )
 
 
@@ -727,21 +827,123 @@ def _is_meld_result(data: dict[str, Any]) -> bool:
     )
 
 
-def _mtg_frame(data: dict[str, Any]) -> GuideId | None:
-    """The frame guide this printing needs, when Scryfall says outright.
+def mtg_frame(data: dict[str, Any]) -> str | None:
+    """The frame spec this printing needs, when Scryfall says outright.
+
+    Public, unlike its neighbours, because it is a *reading* rather than a fetch:
+    what one card object means for the border. `tests/test_frames.py` holds it to
+    that reading without a network round trip.
 
     A modern set mixes bordered and borderless prints under one set code, so the
     set id cannot answer this — but the card object can: ``border_color`` is
-    ``"borderless"`` and ``full_art`` is a flag. Either way there is no printed
-    frame to fit the border against, only the card aspect. Anything else returns
-    ``None`` and the set's era decides.
+    ``"borderless"``, and there is then no printed frame to fit the border
+    against, only the card aspect. Anything else returns ``None`` and the card's
+    rules decide.
+
+    **``full_art`` is deliberately not consulted.** It reads as if it meant "no
+    border" and it does not: a full-art card's *art* fills the frame area, and the
+    black border is still there at its era's normal width. Measured off Scryfall's
+    own scans, a ZNR full-art land carries 2.28-2.45mm and an Unhinged one (2003
+    frame) 2.88-3.05mm — the same as their ordinary neighbours. Treating them as
+    borderless reshaped them to pure aspect and printed the art into the cut line.
     """
-    borderless = (
-        str(data.get("border_color") or "").strip().lower() == "borderless"
-        or data.get("full_art") is True
+    border = str(data.get("border_color") or "").strip().lower()
+    if (
+        border == "borderless"
         or str(data.get("layout") or "").strip().lower() in _FRAMELESS_LAYOUTS
-    )
-    return GuideId.BORDERLESS if borderless else None
+    ):
+        return GuideId.BORDERLESS.value
+    # Two more the printing settles outright, both measured over every combination
+    # of Scryfall's three frame fields (`scripts/mtg-variants.py`). Answered here
+    # rather than by a shipped rule for the same reason `borderless` is: it is a fact
+    # the provider stated about this printing, not a guess about a set — so it lands
+    # at `Via.PRINTING`, above any rule and below a pin.
+    if border == "yellow":
+        # a decorative band, 4.70mm against an ordinary 2.45. Colour is otherwise
+        # never geometry: white, gold and silver all measure at generation width.
+        return GuideId.MTG_YELLOW_BAND.value
+    effects = {e.strip().lower() for e in _strs(data.get("frame_effects"))}
+    if "extendedart" in effects:
+        # the art runs off the left and right card edges, so those borders do not
+        # exist — the one treatment of ~26 that changes the geometry
+        return GuideId.MTG_EXTENDED_ART.value
+    return None
+
+
+def mtg_traits(data: dict[str, Any]) -> dict[str, str]:
+    """The facts a frame rule can match an MTG printing on.
+
+    Public for the same reason as :func:`mtg_frame`: it is a reading of one card
+    object, and the frame-spec tests pin it.
+
+    ``frame`` is Scryfall's own frame generation (``1993``, ``1997``, ``2003``,
+    ``2015``, ``future``) and is the most useful of these by a distance: it is the
+    thing that actually changes the border width, and one set code can carry more
+    than one of them (a retro-frame bonus sheet inside a modern set).
+    """
+    return {
+        "rarity": str(data.get("rarity") or ""),
+        "subtypes": _mtg_subtypes(data),
+        "finishes": ",".join(_strs(data.get("finishes"))),
+        "full_art": "1" if data.get("full_art") is True else "0",
+        "frame": str(data.get("frame") or ""),
+        "border": str(data.get("border_color") or ""),
+        # the treatments layered on the frame. Recorded because two of the ~26 do
+        # change the geometry — `extendedart` runs the art to the left and right card
+        # edges, `fullart` fills the frame area — while the rest (a legendary crown,
+        # an inverted text box, the Nyx enchantment treatment, an etched foil) leave
+        # the border exactly where its generation puts it. Measured, not assumed:
+        # `scripts/mtg-variants.py`.
+        "effects": ",".join(_strs(data.get("frame_effects"))),
+    }
+
+
+def _mtg_set_cards(set_id: str, cfg: Config) -> list[CardBrief]:
+    out: list[CardBrief] = []
+    url = f"{cfg.mtg_api_url.rstrip('/')}/cards/search"
+    params: dict[str, Any] | None = {
+        "q": f"set:{set_id}",
+        "unique": "prints",
+        "order": "set",
+    }
+    for _ in range(_MAX_PAGES * 2):  # Scryfall pages 175 at a time
+        resp = _get(url, params=params)
+        if resp.status == 404:  # Scryfall's "no cards matched"
+            return out
+        if not resp.ok:
+            raise FileError(f"Scryfall returned {resp.status} listing {set_id}")
+        body = resp.json()
+        out += [
+            CardBrief(
+                id=f"{row.get('set')}-{row.get('collector_number')}",
+                name=str(row.get("name") or ""),
+                number=str(row.get("collector_number") or ""),
+                rarity=str(row.get("rarity") or "").title(),
+                traits=mtg_traits(row),
+            )
+            for row in _objs(body.get("data"))
+            if row.get("set") and row.get("collector_number")
+        ]
+        # Scryfall hands back the whole next URL, query included, so it is
+        # followed as-is rather than rebuilt from a page number
+        if not body.get("has_more") or not body.get("next_page"):
+            break
+        url, params = str(body["next_page"]), None
+    return out
+
+
+def _mtg_subtypes(data: dict[str, Any]) -> str:
+    """The subtypes out of a type line — everything after the em dash.
+
+    Scryfall spells them only inside ``type_line`` ("Creature — Human Wizard"),
+    and it is a real dash rather than a hyphen, so both are accepted.
+    """
+    line = str(data.get("type_line") or "")
+    for dash in ("—", "-"):
+        if dash in line:
+            tail = line.split(dash, 1)[1]
+            return ",".join(part for part in tail.split() if part)
+    return ""
 
 
 #: how many related cards to resolve — each costs one (cached) API call, and no
@@ -847,6 +1049,14 @@ def _obj(value: Any) -> dict[str, Any]:
 
 def _objs(value: Any) -> list[dict[str, Any]]:
     return [_obj(v) for v in value] if isinstance(value, list) else []
+
+
+def _int(value: Any) -> int:
+    """A count from an untyped field — 0 for anything that is not one."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _strs(value: Any) -> list[str]:

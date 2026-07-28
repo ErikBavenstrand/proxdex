@@ -35,6 +35,8 @@ Layout on disk::
     <root>/cards/<setid>-<slug>/<id>_<name>/<id>_<n>_<stage>[_f2].png
     <root>/back-<game>.png   (optional shared card back, per game)
     <root>/profiles/<name>.json     (a print medium: notes + calibration rounds)
+    <root>/frames/<id>.json         (a frame spec: this library's border widths)
+    <root>/frames/rules.json        (which cards of which set take which spec)
     <root>/print-batches/<date>_<name>/{<faces>.pdf, batch.toml}
     <root>/INDEX.md          (generated)
     <root>/proxdex.toml      (config + library marker)

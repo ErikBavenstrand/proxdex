@@ -38,12 +38,14 @@ from proxdex import (
     frames,
     games,
     imports,
+    inventory,
     media,
     net,
     profiles,
     report,
     scratch,
     sources,
+    specs,
     steps,
 )
 from proxdex import calibrate as calibrate_mod
@@ -490,7 +492,7 @@ def _resolve_meta(
     return sources.lookup_any(cid, cfg, game or (known.game if known else None))
 
 
-def _kind_note(card: Card, meta: sources.CardMeta) -> None:
+def _kind_note(lib: Library, card: Card, meta: sources.CardMeta) -> None:
     """Say out loud when a printing is not an ordinary one-sided 63×88 card.
 
     Three things change what goes on paper — two sides, a meld pair, an oversized
@@ -510,7 +512,7 @@ def _kind_note(card: Card, meta: sources.CardMeta) -> None:
         )
     if meta.frame is not None:
         console.print(
-            f"  [dim]frame:[/] {frames.GUIDES[meta.frame].name} "
+            f"  [dim]frame:[/] {_spec_name(lib, meta.frame)} "
             "[dim](from the printing, not its set)[/]"
         )
 
@@ -558,8 +560,13 @@ def _acquire(
     card.write_faces(meta.face_names)
     # what kind of printing this is — recorded now so the border step, `sheet`
     # and the card page can act on it without asking the API again
-    card.write_kind(meta.layout, oversized=meta.oversized, frame=meta.frame)
-    _kind_note(card, meta)
+    card.write_kind(
+        meta.layout,
+        oversized=meta.oversized,
+        frame=meta.frame,
+        traits=meta.traits,
+    )
+    _kind_note(lib, card, meta)
     wanted = card.faces if face is None else _faces(card, face)
     for f in wanted:
         dst = card.stage_path(Stage.ORIGINAL, f)
@@ -1242,8 +1249,10 @@ def _kind_tag(card: Card) -> str:
         tags.append(f"[cyan]{card.layout.value}[/]")
     if card.oversized:
         tags.append("[yellow]oversized[/]")
-    if card.frame is not None:
-        tags.append(f"[dim]{card.frame.value}[/]")
+    if card.printing_frame is not None:
+        tags.append(f"[dim]{card.printing_frame}[/]")
+    if card.pin is not None:
+        tags.append(f"[magenta]pin:{card.pin}[/]")
     return " ".join(tags)
 
 
@@ -1257,7 +1266,8 @@ def _card_json(card: Card, batch: report.Batch | None) -> dict[str, Any]:
         "set": card.set_id,
         "layout": card.layout.value,
         "oversized": card.oversized,
-        "frame": card.frame.value if card.frame else None,
+        "frame": card.printing_frame,
+        "pin": card.pin,
         "front_face": card.front_face,
         "faces": [
             {
@@ -1321,7 +1331,7 @@ def show(ctx: click.Context, cid: str, game: str | None) -> None:
         f"[cyan]{' · '.join(kind)}[/] [dim]{meta.layout.note}[/]\n"
         + (
             "[dim]frame: [/]"
-            + frames.GUIDES[meta.frame].name
+            + _spec_name(lib, meta.frame)
             + " [dim](from the printing)[/]\n"
             if meta.frame is not None
             else ""
@@ -1810,73 +1820,618 @@ def flip(ctx: click.Context, ids: tuple[str, ...], face: int | None) -> None:
     _reindex(lib)
 
 
-def _warn_unmeasured(card: Card, guide: FrameGuide) -> None:
-    """Say out loud when a reshape is running against a guessed frame spec."""
-    if guide.measured:
-        return
-    err.print(
-        f"[yellow]⚠[/] {card.id}: no measured frame spec for "
-        f"[bold]{card.set_id}[/] ({games.get(card.game).name}) — using "
-        f"'{guide.id.value}'. [dim]{guide.note} See `proxdex frames`.[/]"
+# ------------------------------------------------------------- frame specs ---
+def _registry(lib: Library) -> specs.Registry:
+    return specs.load(lib.root)
+
+
+def _spec_name(lib: Library, spec_id: str) -> str:
+    """A spec's own name, or its id if this library has never heard of it.
+
+    Total on purpose: the id may come from a card marker written by a proxdex that
+    knew a spec this one does not, and a missing name is no reason to fail.
+    """
+    spec = _registry(lib).get(spec_id)
+    return spec.name if spec is not None else spec_id
+
+
+def _spec(reg: specs.Registry, value: str | None) -> str | None:
+    """A spec id from a flag, checked against *this library's* specs.
+
+    Not a ``click.Choice``: the list lives in a library that is not open when the
+    decorator runs. The error names every option, which is what a Choice does.
+    """
+    if not value:
+        return None
+    found = reg.get(value)
+    if found is None:
+        known = ", ".join(sorted(reg.specs)) or "none"
+        raise click.UsageError(
+            f"'{value}' is not a frame spec in this library. Known: {known} "
+            "(`proxdex frames list`)"
+        )
+    return found.id
+
+
+def _resolve_spec(
+    reg: specs.Registry, card: Card, override: str | None = None
+) -> specs.Resolution:
+    """The spec this card's border step will fit to, and why — one call, so the
+    CLI, the API and the align tool cannot disagree about which spec is in force."""
+    return specs.resolve(
+        reg,
+        card.id,
+        card.set_id,
+        card.game,
+        override=override,
+        pin=card.pin,
+        printing=card.printing_frame,
+        traits=card.traits,
     )
 
 
-@cli.command(name="frames")
+def _warn_spec(card: Card, found: specs.Resolution) -> None:
+    """Say out loud when the fit is running against a broken or unanswerable
+    choice of spec. Not against a spec whose *numbers* are provisional — that is
+    every shipped MTG spec, so warning about it would be a line on every card."""
+    if found.missing:
+        err.print(
+            f"[yellow]⚠[/] {card.id}: frame spec [bold]{found.missing}[/] no longer "
+            f"exists — fitting to '{found.spec.id}' instead "
+            "[dim](`proxdex frames list`, then pin or assign one)[/]"
+        )
+    if found.undecided:
+        err.print(
+            f"[yellow]⚠[/] {card.id}: rule(s) "
+            f"[bold]{', '.join(found.undecided)}[/] match on what the provider "
+            "said about this printing, which this card has no record of "
+            "[dim](re-fetch it, or pin a spec with `proxdex frames pin`)[/]"
+        )
+    elif found.via is specs.Via.FALLBACK:
+        err.print(
+            f"[yellow]⚠[/] {card.id}: nothing knows this printing's frame — using "
+            f"[bold]{found.spec.id}[/], this game's default. [dim]Re-fetch the card "
+            "to record its frame, or pin a spec.[/]"
+        )
+
+
+def _spec_row(spec: FrameGuide) -> tuple[str, ...]:
+    top, right, bottom, left = spec.mm()
+    ref_w, ref_h = spec.ref_mm
+    return (
+        spec.id,
+        spec.name,
+        games.get(spec.game).name if spec.game else "any",
+        f"{top:.2f} / {right:.2f} / {bottom:.2f} / {left:.2f}",
+        f"{ref_w:g}×{ref_h:g}",
+    )
+
+
+def _spec_table(reg: specs.Registry) -> Table:
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for col in ("Spec", "Name", "Game", "Border T/R/B/L (mm)", "Of a card"):
+        table.add_column(col)
+    for spec in reg.specs.values():
+        table.add_row(*_spec_row(spec))
+    return table
+
+
+def _issue_table(issues: Sequence[specs.Issue]) -> Table:
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for col in ("What", "Where", "Detail"):
+        table.add_column(col)
+    for issue in issues:
+        table.add_row(
+            f"[yellow]{issue.fault.label}[/]",
+            issue.subject,
+            f"[dim]{escape(issue.detail)}[/]",
+        )
+    return table
+
+
+def _audit(lib: Library, reg: specs.Registry) -> list[specs.Issue]:
+    """This library's frame warnings — the same list the UI's panel shows."""
+    return specs.audit(
+        reg, [(card.id, _resolve_spec(reg, card)) for card in lib.cards()]
+    )
+
+
+def _rules_table(reg: specs.Registry) -> Table:
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for col in ("Rule", "Game", "Set", "Catches", "Spec", "Needs traits"):
+        table.add_column(col)
+    for rule in reg.rules:
+        table.add_row(
+            rule.id,
+            games.get(rule.game).name,
+            rule.set_id or "[dim]every set[/]",
+            rule.describes,
+            rule.spec,
+            "[yellow]yes[/]" if rule.match.needs_traits else "[dim]no[/]",
+        )
+    return table
+
+
+@cli.group(name="frames", invoke_without_command=True)
 @click.pass_context
 def frames_cmd(ctx: click.Context) -> None:
-    """List the frame specs and which of your sets have a measured one.
+    """Frame specs: the border widths a card is reshaped to, and which set gets which.
 
-    [cyan]border --inner-*[/] reshapes each card to its set's real border
-    widths, so a set with no measured spec is fitted against an *estimate*.
-    This shows which is which; override per run with
-    [cyan]border --frame <id>[/].
+    Run bare, this lists the specs and what your own cards resolve to.
+    [cyan]set[/] records a spec's four numbers, [cyan]assign[/] points part of a
+    set (or all of it) at one, [cyan]pin[/] overrules the rules for one card, and
+    [cyan]check[/] lists everything about this library's frames that needs a
+    decision.
+
+    A spec is four numbers and a note about where they came from — there is no
+    confidence grade, because reading a border off the publisher's scan is not a
+    measurement of the card and grading it as one was worse than saying nothing.
+    The shipped MTG numbers are working defaults; measure a real card and
+    [cyan]set[/] them.
     """
+    if ctx.invoked_subcommand is not None:
+        return
     lib = _lib(ctx)
-    known = Table(box=None, pad_edge=False, header_style="bold")
-    for col in ("Spec", "Game", "Border T/R/B/L (mm)", "Confidence"):
-        known.add_column(col)
-    for guide in frames.GUIDES.values():
-        top, right, bottom, left = guide.mm()
-        known.add_row(
-            guide.id.value,
-            games.get(guide.game).name if guide.game else "any",
-            f"{top:.2f} / {right:.2f} / {bottom:.2f} / {left:.2f}",
-            "[green]measured[/]" if guide.measured else "[yellow]estimated[/]",
-        )
-    console.print(known)
+    reg = _registry(lib)
+    console.print(_spec_table(reg))
+    if reg.rules:
+        console.print("\n[bold]Rules[/] [dim](first match wins)[/]")
+        console.print(_rules_table(reg))
 
     cards = lib.cards()
     if not cards:
+        console.print(
+            "\n[dim]no cards yet — nothing resolves until there is something to "
+            "resolve[/]"
+        )
         return
-    # keyed by the card's own override too: a borderless print inside a bordered
-    # set resolves differently from its neighbours, and hiding that would make the
-    # table claim a fit that isn't what runs
-    seen: dict[tuple[GameId, str, str], tuple[FrameGuide, int]] = {}
+    # keyed by the answer, not by the set: a set with a rule for its secret-rare
+    # tail resolves two ways, and one row claiming the default for all of them
+    # would name a fit that half those cards never get
+    seen: dict[tuple[GameId, str, str, str], tuple[specs.Resolution, int]] = {}
     for card in cards:
-        guide = frames.resolve(card.set_id, card.game, card.frame)
-        key = (card.game, card.set_id, card.frame.value if card.frame else "")
-        _, count = seen.get(key, (guide, 0))
-        seen[key] = (guide, count + 1)
+        found = _resolve_spec(reg, card)
+        key = (card.game, card.set_id, found.spec.id, found.rule or found.via.value)
+        _, count = seen.get(key, (found, 0))
+        seen[key] = (found, count + 1)
     mine = Table(box=None, pad_edge=False, header_style="bold")
-    for col in ("Set", "Game", "Cards", "Resolves to", "From", "Confidence"):
+    for col in ("Set", "Game", "Cards", "Resolves to", "From"):
         mine.add_column(col)
-    for (game, set_id, override), (guide, count) in sorted(seen.items()):
+    for (game, set_id, _, _), (found, count) in sorted(seen.items()):
         mine.add_row(
             set_id,
             games.get(game).name,
             str(count),
-            guide.id.value,
-            "the printing" if override else "its era",
-            "[green]measured[/]" if guide.measured else "[yellow]estimated[/]",
+            found.spec.id,
+            found.via.label + (f" ({found.rule})" if found.rule else ""),
         )
     console.print("\n[bold]Sets in this library[/]")
     console.print(mine)
-    unmeasured = sum(1 for guide, _ in seen.values() if not guide.measured)
-    if unmeasured:
+    if issues := _audit(lib, reg):
         console.print(
-            f"[yellow]{unmeasured}[/] set(s) fall back to an estimated spec — "
-            "measure a real card and add a guide in [cyan]frames.py[/] to fix."
+            f"\n[yellow]{len(issues)}[/] thing(s) need a decision — "
+            "[cyan]proxdex frames check[/]"
         )
+
+
+@frames_cmd.command("list")
+@click.pass_context
+def frames_list(ctx: click.Context) -> None:
+    """Every frame spec this library can fit to."""
+    console.print(_spec_table(_registry(_lib(ctx))))
+
+
+@frames_cmd.command("show")
+@click.argument("spec_id", metavar="SPEC")
+@click.pass_context
+def frames_show(ctx: click.Context, spec_id: str) -> None:
+    """One spec's numbers, provenance and where it is used."""
+    lib = _lib(ctx)
+    reg = _registry(lib)
+    spec = reg.get(spec_id)
+    if spec is None:
+        raise click.UsageError(
+            f"no frame spec '{spec_id}' — `proxdex frames list` shows them"
+        )
+    top, right, bottom, left = spec.mm()
+    ref_w, ref_h = spec.ref_mm
+    stored = specs.path_for(lib.root, spec.id)
+    where = (
+        f"stored here ([dim]{stored.relative_to(lib.root)}[/])"
+        if stored.is_file()
+        else "[dim]shipped with proxdex[/]"
+        if frames.is_shipped(spec.id)
+        else "[dim]not stored[/]"
+    )
+    console.print(
+        f"[bold]{spec.name}[/]  [dim]{spec.id}[/]\n"
+        f"{games.get(spec.game).name if spec.game else 'any game'} · {where}\n"
+        f"[dim]border:[/] top {top:.2f} · right {right:.2f} · bottom {bottom:.2f} "
+        f"· left {left:.2f} mm  [dim](of a {ref_w:g}×{ref_h:g}mm card)[/]\n"
+        f"[dim]inset:[/] " + " ".join(f"{v * 100:.3f}%" for v in spec.inset)
+    )
+    if spec.note:
+        console.print(f"[dim]{escape(spec.note)}[/]")
+    used = reg.uses(spec.id)
+    if used:
+        console.print("\n[bold]Used by[/]")
+        console.print(_rules_table(specs.Registry(specs=reg.specs, rules=tuple(used))))
+    pinned = [c.id for c in lib.cards() if c.pin == spec.id]
+    if pinned:
+        console.print(f"[dim]pinned to:[/] {', '.join(pinned)}")
+
+
+_EDGES = (
+    click.option("--top", type=float, required=True, help="Top border (mm)."),
+    click.option("--right", type=float, required=True, help="Right border (mm)."),
+    click.option("--bottom", type=float, required=True, help="Bottom border (mm)."),
+    click.option("--left", type=float, required=True, help="Left border (mm)."),
+    click.option("--name", default="", help="What to call it in listings."),
+    click.option(
+        "--game",
+        type=click.Choice([g.value for g in GameId]),
+        default=None,
+        help="The game whose frame this is. Omit for a spec that suits any game.",
+    ),
+    click.option(
+        "--oversized",
+        is_flag=True,
+        help=f"Measured on an oversized card ({games.OVERSIZED_W_MM:g}×"
+        f"{games.OVERSIZED_H_MM:g}mm) rather than a standard one.",
+    ),
+)
+
+
+def _edges(fn: Any) -> Any:
+    for option in reversed(_EDGES):
+        fn = option(fn)
+    return fn
+
+
+def _ref(*, oversized: bool) -> tuple[float, float]:
+    return (games.OVERSIZED_W_MM, games.OVERSIZED_H_MM) if oversized else (63.0, 88.0)
+
+
+def _store(lib: Library, spec: FrameGuide) -> None:
+    existed = specs.path_for(lib.root, spec.id).is_file()
+    path = specs.save(lib.root, spec)
+    top, right, bottom, left = spec.mm()
+    verb = (
+        "updated"
+        if existed
+        else "corrected the shipped"
+        if frames.is_shipped(spec.id)
+        else "added"
+    )
+    console.print(
+        f"[green]✓[/] {verb} [bold]{spec.id}[/]: "
+        f"{top:.2f} / {right:.2f} / {bottom:.2f} / {left:.2f} mm "
+        f"→ {path.relative_to(lib.root)}"
+    )
+    if not spec.note:
+        console.print(
+            "[dim]no --note: nothing records where these numbers came from, which "
+            "is the only account a spec has of how much to trust it[/]"
+        )
+    if not frames.is_shipped(spec.id) and not _registry(lib).uses(spec.id):
+        console.print(
+            "[dim]nothing uses it yet — `proxdex frames assign "
+            f"{spec.id} --set <set> --match set`[/]"
+        )
+
+
+@frames_cmd.command("set")
+@click.argument("spec_id", metavar="SPEC")
+@_edges
+@click.option(
+    "--card-w",
+    type=float,
+    default=None,
+    help="Width of the card you measured (mm). Default 63, or 88.9 with "
+    "--oversized. A real Magic/Pokémon card is 63.5×88.9mm, so if you put "
+    "calipers on one, say so — the insets are fractions of whatever you measured.",
+)
+@click.option("--card-h", type=float, default=None, help="Height of that card (mm).")
+@click.option(
+    "--note",
+    default="",
+    help="Where these numbers came from: which card, which calipers, or that you "
+    "typed them. The only record a spec has of how much to trust it.",
+)
+@click.pass_context
+def frames_set(
+    ctx: click.Context,
+    spec_id: str,
+    top: float,
+    right: float,
+    bottom: float,
+    left: float,
+    name: str,
+    game: str | None,
+    oversized: bool,
+    card_w: float | None,
+    card_h: float | None,
+    note: str,
+) -> None:
+    """Record a spec's four border widths — a new one, or a correction.
+
+    One verb, because a spec is four numbers however you arrived at them. There
+    used to be three (measure / scan / estimate) and the middle one was a mistake:
+    it graded a border read off the publisher's scan as trustworthy, when a scan's
+    crop shifts every reading taken from it by the same unknown amount. Say what
+    you did in [cyan]--note[/] instead.
+
+    Correcting a shipped spec is the expected case — the MTG numbers that ship are
+    working defaults. [cyan]docs/measuring-frames.md[/] names the card to measure
+    for each and how to measure it.
+
+    [dim]  proxdex frames set mtg-m15 --game mtg \\
+          --top 2.4 --right 2.4 --bottom 2.4 --left 2.4 \\
+          --card-w 63.5 --card-h 88.9 \\
+          --note "calipers on m15-281 Forest, 3 readings per edge"[/]
+    """
+    lib = _lib(ctx)
+    ref_w, ref_h = _ref(oversized=oversized)
+    _store(
+        lib,
+        specs.spec(
+            spec_id,
+            name,
+            games.parse(game),
+            (top, right, bottom, left),
+            note,
+            (card_w or ref_w, card_h or ref_h),
+        ),
+    )
+
+
+@frames_cmd.command("rm")
+@click.argument("spec_id", metavar="SPEC")
+@click.pass_context
+def frames_rm(ctx: click.Context, spec_id: str) -> None:
+    """Remove one of this library's own specs.
+
+    Refused while a rule or a pinned card still names it: that card would quietly
+    start bordering off the fallback, which is a different picture and no warning.
+    """
+    lib = _lib(ctx)
+    specs.delete(
+        lib.root, spec_id, pinned=[c.id for c in lib.cards() if c.pin == spec_id]
+    )
+    console.print(f"[green]✓[/] removed [bold]{spec_id}[/]")
+
+
+@frames_cmd.command("rules")
+@click.pass_context
+def frames_rules(ctx: click.Context) -> None:
+    """Which cards get which spec, in the order they are tried."""
+    reg = _registry(_lib(ctx))
+    if not reg.rules:
+        console.print(
+            "[dim]no rules — every set falls back to its era or its game's "
+            "generic spec. `proxdex frames assign` adds one.[/]"
+        )
+        return
+    console.print(_rules_table(reg))
+
+
+@frames_cmd.command("assign")
+@click.argument("spec_id", metavar="SPEC")
+@click.option(
+    "--set",
+    "set_id",
+    default="",
+    help="The set code this rule is for. Omit it for a rule covering every set of "
+    "the game — the only way to express a frame treatment, which is not a property "
+    "of any one set. Game-wide rules lose to set-specific ones.",
+)
+@click.option(
+    "--match",
+    "match",
+    type=click.Choice([m.value for m in specs.Match]),
+    default=specs.Match.SET.value,
+    help="Which cards of the set it catches. `set` is the set's default spec.",
+)
+@click.option(
+    "--value",
+    default="",
+    help="What the match needs: 188-216 for numbers, a rarity, a subtype, a "
+    "frame generation. Not used by `set` or `full-art`.",
+)
+@_GAME
+@click.pass_context
+def frames_assign(
+    ctx: click.Context,
+    spec_id: str,
+    set_id: str,
+    match: str,
+    value: str,
+    game: str | None,
+) -> None:
+    """Point part of a set (or all of it) at a frame spec.
+
+    A set can need more than one: the ordinary cards take the set's default and
+    the exceptions are caught by their own rule, which is tried first. Nobody
+    picks a spec per card — the rules do it, and [cyan]frames preview[/] shows
+    exactly which card each one catches before you trust it.
+
+    A rule with no [cyan]--set[/] covers every set of its game. That is what a
+    *treatment* needs: `extendedart` runs the art to the card edges in every set
+    that ever printed one, and listing those sets would go stale every release.
+    Specificity decides, not file order — a set's own rule beats a game-wide one.
+
+    [dim]  proxdex frames assign pokemon-swsh --set swsh4 --match set
+      proxdex frames assign pokemon-secret --set swsh4 --match numbers
+        --value 188-216
+      proxdex frames assign mtg-extended --game mtg --match effect
+        --value extendedart[/]
+    """
+    lib = _lib(ctx)
+    chosen = specs.parse_match(match)
+    if chosen is None:  # click.Choice already refused anything else
+        raise click.UsageError(f"unknown match kind '{match}'")
+    rule = specs.assign(
+        lib.root,
+        spec_id,
+        games.coerce(game, lib.default_game),
+        set_id,
+        chosen,
+        value,
+    )
+    console.print(
+        f"[green]✓[/] [bold]{rule.id}[/]: {rule.scope} · {rule.describes} → {rule.spec}"
+    )
+    if chosen is specs.Match.EFFECT:
+        # not the warning below: a printing with no treatments is an *answer*, and
+        # the commonest one, so this rule decides for every card that has traits
+        console.print(
+            "[dim]matches a frame treatment. A printing with no treatments is a "
+            "clean no, so this decides for every card whose traits were recorded — "
+            "and only two of the ~26 treatments change the border at all "
+            "(`extendedart` and the yellow band, both already handled).[/]"
+        )
+    elif chosen.needs_traits:
+        console.print(
+            "[dim]matches on what the provider said about the printing — cards "
+            "fetched before proxdex recorded that will report that they cannot be "
+            "decided. `proxdex frames preview` shows the whole set.[/]"
+        )
+
+
+@frames_cmd.command("unassign")
+@click.argument("rule_id", metavar="RULE")
+@click.pass_context
+def frames_unassign(ctx: click.Context, rule_id: str) -> None:
+    """Remove one rule. Numbering never reuses, so ids keep meaning what they did."""
+    rule = specs.unassign(_lib(ctx).root, rule_id)
+    console.print(
+        f"[green]✓[/] removed [bold]{rule.id}[/] ({rule.scope} · {rule.describes})"
+    )
+
+
+@frames_cmd.command("pin")
+@click.argument("spec_id", metavar="SPEC")
+@click.argument("ids", nargs=-1, required=True, metavar="ID...")
+@click.pass_context
+def frames_pin(ctx: click.Context, spec_id: str, ids: tuple[str, ...]) -> None:
+    """Pin these cards to a spec, whatever the rules say.
+
+    The last word on one card, and stored — a re-fetch will not touch it. Use it
+    for the printing the rules got wrong, not as a substitute for a rule.
+    """
+    lib = _lib(ctx)
+    chosen = _spec(_registry(lib), spec_id)
+    for card in lib.select(ids):
+        card.set_pin(chosen)
+        console.print(f"[green]✓[/] {card.id}: pinned to [bold]{chosen}[/]")
+
+
+@frames_cmd.command("unpin")
+@click.argument("ids", nargs=-1, required=True, metavar="ID...")
+@click.pass_context
+def frames_unpin(ctx: click.Context, ids: tuple[str, ...]) -> None:
+    """Drop these cards' pins — back to whatever the rules resolve."""
+    lib = _lib(ctx)
+    reg = _registry(lib)
+    for card in lib.select(ids):
+        card.set_pin(None)
+        found = _resolve_spec(reg, card)
+        console.print(
+            f"[green]✓[/] {card.id}: unpinned → {found.spec.id} "
+            f"[dim]({found.via.label})[/]"
+        )
+
+
+@frames_cmd.command("check")
+@click.option("--json", "as_json", is_flag=True, help="Emit the warnings as JSON.")
+@click.pass_context
+def frames_check(ctx: click.Context, as_json: bool) -> None:
+    """Everything about this library's frames that needs a decision.
+
+    Four things, and all four are a broken reference or a question nobody can
+    answer from what is recorded: a spec file that will not parse, something
+    pointing at a spec that does not exist, a trait rule on a card whose traits
+    were never recorded, and a card whose printing nothing knows the frame of.
+
+    Deliberately **not** a coverage report. There used to be one, grading every
+    set that has ever printed, and it could not work: MTG's border follows the
+    printing's frame generation, so a set-level row has no printing to read and it
+    called 1046 sets unmeasured while every card in them resolves exactly.
+    """
+    lib = _lib(ctx)
+    reg = _registry(lib)
+    issues = _audit(lib, reg)
+    if as_json:
+        console.print_json(data={"issues": [i.json() for i in issues]})
+        return
+    if not issues:
+        console.print(
+            "[green]✓[/] nothing to decide — every spec reads, every rule points "
+            "somewhere, and every card resolves to a spec that knows its printing."
+        )
+        return
+    console.print(_issue_table(issues))
+    console.print()
+    for fault in specs.Fault:
+        if n := sum(1 for i in issues if i.fault is fault):
+            console.print(f"[yellow]{n}[/] {fault.label}")
+            console.print(f"  [dim]{_FAULT_HINT[fault]}[/]")
+
+
+#: one hint per fault, printed under the count rather than on every row
+_FAULT_HINT: dict[specs.Fault, str] = {
+    fault: specs.Issue(fault=fault, subject="").hint for fault in specs.Fault
+}
+
+
+@frames_cmd.command("preview")
+@click.argument("set_id", metavar="SET")
+@_GAME
+@click.option(
+    "--spec", "only", default="", help="Only the cards that resolve to this spec."
+)
+@click.option("--limit", type=int, default=30, help="How many cards to print.")
+@click.pass_context
+def frames_preview(
+    ctx: click.Context, set_id: str, game: str | None, only: str, limit: int
+) -> None:
+    """Which spec every card of one set gets, and which rule decided it.
+
+    This is what makes a rule trustworthy rather than hopeful — especially one
+    matching on rarity or frame generation, where the answer depends on data you
+    cannot see. Reads that set's cards from the provider (cached), so what it
+    shows is what a fetched card will get.
+    """
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    found = inventory.preview(
+        set_id, cfg, _registry(lib), games.coerce(game, lib.default_game)
+    )
+    rows = [r for r in found.rows if not only or r.spec == only]
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for col in ("Card", "No.", "Name", "Rarity", "Spec", "From"):
+        table.add_column(col)
+    for row in rows[: max(limit, 0)]:
+        table.add_row(
+            row.card.id,
+            row.card.number,
+            row.card.name,
+            row.card.rarity or "—",
+            row.spec,
+            row.via.label + (f" ({row.rule})" if row.rule else ""),
+        )
+    console.print(table)
+    tally = " · ".join(f"{spec} [bold]{n}[/]" for spec, n in found.tally().items())
+    console.print(f"[dim]{len(found.rows)} card(s):[/] {tally}")
+    undecided = [r.card.id for r in found.rows if r.undecided]
+    if undecided:
+        err.print(
+            f"[yellow]⚠[/] {len(undecided)} card(s) could not be decided by a "
+            "trait rule — the provider did not say. [dim]They take the set's "
+            "default; pin the ones that need something else.[/]"
+        )
+    if len(rows) > limit > 0:
+        console.print(f"[dim]… {len(rows) - limit} more — raise --limit[/]")
 
 
 @cli.command()
@@ -1901,6 +2456,12 @@ def frames_cmd(ctx: click.Context) -> None:
     "of marking it by hand. Reports how much the measurement can be trusted.",
 )
 @steps.click_options("border")
+@click.option(
+    "--save",
+    "save_frame",
+    is_flag=True,
+    help="Keep [cyan]--frame[/] as this card's pin, so every later run uses it too.",
+)
 @_FACE
 @click.option("--force", is_flag=True, help="Re-run even if a bordered image exists.")
 @click.option("--dry-run", is_flag=True, help="Report the plan; don't write.")
@@ -1919,6 +2480,7 @@ def border(
     auto: bool,
     stretch: bool | None,
     frame: str | None,
+    save_frame: bool,
     face: int | None,
     force: bool,
     dry_run: bool,
@@ -1928,10 +2490,10 @@ def border(
     Three ways to say where the border is:
 
     • [cyan]--inner-top/-right/-bottom/-left[/] <fraction 0-1>: where the card's
-    inner border edge currently sits. From the card's frame spec (its game +
-    era, see [cyan]proxdex frames[/]) [cyan]cardbleed[/] reshapes to the exact
-    card aspect with the correct border widths (add [cyan]--stretch[/] to hit
-    the borders exactly by un-distorting the art). Sets whose spec has not been
+    inner border edge currently sits. From the frame spec this library's rules
+    resolve for the card (see [cyan]proxdex frames[/]) [cyan]cardbleed[/] reshapes
+    to the exact card aspect with the correct border widths (add [cyan]--stretch[/]
+    to hit the borders exactly by un-distorting the art). Sets whose spec has not been
     measured are called out — the fit still runs, but on an estimate.
 
     • [cyan]--auto[/]: measure those four numbers off the image instead of typing
@@ -1941,6 +2503,10 @@ def border(
 
     • [cyan]--top/--bottom/--left/--right[/] <mm>: just add that much border to
     each edge — no fit, no distortion.
+
+    Which spec that is, and *why*, is printed with every fit — a rule, the set's
+    default, its era, or a pin. [cyan]--frame[/] overrides it for this run;
+    [cyan]--frame … --save[/] pins it to the card for good.
 
     [cyan]--dry-run[/] reports the plan without writing.
     """
@@ -1961,7 +2527,10 @@ def border(
             "--auto fits to the frame spec; --top/--bottom/--left/--right only "
             "add millimetres. Pick one."
         )
-    override = frames.parse(frame)
+    reg = _registry(lib)
+    override = _spec(reg, frame)
+    if save_frame and override is None:
+        raise click.UsageError("--save needs a --frame to save")
     do_stretch = bool(steps.resolve("border", cfg, stretch=stretch)["stretch"])
 
     def one_face(card: Card, f: int) -> None:
@@ -1975,31 +2544,33 @@ def border(
             raise FileError(f"{name}: no original yet (fetch it first)")
         w, h = borders.size(src)
         marks = cast("tuple[float, float, float, float]", inner) if use_inner else None
-        # the card's own frame beats its set's era: a borderless print has no
-        # frame to fit whatever era the rest of its set belongs to
-        recorded = override or card.frame
+        # one call decides the spec, and it reports which of the seven ways it got
+        # there: an override, this card's pin, its printing, a rule, the set's
+        # default, its era, or nothing at all
+        chosen = _resolve_spec(reg, card, override)
         if auto:
-            spec = frames.resolve(card.set_id, card.game, recorded)
-            if not any(spec.inset):
+            if chosen.spec.frameless:
                 # a borderless print has no frame to match, so there is nothing to
                 # measure: the marks are the image edges and the fit is pure
                 # aspect correction. Measuring anyway would find the art's own
                 # edge and crop the card to it.
                 marks = (0.0, 0.0, 0.0, 0.0)
                 console.print(
-                    f"  [dim]⌖ {name}: {spec.name} — nothing to measure, "
+                    f"  [dim]⌖ {name}: {chosen.spec.name} — nothing to measure, "
                     "reshaping to the card aspect only[/]"
                 )
             else:
-                found = borders.detect_inset(src)
-                tone = "green" if found.reliable else "yellow"
-                console.print(f"  [{tone}]⌖[/] {name}: {found.note}")
-                marks = found.inset
-                if found.frameless:
-                    recorded = GuideId.BORDERLESS
+                measurement = borders.detect_inset(src)
+                tone = "green" if measurement.reliable else "yellow"
+                console.print(f"  [{tone}]⌖[/] {name}: {measurement.note}")
+                marks = measurement.inset
+                if measurement.frameless:
+                    # the image says there is no border, whatever the set's rules
+                    # expected — so fit the aspect and nothing else
+                    chosen = _resolve_spec(reg, card, GuideId.BORDERLESS.value)
         if marks is not None:
-            guide = frames.resolve(card.set_id, card.game, recorded)
-            _warn_unmeasured(card, guide)
+            guide = chosen.spec
+            _warn_spec(card, chosen)
             inner_t = marks
             plan = bleed.fit_plan(w, h, guide, inner_t, cfg, stretch=do_stretch)
             tw, th = round(plan.trim_w), round(plan.trim_h)
@@ -2008,7 +2579,8 @@ def border(
             note = (
                 f"fit → {tw}×{th}px  "
                 f"T{bd['top'] * 100:.2f} R{bd['right'] * 100:.2f} "
-                f"B{bd['bottom'] * 100:.2f} L{bd['left'] * 100:.2f}%  [dim]({tag})[/]"
+                f"B{bd['bottom'] * 100:.2f} L{bd['left'] * 100:.2f}%  "
+                f"[dim]({tag} · {chosen.via.label})[/]"
             )
             if plan.cropped:
                 note += f" [yellow](cropped {', '.join(plan.cropped)})[/]"
@@ -2016,6 +2588,10 @@ def border(
                 console.print(f"[cyan]{name}[/]: {note}")
                 return
             bleed.fit(src, dst, guide, inner_t, cfg, stretch=do_stretch)
+            # what it was fitted to, beside the file: `doctor` compares it against
+            # what the rules say today, because a spec that has since been
+            # corrected leaves a master that is wrong and looks fine
+            card.write_fit(Stage.BORDERED, f, guide.id, guide.inset)
         else:
             if max(grow_mm.values()) <= 0:
                 console.print(f"[dim]· {name}: nothing to expand[/]")
@@ -2031,6 +2607,9 @@ def border(
         console.print(f"[green]✓[/] {name}: {note} → {dst.relative_to(lib.root)}")
 
     def one(card: Card) -> None:
+        if save_frame and override is not None and not dry_run:
+            card.set_pin(override)
+            console.print(f"  [dim]⌗ {card.id}: pinned to {override}[/]")
         for f in _faces(card, face):
             one_face(card, f)
 
@@ -2051,8 +2630,8 @@ def doctor(ctx: click.Context, ids: tuple[str, ...], fix: bool, yes: bool) -> No
 
     A library outlives the code that filled it, and every difference this looks
     for is one you cannot see on screen — a transparent die-cut corner, a
-    grayscale file, a bordered master that is not the trim aspect. They show up on
-    paper.
+    grayscale file, a bordered master that is not the trim aspect, a master fitted
+    to border widths that have since been corrected. They show up on paper.
 
     Reads headers only and writes nothing until you pass [cyan]--fix[/], which
     repairs the two findings that *are* a repair (both are the same call every
@@ -2063,7 +2642,7 @@ def doctor(ctx: click.Context, ids: tuple[str, ...], fix: bool, yes: bool) -> No
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     cards = lib.select(ids)
-    found = doctor_mod.examine(cards, cfg)
+    found = doctor_mod.examine(cards, cfg, _registry(lib))
     scanned = (
         f"[dim]checked {found.images} image(s) across {found.cards} card(s)[/]"
         if found.images
@@ -2082,8 +2661,8 @@ def doctor(ctx: click.Context, ids: tuple[str, ...], fix: bool, yes: bool) -> No
         card = by_id.get(f.id)
         tone = "yellow" if f.repairable else "red"
         table.add_row(
-            _label(card, f.face) if card else f.id,
-            f.stage.label,
+            _label(card, f.face) if card and f.face is not None else f.id,
+            f.stage.label if f.stage else "[dim]the card[/]",
             f"[{tone}]{f.check.label}[/]",
             f"[dim]{escape(f.detail)}[/]",
         )

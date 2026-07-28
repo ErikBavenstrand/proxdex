@@ -17,11 +17,14 @@ systematic. Grading such a number as "scanned, therefore trusted" dressed the
 guess up. So the note says what was measured and on what, in words, and that is
 the whole of it.
 
-The numbers that ship are **working defaults**: enough that a fresh library
-borders a card sensibly with nothing configured, and every one of them is meant
-to be replaced by a caliper reading (``proxdex frames set``, and
-``docs/measuring-frames.md`` says which cards to measure and how). A library's
-own file always wins.
+**A printing with no spec resolves to nothing, and that is a state rather than a
+failure.** Only three specs ship, because only three have been measured; every other
+MTG number was read off the publisher's scans and is gone. So a card whose frame
+generation nobody has measured gets :attr:`~proxdex.specs.Via.NONE`, the reports name
+it, and ``border`` refuses to run until someone measures a spec (``proxdex frames
+set``, and ``docs/measuring-frames.md`` says how) or passes ``--frame`` for the run.
+Stopping is the right answer there: the alternative is reshaping a card to a number
+nobody took, which looks perfect and is wrong on paper.
 
 This module owns the *geometry* and the specs proxdex **ships**.
 :mod:`proxdex.specs` owns the ones a library adds, the rules that say which card
@@ -46,13 +49,7 @@ from proxdex.games import GameId
 #: are plain ids validated by :func:`valid_id`.
 class GuideId(StrEnum):
     POKEMON_WOTC = "pokemon-wotc"
-    POKEMON_GENERIC = "pokemon-generic"
     MTG_1993 = "mtg-1993"
-    MTG_1997 = "mtg-1997"
-    MTG_2003 = "mtg-2003"
-    MTG_M15 = "mtg-m15"
-    MTG_EXTENDED_ART = "mtg-extended-art"
-    MTG_YELLOW_BAND = "mtg-yellow-band"
     BORDERLESS = "borderless"
 
 
@@ -154,21 +151,13 @@ def mm_to_inset(
 
 _mm = mm_to_inset  # the name this module used before the specs split
 
-#: said once, by every spec whose numbers nobody has put calipers on. The specs
-#: still need four numbers to fit against, so these are the working defaults —
-#: and this sentence is how a listing says they are not measurements.
-PROVISIONAL = (
-    "Provisional: read off the publisher's own card scans, which carry each "
-    "scan's crop, so the number can be uniformly wrong with nothing in the image "
-    "to show it. Measure a real card and replace it — `proxdex frames set`, and "
-    "docs/measuring-frames.md says which card and how."
-)
-
-
 # --- Pokémon ----------------------------------------------------------------
-# Base Set..Neo Destiny (yellow-border WOTC era). Calipers on a real card
-# (top 3.3 / bottom 3.6 / left 3.2 / right 3.1 mm); the border wanders a little
-# card-to-card, so we use the tidy averages top/bottom 3.45, sides 3.15mm.
+# Base Set..Neo Destiny — the yellow-bordered WOTC era, and **only** that era. It
+# stops where the e-Card series begins: `base1-6`, `gym1-2`, `neo1-4` are WOTC's own
+# printings, and everything from `ecard1` onward was a different operation with a
+# frame nobody has measured. Calipers on a real card (top 3.3 / bottom 3.6 /
+# left 3.2 / right 3.1 mm); the border wanders a little card-to-card, so these are
+# the tidy averages top/bottom 3.45, sides 3.15mm.
 _POKEMON_WOTC = FrameGuide(
     id=GuideId.POKEMON_WOTC.value,
     name="Pokémon · WOTC vintage (Base-Neo Destiny)",
@@ -177,126 +166,46 @@ _POKEMON_WOTC = FrameGuide(
     note="Calipers on a real card: top 3.3 / bottom 3.6 / sides 3.1-3.2 mm.",
 )
 
-# Everything from e-Card onward. The yellow border stayed visually similar, but
-# nobody has put calipers on one for proxdex yet.
-_POKEMON_GENERIC = FrameGuide(
-    id=GuideId.POKEMON_GENERIC.value,
-    name="Pokémon · generic (era not measured)",
-    game=GameId.POKEMON,
-    inset=_mm(3.45, 3.15, 3.45, 3.15),
-    note=(
-        "Nothing measured for this era — reuses the WOTC widths, which is a guess "
-        "that 20 years of frame revisions did not move the border. Pokémon's own "
-        "scans are cropped inconsistently enough that reading it off one is worse "
-        "than saying so. Measure a modern card and replace this."
-    ),
-)
-
 # --- Magic: The Gathering ---------------------------------------------------
-# One spec per frame generation, and that split comes from the metadata rather
-# than from anybody's eye: Scryfall documents exactly five `frame` values — 1993,
-# 1997, 2003, 2015, future — so the list is closed and `FRAME_GENERATIONS` covers
-# all of it (pinned by a test, which is how a sixth announces itself). A *set*
-# cannot answer which applies: a 2023 set holds retro-frame cards at the old width
-# beside modern ones (`dmr-354` is frame 1997 inside a frame 2015 set), so the
-# baseline reads the printing's own frame, recorded in the card's `.traits`.
+# **One spec, measured, and the rest deliberately absent.** Every other MTG spec was
+# read off the publisher's scans, and checking one against a hand reading showed why
+# that cannot stand: `borders.detect_inset` wants a *luminance* step, so on a card
+# whose frame is itself dark (a Beta artifact's stone frame) it walks past the real
+# border edge and reported 37-41px where the border ends at 23px — 65% too far. Every
+# scan-derived MTG number inherited some of that, so they are gone rather than
+# carried forward with a caveat. A card whose frame generation has no spec now
+# resolves to **nothing**, says so, and refuses to be bordered until someone measures
+# it or passes `--frame`. That is the point: proxdex would rather stop than fit a card
+# to a number nobody took.
 #
-# The numbers are provisional and say so. They come from `scripts/mtg-census.py`
-# reading Scryfall's scans, which is a survey — good enough to establish that the
-# five generations really are four distinct widths (1993/1997 thicken top and
-# bottom, 2003 made all four edges equal, M15 took ~0.55mm off everything) and not
-# good enough to be the spec, because every one of them inherits the scans' crop.
-# `docs/measuring-frames.md` names the five cards that settle it.
+# Read off the Beta Sol Ring scan (`leb-270`, 672x936) at 21.5px on the sides and
+# 28.5px top and bottom. Stored as those exact fractions rather than converted through
+# millimetres, so nothing rounds: the scan is the whole card (its alpha channel is
+# opaque from pixel 0 on all four straight edges), which makes a pixel count a
+# *fraction of the card* directly.
 _MTG_1993 = FrameGuide(
     id=GuideId.MTG_1993.value,
     name="MTG · 1993 frame (Alpha-4th Edition)",
     game=GameId.MTG,
-    inset=_mm(3.55, 2.96, 3.55, 2.96),
+    inset=(28.5 / 936, 21.5 / 672, 28.5 / 936, 21.5 / 672),
     note=(
-        "Top and bottom read thicker than the sides on this generation. Alpha is "
-        f"cut differently again (~3.20 sides, ~4.26 bottom) — pin those. {PROVISIONAL}"
+        "Read off Scryfall's Beta Sol Ring scan (leb-270) at 672x936: sides 21.5px, "
+        "top and bottom 28.5px. Alpha and Beta measure about 1mm narrower on the "
+        "sides than white-bordered Unlimited and Revised (2.98mm), which is not a "
+        "crop artifact — the art box sits at the same pixels in both scans — so this "
+        "describes the black-bordered printings and those two want their own spec."
     ),
+    #: a real Magic card is 2.5x3.5in, so the millimetres shown to a human are
+    #: fractions of *that*, not of the 63x88 proxdex trims to
+    ref_mm=(63.5, 88.9),
 )
-
-_MTG_1997 = FrameGuide(
-    id=GuideId.MTG_1997.value,
-    name="MTG · 1997 frame (Mirage-7th Edition)",
-    game=GameId.MTG,
-    inset=_mm(3.38, 3.05, 3.38, 3.05),
-    note=f"Top and bottom still thicker than the sides, by less. {PROVISIONAL}",
-)
-
-_MTG_2003 = FrameGuide(
-    id=GuideId.MTG_2003.value,
-    name="MTG · 2003 frame (8th Edition-M14)",
-    game=GameId.MTG,
-    inset=_mm(3.00, 3.00, 3.00, 3.00),
-    note=f"The redesign that made all four edges equal. {PROVISIONAL}",
-)
-
-# Everything from Magic 2015 onward, which is most of what anyone proxies: 71110 of
-# MTG's ~106000 prints, and this game's fallback for that reason.
-_MTG_M15 = FrameGuide(
-    id=GuideId.MTG_M15.value,
-    name="MTG · M15 frame (Magic 2015 onward)",
-    game=GameId.MTG,
-    inset=_mm(2.45, 2.45, 2.45, 2.45),
-    note=(
-        "About 0.55mm narrower than every frame before it, which is the reduction "
-        "Wizards announced for M15. Full-art printings of this generation measure "
-        "the same, which is why full-art is not treated as borderless. The bottom "
-        "edge cannot be read off a scan at all — the black collector strip sits in "
-        f"it — so it is assumed symmetric with the top. {PROVISIONAL}"
-    ),
-)
-
-# Two treatments really do change the geometry, and the other ~24 really do not.
-# `scripts/mtg-variants.py` measured all 54 (frame x border_color x frame_effects)
-# combinations that have 20+ printings: 31 of them come out at their own
-# generation's border, so a legendary crown, an inverted text box, the Nyx
-# enchantment treatment, an etched foil, `snow`, `devoid`, `miracle`, `companion`,
-# `draft`, `spree`, `colorshifted` and `fullart` need no spec and no rule. That is
-# the survey's most useful result and it is a measurement, not an assumption.
-#
-# Extended art is the exception that has a shape no four-edge inset described before:
-# the picture runs to the **left and right card edges** while the top and bottom keep
-# the generation's border. So its sides are 0 — which is exactly what the detector
-# reports by refusing to measure them, over 2824 printings — and its top reads 2.40
-# against an ordinary 2.48. It only exists on the M15 frame.
-_MTG_EXTENDED_ART = FrameGuide(
-    id=GuideId.MTG_EXTENDED_ART.value,
-    name="MTG · extended art (art to the left and right edges)",
-    game=GameId.MTG,
-    inset=_mm(2.45, 0.0, 2.45, 0.0),
-    note=(
-        "Top and bottom keep the M15 border; the sides have none, because the art "
-        "runs off the card. The detector agrees by declining to measure the sides on "
-        f"every sample of 2824 printings. {PROVISIONAL}"
-    ),
-)
-
-# The one border *colour* that is also a geometry: Aetherdrift's yellow full-art box
-# toppers carry a decorative band measuring 4.70mm on the sides against an ordinary
-# 2.45 — a 2.25mm error, the largest in the whole survey, on 79 printings. Every other
-# colour (white, gold, silver) measures at its generation's width.
-_MTG_YELLOW_BAND = FrameGuide(
-    id=GuideId.MTG_YELLOW_BAND.value,
-    name="MTG · yellow band (Aetherdrift box toppers)",
-    game=GameId.MTG,
-    inset=_mm(4.19, 4.70, 4.19, 4.70),
-    note=(
-        "A decorative band, not a border colour: 4.70mm on the sides and 4.15-4.23 "
-        f"top over 79 printings, against 2.45 for an ordinary card. {PROVISIONAL}"
-    ),
-)
-
 
 # --- any game ---------------------------------------------------------------
-# Borderless / art-series printings have no frame at all, so the fit is pure
-# aspect correction. Never inferred from a *set* id — a modern set mixes bordered
-# and borderless prints in the same numbering — but it *is* inferred per card from
-# what the provider says about that printing (Scryfall's `border_color`), recorded
-# in the card's own `.frame` marker. `border --frame` overrides either way.
+# Borderless / art-series printings have no frame at all, so the fit is pure aspect
+# correction. Never inferred from a *set* id — a modern set mixes bordered and
+# borderless prints under one code — but it *is* inferred per card from what the
+# provider says about that printing (Scryfall's `border_color`), recorded in the
+# card's own `.frame` marker. `border --frame` overrides either way.
 _BORDERLESS = FrameGuide(
     id=GuideId.BORDERLESS.value,
     name="Borderless (no printed frame)",
@@ -305,59 +214,30 @@ _BORDERLESS = FrameGuide(
     note="No frame to match — reshapes to the card aspect only. Nothing to measure.",
 )
 
-#: the specs proxdex ships. A library's registry starts from these, so a fresh
-#: library borders a Base Set card correctly with nothing configured.
+#: the specs proxdex ships. Three, and the shortness is the design: a spec is here
+#: only if somebody measured it.
 SHIPPED: dict[str, FrameGuide] = {
-    g.id: g
-    for g in (
-        _POKEMON_WOTC,
-        _POKEMON_GENERIC,
-        _MTG_1993,
-        _MTG_1997,
-        _MTG_2003,
-        _MTG_M15,
-        _MTG_EXTENDED_ART,
-        _MTG_YELLOW_BAND,
-        _BORDERLESS,
-    )
+    g.id: g for g in (_POKEMON_WOTC, _MTG_1993, _BORDERLESS)
 }
 
-#: per game, the spec used when nothing else answers. For MTG that means a card
-#: whose frame generation was never recorded — filed before proxdex kept traits —
-#: so it takes the M15 frame, which two thirds of all MTG prints carry and which is
-#: therefore the least-wrong answer to "no idea". Re-fetching the card records its
-#: frame and resolves it exactly.
-FALLBACK: dict[GameId, str] = {
-    GameId.POKEMON: GuideId.POKEMON_GENERIC.value,
-    GameId.MTG: GuideId.MTG_M15.value,
-}
-
-#: set-id prefixes per era, per game — the shipped baseline a library's own rules
-#: are consulted *before*. Pokémon ids come from pokemontcg.io (base1-6, gym1-2,
-#: neo1-4); MTG's split is by frame generation rather than by set, see below.
+#: set-id prefixes per era, per game — the shipped baseline a library's own rules are
+#: consulted *before*. Pokémon ids come from pokemontcg.io, and this list stops
+#: exactly where WOTC did: `base1-6`, `gym1-2`, `neo1-4`, then the e-Card series
+#: begins and nothing here describes it. MTG's split is by frame generation rather
+#: than by set, below.
 ERAS: dict[GameId, tuple[tuple[tuple[str, ...], str], ...]] = {
     GameId.POKEMON: ((("base", "gym", "neo"), GuideId.POKEMON_WOTC.value),),
     GameId.MTG: (),
 }
 
-#: MTG's border width changed with the frame and **not** with the set, so the
-#: baseline reads the generation Scryfall names per printing (``frame``), which the
-#: card records in its ``.traits``. One spec each, no aliasing: five documented
-#: values, five entries, and a test that fails if Scryfall adds a sixth.
+#: MTG's border width changed with the frame and **not** with the set, so the baseline
+#: reads the generation Scryfall names per printing (``frame``), which the card records
+#: in its ``.traits``. Scryfall documents five values — `1993`, `1997`, `2003`, `2015`,
+#: `future` — and only one of them has a measured spec. The other four are **absent on
+#: purpose**: a card of those generations resolves to no spec and says so, rather than
+#: being fitted to a number read off a scan.
 FRAME_GENERATIONS: dict[GameId, dict[str, str]] = {
-    GameId.MTG: {
-        "1993": GuideId.MTG_1993.value,
-        "1997": GuideId.MTG_1997.value,
-        "2003": GuideId.MTG_2003.value,
-        "2015": GuideId.MTG_M15.value,
-        # Future Sight's timeshifted design is its own *look* and not its own
-        # *border*: surveyed over 226 printings it reads 2.94 top / 2.95 sides /
-        # 2.99 bottom against the 2003 frame's 2.96 / 2.92 / 2.94 — the same border
-        # to within 0.05mm. It had its own spec for part of this session, on a
-        # smaller sample that put it 0.07mm off; two specs carrying the same four
-        # numbers is two things to measure and maintain for no difference on paper.
-        "future": GuideId.MTG_2003.value,
-    }
+    GameId.MTG: {"1993": GuideId.MTG_1993.value}
 }
 
 #: the trait key :data:`FRAME_GENERATIONS` is keyed on. Named here rather than in

@@ -1875,9 +1875,10 @@ def _warn_spec(card: Card, found: specs.Resolution) -> None:
     choice of spec. Not against a spec whose *numbers* are provisional — that is
     every shipped MTG spec, so warning about it would be a line on every card."""
     if found.missing:
+        landed = found.spec.id if found.spec else "no spec at all"
         err.print(
             f"[yellow]⚠[/] {card.id}: frame spec [bold]{found.missing}[/] no longer "
-            f"exists — fitting to '{found.spec.id}' instead "
+            f"exists — fitting to '{landed}' instead "
             "[dim](`proxdex frames list`, then pin or assign one)[/]"
         )
     if found.undecided:
@@ -1887,11 +1888,10 @@ def _warn_spec(card: Card, found: specs.Resolution) -> None:
             "said about this printing, which this card has no record of "
             "[dim](re-fetch it, or pin a spec with `proxdex frames pin`)[/]"
         )
-    elif found.via is specs.Via.FALLBACK:
+    elif found.spec is None:
         err.print(
-            f"[yellow]⚠[/] {card.id}: nothing knows this printing's frame — using "
-            f"[bold]{found.spec.id}[/], this game's default. [dim]Re-fetch the card "
-            "to record its frame, or pin a spec.[/]"
+            f"[yellow]⚠[/] {card.id}: no frame spec has been measured for this "
+            "printing [dim](`proxdex frames set`, or `--frame` for this run)[/]"
         )
 
 
@@ -1991,7 +1991,8 @@ def frames_cmd(ctx: click.Context) -> None:
     seen: dict[tuple[GameId, str, str, str], tuple[specs.Resolution, int]] = {}
     for card in cards:
         found = _resolve_spec(reg, card)
-        key = (card.game, card.set_id, found.spec.id, found.rule or found.via.value)
+        answer = found.spec.id if found.spec else "—"
+        key = (card.game, card.set_id, answer, found.rule or found.via.value)
         _, count = seen.get(key, (found, 0))
         seen[key] = (found, count + 1)
     mine = Table(box=None, pad_edge=False, header_style="bold")
@@ -2002,7 +2003,7 @@ def frames_cmd(ctx: click.Context) -> None:
             set_id,
             games.get(game).name,
             str(count),
-            found.spec.id,
+            found.spec.id if found.spec else "[yellow]none measured[/]",
             found.via.label + (f" ({found.rule})" if found.rule else ""),
         )
     console.print("\n[bold]Sets in this library[/]")
@@ -2337,7 +2338,8 @@ def frames_unpin(ctx: click.Context, ids: tuple[str, ...]) -> None:
         card.set_pin(None)
         found = _resolve_spec(reg, card)
         console.print(
-            f"[green]✓[/] {card.id}: unpinned → {found.spec.id} "
+            f"[green]✓[/] {card.id}: unpinned → "
+            f"{found.spec.id if found.spec else '[yellow]no spec[/]'} "
             f"[dim]({found.via.label})[/]"
         )
 
@@ -2548,6 +2550,16 @@ def border(
         # there: an override, this card's pin, its printing, a rule, the set's
         # default, its era, or nothing at all
         chosen = _resolve_spec(reg, card, override)
+        if chosen.spec is None:
+            # nothing measured describes this printing. Refusing is deliberate: the
+            # alternative is reshaping the card to somebody else's numbers, which
+            # looks perfect and is wrong once it is cut.
+            raise FileError(
+                f"{name}: no frame spec has been measured for this printing "
+                f"({card.set_id}, {games.get(card.game).name}). Measure a card and "
+                "record it with `proxdex frames set`, assign it, or pass --frame to "
+                "fit against a spec for this run."
+            )
         if auto:
             if chosen.spec.frameless:
                 # a borderless print has no frame to match, so there is nothing to
@@ -2570,6 +2582,8 @@ def border(
                     chosen = _resolve_spec(reg, card, GuideId.BORDERLESS.value)
         if marks is not None:
             guide = chosen.spec
+            if guide is None:  # pragma: no cover — refused above
+                raise FileError(f"{name}: no frame spec to fit against")
             _warn_spec(card, chosen)
             inner_t = marks
             plan = bleed.fit_plan(w, h, guide, inner_t, cfg, stretch=do_stretch)

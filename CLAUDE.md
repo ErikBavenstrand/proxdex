@@ -497,146 +497,46 @@ it, and every surface prints that sentence verbatim. One verb records a spec,
 numbers are working defaults that say so in their own notes.
 `docs/measuring-frames.md` names the five cards that settle them.
 
-**MTG has one bordered spec per frame generation, and the split is by *frame*, not
-by set.** Scryfall documents exactly five `frame` values — `1993`, `1997`, `2003`,
-`2015`, `future` — so that list is closed, and `frames.FRAME_GENERATIONS` covers all
-of it, pinned by a test (which is how a sixth generation announces itself instead of
-silently taking the fallback). **Proven exhaustive against the data, not taken from
-the docs**: over Scryfall's `default_cards` bulk file — one object per printing,
-116,233 of them — the distinct `frame` values are exactly `2015` (79,951), `2003`
-(18,084), `1997` (12,303), `1993` (5,653), `future` (242), and those five sum to the
-total, so they partition every Magic printing with nothing left over. A search census
-agrees: `-frame:1993 -frame:1997 -frame:2003 -frame:2015 -frame:future` returns 0.
-**Five values, five specs, no aliasing** — `future`
-shared `mtg-2003` once, on the grounds that Future Sight's timeshifts print at the
-same era's width, and they do not quite: a spec answering for a generation it was
-not read off is the approximation this module exists to refuse.
+**Only measured specs ship, and there are three.** `pokemon-wotc` (calipers, and it
+covers *only* `base1-6`/`gym1-2`/`neo1-4` — it stops where the e-Card series begins),
+`mtg-1993` (a pixel reading of Scryfall's Beta Sol Ring scan), and `borderless`. Every
+other MTG spec was read off the publisher's scans and has been **withdrawn**, because
+two independent problems say a scan cannot fix an absolute width:
 
-The numbers each one ships with come from `scripts/mtg-census.py` reading Scryfall's
-scans, and they are **provisional and say so in their own notes**. What that survey
-*can* establish is the shape, because a crop error common to all the scans cancels
-when two populations are compared the same way:
+1. **A scan carries its own crop.** Trimmed 0.3mm inside the cut edge, every border
+   read from it is 0.3mm narrow, every card agrees, and nothing in the image says so.
+2. **`detect_inset` over-reads a black border when the frame is also dark.** It wants a
+   *luminance* step, so on a Beta artifact (stone frame, luminance 37, against a black
+   border at 27) it walks past the real edge to the light text box and reports 37-41px
+   where the border ends at 23px — 65% too far. Judge by **colour** instead: the border
+   is neutral, the frame is a coloured texture, and that works on either border colour.
+   White-bordered readings were never affected, which is why the census used them.
 
-| frame | read off | top | sides | bottom |
-|---|---|---|---|---|
-| 1993 | 2ed (white) | 3.55 | 2.96 | 3.55 |
-| 1997 | 5ed (white) | 3.38 | 3.05 | 3.38 |
-| 2003 | 8ed (white) | 3.00 | 3.00 | 3.00 |
-| future | fut | 2.93 | 2.93 | 2.93 |
-| 2015 | m15 | 2.45 | 2.45 | (assumed) |
+**So a printing with no measured spec resolves to nothing** — `Via.NONE`,
+`Resolution.spec is None` — and that is a *state*, not a failure. `frames check` names
+it, `border` **refuses** the card, and `--frame` is the escape hatch. The per-game
+`FALLBACK` that used to fill the gap is gone: it silently reshaped a card of an
+unmeasured generation to another generation's numbers, which looks perfect and is
+wrong. `Resolution.have` is the predicate; every consumer checks it.
 
-**Read off white-bordered core sets, which is what makes the bottom edge readable
-at all.** On a black-bordered card the bottom border runs into the black
-text/collector strip and no scan line can see where it ends — every black sample
-reports the bottom at support 0.36-0.69 — but a white border makes that boundary
-visible against the same strip. Support came out 1.00 on every edge, and the
-black-bordered sets of the same generation agree to 0.05mm. That is a real result
-about *relative* widths: **1993 and 1997 thicken the top and bottom** by 0.35-0.6mm
-over the sides, **the 2003 redesign made all four edges uniform**, and **M15 took
-~0.55mm off everything** — the reduction Wizards announced ("we've reduced the width
-of the black border by almost a millimetre all the way around"). So "MTG's border
-does not thicken at the bottom" is true from 2003 onward and false before it, and
-`tests/test_frames.py` pins that *shape* rather than the numbers.
+`frames.FRAME_GENERATIONS[MTG]` therefore maps **only** `1993`, and the four absent
+generations are the design rather than an omission (pinned by a test that asserts
+exactly one of Scryfall's five documented values resolves). `sources.mtg_frame` likewise
+returns `borderless` and nothing else now — extended art and the yellow band are real
+distinct geometries, but their specs were scan-derived too.
 
-What the survey cannot do is fix the absolute width, and no rerun changes that —
-see the confidence section above. Two further gaps the specs do **not** describe.
-**Alpha** (`lea`, 302 of 5318 `frame:1993` prints) reads ~0.65mm off the rest of its
-own generation; its print run was cut differently, and letting 302 cards pull the
-spec for 5000 would be backwards, so pin those. And the **M15 bottom** cannot be
-read even on a white border (one trusted sample at 2.54) because the collector line
-sits in it — the ~6mm of black under an M15 card is border *plus* strip. It is
-assumed symmetric with the top.
+What the scan survey *can* establish still stands, because a bias common to every scan
+cancels when populations are compared to each other: **31 of the 54 measured
+combinations of `frame` × `border_color` × `frame_effects` sit on their own
+generation's border**, so a legendary crown, an inverted text box, an etched foil,
+full art, and white/gold/silver borders need no spec. Those groupings and both sets of
+withdrawn numbers are kept in `docs/measuring-frames.md` as comparison targets for
+calipers, alongside the measurement log.
 
-A **set** cannot answer which generation applies: a 2023 set holds retro-frame cards
-at the old width beside modern ones (`dmr-354` is `frame: 1997` inside a
-`frame: 2015` set). So the shipped baseline reads the printing's own frame —
-`frames.baseline(set_id, game, traits)`, keyed on the card's recorded `frame` trait.
-Pokémon still answers from its set-id era table; a game uses whichever its border
-actually follows. Library rules are consulted **first**, so this is a default, not a
-decision, and a card filed before proxdex recorded traits gets the fallback until
-re-fetched. **MTG's fallback is `mtg-m15`**, because two thirds of all MTG prints
-(71110 of ~106000) carry that frame, which makes it the least-wrong answer to "no
-idea"; `Via.FALLBACK` still reports it, so `frames check` names the card and a
-re-fetch settles it exactly.
-
-That per-printing answer is also **why there is no coverage report** — see
-`inventory.py`. A set-level row has no printing to read, so for MTG it cannot name
-one spec, and the one that existed named the fallback: every modern set claimed
-`mtg-2003` while every card in it actually takes `mtg-m15`, so the report called 1046
-sets unmeasured while every one of their cards resolved exactly. Warnings replaced
-it.
-
-**Three sampling traps, each of which produced a wrong answer first.** An oversized
-Vanguard or Planechase card is 89×127mm, so its border as a fraction of 63×88 is
-nonsense — measuring those invented a "gold border" variant that does not exist and
-made `frame:1993` read 2.85mm. Token sets have their own frame. And sampling
-*newest-first* measures modern retro-frame reprints rather than the generation
-itself, which widened every old frame's spread by ~0.2mm. The census excludes
-`is:oversized`, tokens, promos and Secret Lair, restricts to `st:core or st:expansion`,
-and orders oldest-first.
-
-**Every combination of Scryfall's three frame fields has been surveyed, and almost
-none of them matter (`scripts/mtg-variants.py`).** `frame` × `border_color` ×
-`frame_effects` gives **114** populated combinations over 98,585 printable
-standard-size cards; the 54 with 20+ printings cover 99.63%, and each was read over
-15 cards sampled **proportionally to the population**. The result is the reason there
-are not 114 specs:
-
-- **31 combinations measure at their own generation's border.** A `legendary` crown,
-  an `inverted` text box, the Nyx `enchantment` treatment, an `etched` foil, `snow`,
-  `devoid`, `miracle`, `companion`, `draft`, `spree`, `colorshifted`, `tombstone` and
-  `fullart` change the *picture*, not the border. So do white, gold and silver
-  borders. None needs a spec or a rule, and that is now **measured** rather than
-  assumed — `tests/test_frames.py::TestMeasuredVariants` guards it, so none of them
-  can quietly start returning a spec.
-- **`extendedart` is the one treatment that changes the geometry**, and it has a shape
-  no four-edge inset described before: the art runs off the **left and right card
-  edges** while the top and bottom keep the generation's border. That is `sides = 0`,
-  which is exactly what `detect_inset` reports by refusing to measure them across
-  every sample of 2,824 printings, with the top at 2.40 against an ordinary 2.48. It
-  ships as `mtg-extended-art` and closes what used to be documented here as the one
-  genuine gap.
-- **`border_color: yellow` is a decorative band, not a colour**: 4.70mm sides against
-  2.45, the largest error in the survey (2.25mm) over 79 printings. Ships as
-  `mtg-yellow-band`.
-
-Both are returned by **`sources.mtg_frame` from the printing**, like `borderless` —
-a fact the provider stated about this card, so it lands at `Via.PRINTING`, above any
-rule and below a pin. `borderless` is checked first, since a borderless extended-art
-card has no border at all.
-
-Three readings in that survey are **artifact, not finding**, and the module
-deliberately does not act on them. Every `border_color: borderless` row reports a
-"border" (1.52-3.81mm) because the detector is finding the *art's* own edge — those
-are settled by the printing before any measurement is consulted. `showcase` looks
-0.2-0.3mm off, but a showcase frame is a different bespoke design **per set**, so that
-is variance across designs rather than an offset to encode. And the M15 *bottom* reads
-~0.4mm thick on every black-bordered row (2.88 against a 2.45 side) because the
-collector strip sits in it — which is why several combinations' "worst edge" is a
-bottom edge that means nothing.
-
-**`full_art` does not mean "no border", and treating it as if it did was a real
-bug.** It reads that way and it is about the *art*: a full-art card's picture fills
-the frame area and the black border is still there at its generation's width —
-measured across six sets, full-art M15 printings sit at 2.45 ±0.10, the same as
-their ordinary neighbours. `sources.mtg_frame` consulted it and returned
-`borderless`, so those cards reshaped to pure aspect and printed the art into the
-cut line, invisibly. **Only `border_color == "borderless"` decides** (plus the
-`art_series` layout), and the two flags really are independent: `hoc-76` Sauron is
-`borderless` with `full_art: False`, ZNR's pathways are `borderless` *and* full-art,
-ZNR's basics are full-art with a black border. `borders.detect_inset` agrees
-independently on the genuine ones — on `hoc-76` no edge clears `_TRUST` (support
-0.14-0.59) and it reports `frameless`. Pinned by
-`tests/test_frames.py::TestWhatTheProviderSays`, which is why `mtg_frame` and
-`mtg_traits` are public: they are *readings* of one card object, testable without a
-network round trip.
-
-**Extended-art used to be the one genuine gap and is now a spec.** The art runs to
-the left and right card edges while the top and bottom keep their border, which no
-*symmetric* inset describes — but an inset is per-edge, so `mtg-extended-art` says
-`sides = 0` and the fit is right. What made it look unsolvable was reading the
-detector's refusal to measure the sides (support 0.36-0.59) as a failure rather than
-as the answer.
+One open question the scans cannot answer: Alpha and Beta read ~1mm narrower on the
+sides (1.88-2.05mm) than white-bordered Unlimited and Revised (2.98mm), and it is *not*
+a crop artifact — Sol Ring's art box sits at the same pixels in both scans, so they are
+at the same scale. `mtg-1993` currently describes the black-bordered printings.
 
 **A spec is a number, and changing it invalidates masters that nothing else
 would.** Every other invalidation in proxdex is about *pixels*; a corrected spec

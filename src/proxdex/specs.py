@@ -171,8 +171,12 @@ class Via(StrEnum):
     SET_DEFAULT = "set-default"
     #: the shipped baseline: Pokémon's set-id era, or MTG's frame generation
     ERA = "era"
-    #: the game's fallback — nothing knows anything about this set
-    FALLBACK = "fallback"
+    #: **no spec at all.** Nothing measured describes this printing, so there is
+    #: nothing to fit against and :attr:`Resolution.spec` is ``None``. There used to
+    #: be a per-game fallback spec here; it meant a card of an unmeasured frame was
+    #: silently reshaped to somebody else's numbers, which looks perfect and is wrong
+    #: on paper. Refusing is the honest answer.
+    NONE = "none"
 
     @property
     def label(self) -> str:
@@ -186,7 +190,7 @@ _VIA_LABELS: dict[Via, str] = {
     Via.RULE: "a rule",
     Via.SET_DEFAULT: "the set's default",
     Via.ERA: "its era/frame",
-    Via.FALLBACK: "nothing knows this set",
+    Via.NONE: "no spec measured for this printing",
 }
 
 
@@ -360,7 +364,8 @@ def _in_ranges(number: str, spec: str) -> bool:
 class Resolution:
     """The spec a fit will run against, and how it was chosen."""
 
-    spec: FrameGuide
+    #: ``None`` when nothing measured describes this printing — see :attr:`Via.NONE`
+    spec: FrameGuide | None
     via: Via
     #: the rule id, when ``via`` is a rule or a set default
     rule: str | None = None
@@ -371,8 +376,13 @@ class Resolution:
     undecided: tuple[str, ...] = ()
 
     @property
+    def have(self) -> bool:
+        """Is there a spec to fit against at all?"""
+        return self.spec is not None
+
+    @property
     def sure(self) -> bool:
-        """Nothing to warn about: no dangling spec id and no undecidable rule.
+        """Nothing to warn about: a spec exists, no dangling id, no undecidable rule.
 
         Deliberately **not** a judgement about the spec's numbers. A spec is four
         numbers and a note (see :mod:`proxdex.frames`); whether they are good is a
@@ -380,11 +390,16 @@ class Resolution:
         the earlier version that graded them said "trusted" about readings that
         inherited a scan's crop.
         """
-        return self.missing is None and not self.undecided
+        return self.spec is not None and self.missing is None and not self.undecided
 
     @property
     def note(self) -> str:
         """One line for the CLI and the UI — the same sentence on both."""
+        if self.spec is None:
+            return (
+                "no frame spec measured for this printing — measure one "
+                "(`proxdex frames set`) or pass a spec for this run"
+            )
         parts = [f"{self.spec.name} ({self.via.label})"]
         if self.missing:
             parts.append(f"— spec '{self.missing}' no longer exists")
@@ -397,8 +412,9 @@ class Resolution:
 
     def json(self) -> dict[str, Any]:
         return {
-            "spec": self.spec.json(),
-            "shipped": frames.is_shipped(self.spec.id),
+            "spec": self.spec.json() if self.spec else None,
+            "shipped": self.spec is not None and frames.is_shipped(self.spec.id),
+            "have": self.have,
             "via": self.via.value,
             "via_label": self.via.label,
             "rule": self.rule,
@@ -430,12 +446,6 @@ class Registry:
             for s in self.specs.values()
             if s.game is None or game is None or s.game is game
         ]
-
-    def fallback(self, game: GameId) -> FrameGuide:
-        """The spec used when nothing else answers. Always exists: it is shipped,
-        and a library cannot delete a spec anything still points at."""
-        spec = self.get(frames.FALLBACK[game])
-        return spec if spec is not None else frames.SHIPPED[frames.FALLBACK[game]]
 
     def for_set(self, game: GameId, set_id: str) -> list[Rule]:
         """Every rule that could claim a card of this set, **most specific first**.
@@ -535,11 +545,10 @@ def resolve(
         return Resolution(
             spec=spec, via=Via.ERA, missing=missing, undecided=tuple(undecided)
         )
+    # nothing measured describes this printing. No spec, and no substitute: `border`
+    # refuses, the reports name the card, and `--frame` is the escape hatch.
     return Resolution(
-        spec=reg.fallback(game),
-        via=Via.FALLBACK,
-        missing=missing,
-        undecided=tuple(undecided),
+        spec=None, via=Via.NONE, missing=missing, undecided=tuple(undecided)
     )
 
 
@@ -847,7 +856,7 @@ class Fault(StrEnum):
     MISSING = "missing"
     #: a trait rule on a card with no recorded traits: undecidable, not false
     UNDECIDED = "undecided"
-    #: nothing knows this printing's frame, so the game's fallback applied
+    #: nothing measured describes this printing, so there is no spec to fit against
     UNKNOWN = "unknown"
 
     @property
@@ -859,7 +868,7 @@ _FAULT_LABELS: dict[Fault, str] = {
     Fault.UNREADABLE: "unreadable spec file",
     Fault.MISSING: "names a spec that does not exist",
     Fault.UNDECIDED: "needs this printing's traits",
-    Fault.UNKNOWN: "nothing knows this printing's frame",
+    Fault.UNKNOWN: "no frame spec measured for this printing",
 }
 
 _FAULT_HINTS: dict[Fault, str] = {
@@ -873,8 +882,10 @@ _FAULT_HINTS: dict[Fault, str] = {
         "(`proxdex frames pin`)."
     ),
     Fault.UNKNOWN: (
-        "Re-fetch the card to record its frame, or pin a spec. Until then it takes "
-        "the game's default, which is a different border."
+        "Measure a real card and record it (`proxdex frames set`), then assign it — "
+        "docs/measuring-frames.md says how. `border` refuses this card until then, "
+        "rather than fitting it to somebody else's numbers. Re-fetching may also "
+        "help, if its frame was never recorded."
     ),
 }
 
@@ -922,11 +933,12 @@ def audit(reg: Registry, resolved: Iterable[tuple[str, Resolution]]) -> list[Iss
     ]
     for card_id, found in resolved:
         if found.missing is not None:
+            landed = found.spec.id if found.spec else "no spec at all"
             out.append(
                 Issue(
                     fault=Fault.MISSING,
                     subject=card_id,
-                    detail=f"'{found.missing}' — fitting to {found.spec.id} instead",
+                    detail=f"'{found.missing}' — fitting to {landed} instead",
                 )
             )
         if found.undecided:
@@ -937,14 +949,8 @@ def audit(reg: Registry, resolved: Iterable[tuple[str, Resolution]]) -> list[Iss
                     detail=f"rule(s) {', '.join(found.undecided)}",
                 )
             )
-        elif found.via is Via.FALLBACK:
-            out.append(
-                Issue(
-                    fault=Fault.UNKNOWN,
-                    subject=card_id,
-                    detail=f"using {found.spec.id}",
-                )
-            )
+        elif found.spec is None:
+            out.append(Issue(fault=Fault.UNKNOWN, subject=card_id))
     return out
 
 

@@ -718,7 +718,8 @@ def create_app(lib: Library) -> FastAPI:
                     "status": {s.label: card.rollup(s).value for s in _STAGES},
                     # the spec this card's border step will actually fit to, and
                     # *why* — a pin, its printing, a rule, its era or nothing
-                    "frame_spec": (found := _resolution(reg, card)).spec.id,
+                    "frame_spec": (spec := (found := _resolution(reg, card)).spec)
+                    and spec.id,
                     "frame_sure": found.sure,
                     "frame_via": found.via.value,
                     "batch": batch.name if batch else None,
@@ -849,7 +850,7 @@ def create_app(lib: Library) -> FastAPI:
             "game_name": games.get(card.game).name,
             # frame-size guide: inner border inset [top,right,bottom,left], plus
             # how much to trust it — the UI warns on an unmeasured set.
-            "guide": _guide_json(guide),
+            "guide": _guide_json(guide) if guide else None,
             "guides": [_guide_json(g) for g in reg.choices(card.game)],
             # which of the seven ways this spec was arrived at, and anything the
             # align panel has to say out loud about it
@@ -880,6 +881,11 @@ def create_app(lib: Library) -> FastAPI:
         if src is None or not src.exists():
             return {"error": "no image to measure"}
         guide = _resolution(specs.load(lib.root), card).spec
+        if guide is None:
+            return {
+                "error": "no frame spec has been measured for this printing — "
+                "record one with `proxdex frames set`, or pick one for this run"
+            }
         if guide.frameless:
             return {
                 "inset": [0.0, 0.0, 0.0, 0.0],
@@ -920,7 +926,7 @@ def create_app(lib: Library) -> FastAPI:
                     "game": card.game.value,
                     "set": card.set_id,
                     "cards": 0,
-                    "spec": found.spec.id,
+                    "spec": found.spec.id if found.spec else "",
                     "via": found.via.value,
                     "via_label": found.via.label,
                     "rule": found.rule,

@@ -23,6 +23,12 @@ Compact backlog. `- [ ]` = to do, `- [x]` = done. Keep each item to one terse li
 - [x] `mtg-extended-art` (sides 0) and `mtg-yellow-band` ship; both answered from the printing like `borderless`
 - [x] `Match.EFFECT` + game-wide rules (empty set) so a treatment can be assigned at all; `frame:future` re-aliased to `mtg-2003` (surveys within 0.05mm)
 - [ ] **Waiting on calipers**: measure the 5 MTG cards in `docs/measuring-frames.md`, then `frames set` each — shipped numbers are provisional
+- [x] All scan-derived MTG specs withdrawn; a printing with no measured spec resolves to nothing (`Via.NONE`) and `border` refuses it instead of falling back
+- [x] `mtg-1993` from a pixel reading of the Beta Sol Ring scan (672x936: sides 21.5px, t/b 28.5px), stored as exact fractions of 63.5x88.9
+- [x] `pokemon-wotc` scoped to the WOTC era only — base/gym/neo, stopping where e-Card begins
+- [ ] Measure `mtg-m15`, `mtg-2003`, `mtg-1997`, `mtg-future`, and a white-bordered 1993 — see docs/measuring-frames.md
+- [ ] Re-add `mtg-extended-art` (sides 0) and `mtg-yellow-band` once measured; `sources.mtg_frame` returns only `borderless` until then
+- [ ] Pokémon past `neo4` has no spec at all — e-Card, EX, SWSH, SV all need one
 - [ ] **`detect_inset` over-reads a black border when the frame is also dark**: it wants a luminance step, so on Beta Sol Ring (dark stone artifact frame) it reads 37-41px where the border ends at 23px — ~65% too far. Judge by *colour* (the border is neutral, the frame is a coloured texture), which works on black and white borders alike. White-bordered readings are unaffected, so the shipped specs stand; every black-bordered absolute number in the survey does not
 - [ ] **Alpha/Beta need their own spec, ~1mm off `mtg-1993`**: by colour, Alpha 1.88-2.05 sides / 2.74 top and Beta 1.96 / 2.74, against Unlimited and Revised at 2.98 / 3.59. Not a crop artifact — Sol Ring's art box is at the same pixels in both scans, so they are at the same scale. 4th Edition is a third value again (2.39-2.56 sides). Waiting on calipers to confirm, incl. whether a dark keyline sits inside Beta's black border
 - [ ] **Oversized cards resolve to a 63×88 spec**: `opca-9` (89×127mm) takes `mtg-m15`, whose inset is a fraction of 63×88 — ~3.5mm applied where ~2.45mm belongs. Needs an oversized spec (`ref_mm` already supports it) picked off the card's `.oversized` marker

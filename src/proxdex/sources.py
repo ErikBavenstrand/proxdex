@@ -853,20 +853,12 @@ def mtg_frame(data: dict[str, Any]) -> str | None:
         or str(data.get("layout") or "").strip().lower() in _FRAMELESS_LAYOUTS
     ):
         return GuideId.BORDERLESS.value
-    # Two more the printing settles outright, both measured over every combination
-    # of Scryfall's three frame fields (`scripts/mtg-variants.py`). Answered here
-    # rather than by a shipped rule for the same reason `borderless` is: it is a fact
-    # the provider stated about this printing, not a guess about a set — so it lands
-    # at `Via.PRINTING`, above any rule and below a pin.
-    if border == "yellow":
-        # a decorative band, 4.70mm against an ordinary 2.45. Colour is otherwise
-        # never geometry: white, gold and silver all measure at generation width.
-        return GuideId.MTG_YELLOW_BAND.value
-    effects = {e.strip().lower() for e in _strs(data.get("frame_effects"))}
-    if "extendedart" in effects:
-        # the art runs off the left and right card edges, so those borders do not
-        # exist — the one treatment of ~26 that changes the geometry
-        return GuideId.MTG_EXTENDED_ART.value
+    # Extended art and the yellow box-topper band *are* their own geometries — the
+    # survey in `scripts/mtg-variants.py` is clear about that — but the specs that
+    # described them were scan-derived and went out with the rest. They belong here
+    # again when somebody has measured one; until then a card of either kind resolves
+    # to no spec and says so, which is the same answer every other unmeasured
+    # printing gets.
     return None
 
 

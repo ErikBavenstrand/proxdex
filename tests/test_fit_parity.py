@@ -76,7 +76,7 @@ CASES = (
 
 def guide_of(inset: tuple[float, float, float, float]) -> FrameGuide:
     return FrameGuide(
-        id=GuideId.MTG_2003.value,
+        id=GuideId.MTG_1993.value,
         name="test",
         game=None,
         inset=inset,

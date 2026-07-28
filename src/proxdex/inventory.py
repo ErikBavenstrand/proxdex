@@ -107,7 +107,7 @@ def _assign(brief: CardBrief, set_id: str, game: GameId, reg: Registry) -> Assig
     found = specs.resolve(reg, brief.id, set_id, game, traits=brief.traits)
     return Assignment(
         card=brief,
-        spec=found.spec.id,
+        spec=found.spec.id if found.spec else "",
         via=found.via,
         rule=found.rule,
         undecided=found.undecided,

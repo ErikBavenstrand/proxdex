@@ -310,7 +310,10 @@ def _examine_specs(card: Card, reg: Registry) -> list[Finding]:
             printing=card.printing_frame,
             traits=card.traits,
         ).spec
-        if fit.matches(want.id, want.inset):
+        # nothing measured describes this printing any more (a scan-derived spec was
+        # withdrawn, say). That is a `frames check` finding, not a stale master: the
+        # picture is fine and there is nothing to compare it against.
+        if want is None or fit.matches(want.id, want.inset):
             continue
         out.append(
             Finding(

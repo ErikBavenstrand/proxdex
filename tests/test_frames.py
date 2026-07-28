@@ -30,6 +30,16 @@ POKEMON = GameId.POKEMON
 MTG = GameId.MTG
 
 
+def spec_of(found: specs.Resolution) -> str:
+    """The resolved spec's id, asserting there is one.
+
+    `Resolution.spec` is optional now — a printing nobody measured resolves to no spec
+    at all — so a test that expects one has to say so rather than dereference blindly.
+    """
+    assert found.spec is not None, f"expected a spec, got none (via {found.via})"
+    return found.spec.id
+
+
 def add(root: Path, spec_id: str, game: GameId = POKEMON) -> None:
     """A library spec whose numbers are distinguishable from every shipped one."""
     specs.save(
@@ -65,18 +75,18 @@ class TestRegistry:
         specs.save(
             library.root,
             specs.spec(
-                GuideId.MTG_2003.value,
+                GuideId.MTG_1993.value,
                 "",
                 MTG,
                 (2.5, 2.5, 2.5, 2.5),
                 "calipers on a real card",
             ),
         )
-        spec = specs.load(library.root).get(GuideId.MTG_2003)
+        spec = specs.load(library.root).get(GuideId.MTG_1993)
         assert spec is not None
         assert round(spec.mm()[0], 2) == 2.5
         # the file gave no name, so the shipped one is kept rather than showing an id
-        assert spec.name == frames.SHIPPED[GuideId.MTG_2003].name
+        assert spec.name == frames.SHIPPED[GuideId.MTG_1993.value].name
 
     def test_a_measurement_records_the_card_it_was_taken_from(self) -> None:
         """A real card is 63.5×88.9mm, not the 63×88 proxdex trims to, so the same
@@ -271,54 +281,40 @@ class TestDelete:
 class TestResolve:
     """The order, top to bottom. Every case here is a different picture on paper."""
 
-    def test_a_set_nothing_knows_falls_back_and_says_so(self, library: Library) -> None:
+    def test_a_printing_nobody_measured_resolves_to_no_spec(
+        self, library: Library
+    ) -> None:
+        """The state that replaced a per-game fallback spec. A modern Pokémon set is
+        past the WOTC era and nothing measured describes it, so there is **nothing**
+        to fit against — where a fallback used to quietly hand over the vintage
+        numbers, which is a different border and no warning."""
         found = specs.resolve(specs.load(library.root), "swsh4-1", "swsh4", POKEMON)
-        assert found.via is Via.FALLBACK
-        assert found.spec.id == GuideId.POKEMON_GENERIC.value
+        assert found.via is Via.NONE
+        assert found.spec is None
+        assert not found.have
+        assert not found.sure
+        assert "no frame spec measured" in found.note
 
     def test_a_shipped_era_rule_answers_for_the_sets_it_covers(
         self, library: Library
     ) -> None:
         found = specs.resolve(specs.load(library.root), "base1-4", "base1", POKEMON)
         assert found.via is Via.ERA
-        assert found.spec.id == GuideId.POKEMON_WOTC.value
+        assert spec_of(found) == GuideId.POKEMON_WOTC.value
 
-    def test_mtg_splits_on_the_frame_generation_not_the_set(
-        self, library: Library
-    ) -> None:
-        """MTG's border narrowed by almost a millimetre with the M15 frame, and a
-        modern set can hold retro-frame cards at the old width — so the shipped
-        baseline reads the *printing's* frame, which a set code cannot answer."""
+    def test_mtg_reads_the_printings_frame_not_the_set(self, library: Library) -> None:
+        """A set code cannot answer which border a card has: a modern set holds
+        retro-frame cards beside modern ones (`dmr-354` is frame 1997 inside a frame
+        2015 set). So the baseline reads the *printing's* frame — and with only the
+        1993 spec measured, a 1993 card in a 2023 set resolves while its modern
+        neighbour does not."""
         reg = specs.load(library.root)
-        modern = specs.resolve(reg, "neo-136", "neo", MTG, traits={"frame": "2015"})
-        retro = specs.resolve(reg, "dmr-1", "dmr", MTG, traits={"frame": "1997"})
-        assert modern.spec.id == GuideId.MTG_M15.value
-        assert retro.spec.id == GuideId.MTG_1997.value
-        assert modern.via is retro.via is Via.ERA
-        # the whole point: two different numbers, and the gap is far bigger than
-        # the measurement error either of them carries
-        assert round(retro.spec.mm()[1] - modern.spec.mm()[1], 2) == 0.60
-
-    def test_every_mtg_frame_generation_maps_to_its_own_spec(
-        self, library: Library
-    ) -> None:
-        """Every documented generation maps to a spec that exists. `future` shares
-        the 2003 one, and that is a measurement rather than a shortcut: surveyed over
-        226 printings it reads 2.94 top / 2.95 sides / 2.99 bottom against 2003's
-        2.96 / 2.92 / 2.94. Two specs carrying the same four numbers would be two
-        things to measure for no difference on paper."""
-        reg = specs.load(library.root)
-        got = {
-            gen: specs.resolve(reg, "x-1", "x", MTG, traits={"frame": gen}).spec.id
-            for gen in ("1993", "1997", "2003", "2015", "future")
-        }
-        assert got == {
-            "1993": GuideId.MTG_1993.value,
-            "1997": GuideId.MTG_1997.value,
-            "2003": GuideId.MTG_2003.value,
-            "2015": GuideId.MTG_M15.value,
-            "future": GuideId.MTG_2003.value,
-        }
+        old = specs.resolve(reg, "dmr-1", "dmr", MTG, traits={"frame": "1993"})
+        modern = specs.resolve(reg, "dmr-2", "dmr", MTG, traits={"frame": "2015"})
+        assert old.spec is not None
+        assert (old.spec.id, old.via) == (GuideId.MTG_1993.value, Via.ERA)
+        assert modern.spec is None
+        assert modern.via is Via.NONE
 
     def test_every_frame_scryfall_documents_is_covered(self) -> None:
         """Scryfall documents exactly five `frame` values, and this is the list.
@@ -329,39 +325,25 @@ class TestResolve:
         1993 (Alpha), 1997 (Mirage), 2003 (8th Edition), 2015 (Magic 2015), future.
         """
         documented = {"1993", "1997", "2003", "2015", "future"}
-        assert set(frames.FRAME_GENERATIONS[MTG]) == documented
         reg = specs.load(Path("/nonexistent"))
+        measured, unmeasured = set[str](), set[str]()
         for generation in documented:
             found = specs.resolve(
                 reg, "x-1", "x", MTG, traits={frames.FRAME_TRAIT: generation}
             )
-            # every one resolves to a real spec, by the baseline and not the fallback
-            assert found.via is Via.ERA, generation
-            assert found.spec.id in reg.specs, generation
+            (measured if found.have else unmeasured).add(generation)
+        # exactly one has been measured, and the other four resolve to nothing rather
+        # than to a stand-in. Absence here is the design, not an omission.
+        assert measured == {"1993"}
+        assert unmeasured == documented - {"1993"}
+        assert set(frames.FRAME_GENERATIONS[MTG]) <= documented
 
-    def test_every_frame_generation_maps_to_a_spec_that_exists(self) -> None:
-        """One spec per documented generation, no aliasing. `future` used to share
-        the 2003 spec, which meant a Future Sight timeshift silently claimed a
-        border 0.07mm wider than the one it has."""
+    def test_every_generation_that_maps_names_a_spec_that_exists(self) -> None:
+        """A mapping to an id nothing defines would resolve to the id and then fail
+        at the fit, which is a worse failure than resolving to nothing."""
         ids = set(frames.FRAME_GENERATIONS[MTG].values())
+        assert ids
         assert all(i in frames.SHIPPED for i in ids)
-
-    def test_the_mtg_specs_carry_the_shape_the_survey_found(self) -> None:
-        """The *shape* of the answer rather than the numbers, which is the part a
-        scan survey can establish even though it cannot fix the absolute width: 1993
-        and 1997 thicken the top and bottom over the sides, 2003's redesign made all
-        four equal, and M15 took ~0.55mm off everything. Each is a visible difference
-        on cut paper, so a caliper reading that contradicts one of these is worth a
-        second look before it is stored."""
-        reg = specs.load(Path("/nonexistent"))
-        mm = {k: reg.specs[k].mm() for k in reg.specs}
-        for old in (GuideId.MTG_1993.value, GuideId.MTG_1997.value):
-            top, side, bottom, _ = mm[old]
-            assert top == bottom, old  # symmetric top to bottom
-            assert top - side > 0.3, old  # and thicker than the sides
-        even = mm[GuideId.MTG_2003.value]
-        assert max(even) - min(even) < 0.05  # the 2003 redesign: all four equal
-        assert mm[GuideId.MTG_2003.value][1] - mm[GuideId.MTG_M15.value][1] > 0.5
 
     def test_every_shipped_spec_says_where_its_numbers_came_from(self) -> None:
         """The note is the only account a spec has of how much to trust it, now that
@@ -391,19 +373,21 @@ class TestResolve:
         plain = specs.resolve(
             reg, "dft-1", "dft", MTG, traits={"frame": "2015", "border": "black"}
         )
+        assert topper.spec is not None
         assert (topper.spec.id, topper.via) == ("mtg-yellow-band", Via.RULE)
-        assert plain.spec.id == GuideId.MTG_M15.value
+        # and its ordinary neighbour resolves to nothing, because the M15 frame has
+        # not been measured — a rule adds an answer, it does not invent a baseline
+        assert plain.spec is None
 
-    def test_an_mtg_card_with_no_recorded_frame_takes_the_commonest_frame(
+    def test_an_mtg_card_with_no_recorded_frame_resolves_to_nothing(
         self, library: Library
     ) -> None:
-        """A card filed before proxdex recorded traits has no frame to read, so it
-        takes the M15 spec: two thirds of all MTG prints carry that frame, which
-        makes it the least-wrong answer to "no idea". It is still reported as a
-        fallback, so `frames check` names the card and a re-fetch settles it."""
+        """A card filed before proxdex recorded traits has no frame to read. It used
+        to take the commonest generation's spec as a least-wrong guess; now it takes
+        none, `frames check` names it, and a re-fetch settles it."""
         found = specs.resolve(specs.load(library.root), "neo-136", "neo", MTG)
-        assert found.via is Via.FALLBACK
-        assert found.spec.id == GuideId.MTG_M15.value
+        assert found.via is Via.NONE
+        assert found.spec is None
 
     def test_a_library_rule_beats_the_frame_generation(self, library: Library) -> None:
         specs.save(
@@ -413,14 +397,14 @@ class TestResolve:
         found = specs.resolve(
             specs.load(library.root), "neo-136", "neo", MTG, traits={"frame": "2015"}
         )
-        assert (found.spec.id, found.via) == ("mtg-mine", Via.SET_DEFAULT)
+        assert (spec_of(found), found.via) == ("mtg-mine", Via.SET_DEFAULT)
 
     def test_a_library_rule_beats_the_era(self, library: Library) -> None:
         add(library.root, "pokemon-vintage")
         specs.assign(library.root, "pokemon-vintage", POKEMON, "base1", Match.SET)
         found = specs.resolve(specs.load(library.root), "base1-4", "base1", POKEMON)
         assert found.via is Via.SET_DEFAULT
-        assert found.spec.id == "pokemon-vintage"
+        assert spec_of(found) == "pokemon-vintage"
         assert found.rule == "r1"
 
     def test_an_exception_beats_the_sets_default(self, library: Library) -> None:
@@ -433,8 +417,8 @@ class TestResolve:
         reg = specs.load(library.root)
         ordinary = specs.resolve(reg, "swsh4-25", "swsh4", POKEMON)
         secret = specs.resolve(reg, "swsh4-190", "swsh4", POKEMON)
-        assert (ordinary.spec.id, ordinary.via) == ("pokemon-swsh", Via.SET_DEFAULT)
-        assert (secret.spec.id, secret.via) == ("pokemon-secret", Via.RULE)
+        assert (spec_of(ordinary), ordinary.via) == ("pokemon-swsh", Via.SET_DEFAULT)
+        assert (spec_of(secret), secret.via) == ("pokemon-secret", Via.RULE)
         assert secret.rule == "r1"
 
     def test_the_printing_beats_a_rule_and_a_pin_beats_the_printing(
@@ -448,7 +432,7 @@ class TestResolve:
         printed = specs.resolve(
             reg, "swsh4-190", "swsh4", POKEMON, printing=GuideId.BORDERLESS.value
         )
-        assert (printed.via, printed.spec.id) == (Via.PRINTING, "borderless")
+        assert (printed.via, spec_of(printed)) == (Via.PRINTING, "borderless")
         pinned = specs.resolve(
             reg,
             "swsh4-190",
@@ -457,7 +441,7 @@ class TestResolve:
             printing=GuideId.BORDERLESS.value,
             pin="pokemon-swsh",
         )
-        assert (pinned.via, pinned.spec.id) == (Via.PIN, "pokemon-swsh")
+        assert (pinned.via, spec_of(pinned)) == (Via.PIN, "pokemon-swsh")
 
     def test_an_override_beats_everything(self, library: Library) -> None:
         add(library.root, "pokemon-swsh")
@@ -469,7 +453,7 @@ class TestResolve:
             override="pokemon-swsh",
             pin=GuideId.BORDERLESS.value,
         )
-        assert (found.via, found.spec.id) == (Via.OVERRIDE, "pokemon-swsh")
+        assert (found.via, spec_of(found)) == (Via.OVERRIDE, "pokemon-swsh")
 
     def test_a_pin_naming_a_removed_spec_is_reported_not_obeyed(
         self, library: Library
@@ -501,13 +485,13 @@ class TestResolve:
         reg = specs.load(library.root)
         blind = specs.resolve(reg, "swsh4-190", "swsh4", POKEMON)
         assert blind.undecided == ("r1",)
-        assert blind.spec.id == "pokemon-swsh"  # it took the default meanwhile
+        assert spec_of(blind) == "pokemon-swsh"  # it took the default meanwhile
         assert not blind.sure
         assert "traits" in blind.note
         seeing = specs.resolve(
             reg, "swsh4-190", "swsh4", POKEMON, traits={"rarity": "Rare Secret"}
         )
-        assert (seeing.spec.id, seeing.via, seeing.undecided) == (
+        assert (spec_of(seeing), seeing.via, seeing.undecided) == (
             "pokemon-secret",
             Via.RULE,
             (),
@@ -519,10 +503,11 @@ class TestResolve:
         add(library.root, "pokemon-neo")
         specs.assign(library.root, "pokemon-neo", POKEMON, "neo", Match.SET)
         reg = specs.load(library.root)
-        assert specs.resolve(reg, "neo-1", "neo", POKEMON).spec.id == "pokemon-neo"
-        assert (
-            specs.resolve(reg, "neo-136", "neo", MTG).spec.id == GuideId.MTG_M15.value
-        )
+        pokemon = specs.resolve(reg, "neo-1", "neo", POKEMON)
+        assert pokemon.spec is not None
+        assert pokemon.spec.id == "pokemon-neo"
+        # MTG's `neo` is Kamigawa and the Pokémon rule must not reach it
+        assert specs.resolve(reg, "neo-136", "neo", MTG).spec is None
 
 
 class TestWhatTheProviderSays:
@@ -620,13 +605,14 @@ class TestAudit:
         found = specs.resolve(reg, "base1-4", "base1", POKEMON)
         assert specs.audit(reg, [("base1-4", found)]) == []
 
-    def test_a_provisional_spec_is_not_a_warning(self, library: Library) -> None:
-        """The whole point of dropping the confidence levels: every shipped MTG
-        number is provisional, so grading them would warn about every card."""
+    def test_a_measured_spec_is_not_a_warning(self, library: Library) -> None:
+        """A card that resolves is silent, however little anybody trusts the four
+        numbers — the audit reports broken references and unanswerable questions,
+        never an opinion about a spec's quality."""
         reg = specs.load(library.root)
-        found = specs.resolve(reg, "m15-1", "m15", MTG, traits={"frame": "2015"})
+        found = specs.resolve(reg, "leb-270", "leb", MTG, traits={"frame": "1993"})
         assert found.via is Via.ERA
-        assert specs.audit(reg, [("m15-1", found)]) == []
+        assert specs.audit(reg, [("leb-270", found)]) == []
 
     def test_a_pin_to_a_removed_spec_is_reported(self, library: Library) -> None:
         reg = specs.load(library.root)
@@ -652,14 +638,14 @@ class TestAudit:
         assert issue.fault is specs.Fault.UNDECIDED
         assert "r1" in issue.detail
 
-    def test_a_printing_nothing_knows_is_reported_once(self, library: Library) -> None:
-        """An MTG card filed before proxdex recorded traits: it still borders, off
-        the commonest frame, and the report names it so a re-fetch settles it."""
+    def test_a_printing_with_no_spec_is_reported_once(self, library: Library) -> None:
+        """The card `border` will refuse. Reported once, with a hint naming the verb
+        that fixes it, rather than once per side or once per stage."""
         reg = specs.load(library.root)
         found = specs.resolve(reg, "neo-136", "neo", MTG)
         (issue,) = specs.audit(reg, [("neo-136", found)])
         assert issue.fault is specs.Fault.UNKNOWN
-        assert GuideId.MTG_M15.value in issue.detail
+        assert "frames set" in issue.hint
 
     def test_an_unreadable_file_and_a_dangling_rule_are_both_reported(
         self, library: Library
@@ -699,7 +685,7 @@ class TestGameWideRules:
         traits = {"frame": "2015", "effects": "extendedart,legendary"}
         for set_id in ("neo", "m15", "ltr", "brandnewset"):
             found = specs.resolve(reg, f"{set_id}-1", set_id, MTG, traits=traits)
-            assert (found.spec.id, found.via) == ("mtg-extended", Via.RULE), set_id
+            assert (spec_of(found), found.via) == ("mtg-extended", Via.RULE), set_id
 
     def test_it_does_not_leak_into_the_other_game(self, library: Library) -> None:
         add(library.root, "mtg-extended", MTG)
@@ -711,7 +697,7 @@ class TestGameWideRules:
             POKEMON,
             traits={"effects": "extendedart"},
         )
-        assert found.spec.id != "mtg-extended"
+        assert found.spec is None
 
     def test_a_sets_own_rule_beats_a_game_wide_one(self, library: Library) -> None:
         """Specificity, not file order — the global rule is added *second* here, so
@@ -723,11 +709,11 @@ class TestGameWideRules:
         specs.assign(library.root, "mtg-mine", MTG, "ltr", Match.NUMBERS, "1-50")
         reg = specs.load(library.root)
         traits = {"frame": "2015", "effects": "extendedart"}
-        assert specs.resolve(reg, "ltr-20", "ltr", MTG, traits=traits).spec.id == (
+        assert spec_of(specs.resolve(reg, "ltr-20", "ltr", MTG, traits=traits)) == (
             "mtg-mine"
         )
         # and outside that range the global rule still answers
-        assert specs.resolve(reg, "ltr-90", "ltr", MTG, traits=traits).spec.id == (
+        assert spec_of(specs.resolve(reg, "ltr-90", "ltr", MTG, traits=traits)) == (
             "mtg-extended"
         )
 
@@ -792,53 +778,32 @@ class TestFrameTreatments:
         assert sources.mtg_traits({"frame": "2015"})[specs.TRAIT_EFFECTS] == ""
 
 
-class TestMeasuredVariants:
-    """The two treatments that change the geometry, out of the ~26 that exist.
+class TestWhatThePrintingSettles:
+    """`sources.mtg_frame` — the one place a *printing* overrides its card's rules.
 
-    `scripts/mtg-variants.py` measured all 54 (frame × border_color × frame_effects)
-    combinations with 20+ printings. **31 came out at their own generation's border**
-    — a legendary crown, an inverted text box, the Nyx enchantment treatment, an
-    etched foil, `snow`, `devoid`, `miracle`, `fullart` — so they need no spec and no
-    rule, and that is now measured rather than assumed. These two do not.
+    It returns `borderless` and nothing else now. Extended art and the yellow
+    box-topper band really are their own geometries — `scripts/mtg-variants.py` is
+    clear about that — but the specs describing them were read off scans and went out
+    with the rest, so those cards resolve to no spec like every other unmeasured
+    printing rather than to a number nobody took.
     """
 
-    def test_extended_art_has_no_side_borders(self) -> None:
-        """The shape no four-edge inset described before: the art runs off the left
-        and right card edges while the top and bottom keep the generation's border.
-        Left as an ordinary M15 card it printed a 2.45mm border where there is none.
-        """
-        spec = frames.SHIPPED[GuideId.MTG_EXTENDED_ART.value]
-        top, right, bottom, left = spec.mm()
-        assert (right, left) == (0.0, 0.0)
-        assert top > 2.0
-        assert bottom > 2.0
-        # and it is *not* frameless — a frameless spec fits the aspect and nothing
-        # else, which would throw away the top and bottom border it really has
-        assert not spec.frameless
+    def test_borderless_is_settled_by_the_printing(self) -> None:
+        assert (
+            sources.mtg_frame({"border_color": "borderless"})
+            == GuideId.BORDERLESS.value
+        )
 
-    def test_the_printing_settles_extended_art_and_the_yellow_band(self) -> None:
-        """Read off the card object, like `borderless` — a fact the provider stated
-        about this printing rather than a guess about its set, so it resolves at
-        `Via.PRINTING`, above any rule and below a pin."""
+    def test_extended_art_and_the_yellow_band_await_a_measurement(self) -> None:
         assert (
             sources.mtg_frame(
                 {"border_color": "black", "frame_effects": ["extendedart"]}
             )
-            == GuideId.MTG_EXTENDED_ART.value
+            is None
         )
         assert (
             sources.mtg_frame({"border_color": "yellow", "frame_effects": ["inverted"]})
-            == GuideId.MTG_YELLOW_BAND.value
-        )
-
-    def test_borderless_still_wins_over_both(self) -> None:
-        """A borderless extended-art card has no border at all, so the treatment must
-        not talk it into having a top and bottom one."""
-        assert (
-            sources.mtg_frame(
-                {"border_color": "borderless", "frame_effects": ["extendedart"]}
-            )
-            == GuideId.BORDERLESS.value
+            is None
         )
 
     def test_the_treatments_that_change_nothing_change_nothing(self) -> None:

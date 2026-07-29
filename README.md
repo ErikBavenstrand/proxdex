@@ -827,6 +827,91 @@ the page plan updates as you go. `Print` manages profiles and walks the
 calibration loop — the slot map shows which part of the sheet is used, and the
 round table shows the error falling.
 
+## Development
+
+One command for the environment, and it is the same one CI uses:
+
+```bash
+uv sync --group dev      # ruff, pyright, pytest — plus the [ui] extra
+```
+
+The `dev` group deliberately pulls the **`[ui]` extra** rather than listing its
+packages again, so lint and typecheck see `webui.py`. `node` is needed too, for one
+test (below); every CI runner ships one, and the test skips loudly without it.
+
+### The gate
+
+Five commands, and they are exactly what CI runs — if these pass locally, CI passes:
+
+```bash
+uv lock --check                             # the lock still agrees with pyproject
+uv run --group dev ruff check src tests
+uv run --group dev ruff format --check src tests
+uv run --group dev pyright                  # strict
+uv run --group dev pytest
+```
+
+`webui.html` is a vanilla-JS SPA and is **not** linted or typechecked by any of them.
+After editing its `<script>`, extract the block and run `node --check` on it — that is
+the only thing standing between a typo and a blank page. `scripts/release.sh` does it
+for you, and so does the parity test below, indirectly.
+
+The suite is deliberately small: it covers only what a person cannot re-check by eye,
+which is why `tests/test_fit_parity.py` exists — it cuts `solveFit` out of `webui.html`
+and runs it **in node** against cardbleed's Python `solve_fit`, because a drift between
+the two makes the align overlay lie about where a card will land.
+
+### Running your checkout vs. the installed tool
+
+These are not the same program, and the difference has shipped bugs twice:
+
+```bash
+# your checkout, on a library in the current directory
+uv run proxdex ls
+
+# your checkout, on a library somewhere else
+uv run proxdex --root ~/Documents/Proxies ls
+
+# your checkout, from *any* directory (handy when the library is the cwd)
+uv run --project ~/Code/proxdex proxdex --root ~/Documents/Proxies ls
+
+# what a user actually gets: no dev group, no extras
+uv tool install .
+```
+
+**`uv run` gives you the dev group, and a user has no dev group.** Because that group
+carries the `[ui]` extra, an import that a core module needs but that is declared under
+`[ui]` works perfectly in a checkout and dies for everyone else. That is not
+hypothetical: `tomlkit` shipped that way for two releases — green on six CI jobs across
+three platforms — and a plain `pip install proxdex` wrote the print PDF and *then* died
+with `ModuleNotFoundError`. Two things guard it now, and both are worth knowing about
+before you add a dependency:
+
+- `tests/test_deps.py` reads the **declaration** in `pyproject.toml` rather than trying
+  the import, because in the environment the suite runs in every import works. Every
+  non-stdlib import must be a declared dependency, or sit inside a
+  `try/except ModuleNotFoundError` that says how to install it.
+- CI's `installed` job builds the wheel, installs it into a bare venv with **no extras
+  and no dev group**, and drives the whole pipeline through it.
+
+To reproduce that job locally before you push:
+
+```bash
+uv build && uv venv bare && VIRTUAL_ENV=bare uv pip install dist/*.whl
+bare/bin/proxdex init lib && bare/bin/proxdex --root lib where
+```
+
+### Test against a throwaway library
+
+Never your real one. A temp directory with a `proxdex.toml` marker is a library, so:
+
+```bash
+uv run proxdex init /tmp/lib
+uv run proxdex --root /tmp/lib <command>
+```
+
+`cardbleed` ships its own suite — `cardbleed --selfcheck`.
+
 ## Releasing
 
 One command, from a clean `main`:

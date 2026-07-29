@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Literal, get_args, get_origin, get_type_hints
 
 from proxdex.errors import ConfigError
-from proxdex.games import GameId
+from proxdex.games import CARD_H_MM, CARD_W_MM, GameId
 
 #: the file that both configures a library and marks the directory as one
 MARKER = "proxdex.toml"
@@ -159,15 +159,16 @@ class Config:
         help="Scryfall serves both metadata and images for Magic cards.",
     )
     # --- card geometry (mm); embedded DPI is never trusted -------------------
-    #: both supported games print at the standard 63×88mm, so this is global
+    #: both games print at the same 2.5×3.5in poker size, so this is global
     card_w_mm: float = setting(
-        63.0,
+        CARD_W_MM,
         label="Card width",
-        help="Finished trim width. Both games print at 63×88 mm.",
+        help="Finished trim width. Both games print at 2.5×3.5in — 63.5×88.9 mm — "
+        "which is also the card a frame spec's millimetres are measured against.",
         unit="mm",
     )
     card_h_mm: float = setting(
-        88.0, label="Card height", help="Finished trim height.", unit="mm"
+        CARD_H_MM, label="Card height", help="Finished trim height.", unit="mm"
     )
     bleed_mm: float = setting(
         2.5,

@@ -20,13 +20,15 @@ spec**, and one card per row in ``docs/measuring-frames.md``. That is prose in t
 repository rather than a field on the object, so there is nothing for a screen to
 render as a verdict.
 
-**One card size, both games** (:data:`CARD_MM`). A Magic card and a Pokémon card are
-the same standard 63.5×88.9mm (2.5×3.5in) stock, so there is no per-spec reference size
-to record — a field that once held an arbitrary pair of millimetres was only ever
-answering "is this the ordinary card or the big one?", and that is a **boolean**
-(:attr:`FrameGuide.oversized`). Insets are *fractions*, which travel between sizes
-untouched; the size is needed only to turn a fraction back into millimetres a person
-reads, and a spec reports those of the card it actually describes.
+**One card size, both games, and it is the same one proxdex trims to.** Magic and
+Pokémon print on identical stock — 2.5×3.5in, the poker-size standard, **63.5×88.9mm** —
+so there is no per-spec reference size *and* no second constant:
+:data:`proxdex.games.CARD_W_MM` is the trim *and* the card a spec's millimetres are
+fractions of. That identity is the point: a caliper reading of a 3.45mm border becomes a
+printed border of 3.45mm, and `frames show` reports the width that actually gets
+printed. Insets are *fractions*, which travel between sizes untouched; the only
+genuinely different card is the oversized one, and that is a **boolean**
+(:attr:`FrameGuide.oversized`).
 
 **A printing with no spec resolves to nothing, and that is a state rather than a
 failure.** A spec ships only once somebody has measured a card and written down what
@@ -51,7 +53,13 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
-from proxdex.games import OVERSIZED_H_MM, OVERSIZED_W_MM, GameId
+from proxdex.games import (
+    CARD_H_MM,
+    CARD_W_MM,
+    OVERSIZED_H_MM,
+    OVERSIZED_W_MM,
+    GameId,
+)
 
 
 #: shipped spec ids. Closed on purpose: these are the ones code names — the
@@ -76,14 +84,10 @@ class GuideId(StrEnum):
 #: to be a spec by that name whatever a library has done to the rest.
 RESERVED: frozenset[str] = frozenset({GuideId.BORDERLESS.value})
 
-#: the card every spec's millimetres are read against — 2.5×3.5in, the standard
-#: stock **both** games print on, so it is one constant rather than a per-spec
-#: field. Deliberately not the 63×88 proxdex *trims* to: a caliper reading is a
-#: fraction of the real card, and using the trim instead was a 0.8% error in every
-#: border. Insets are fractions, so this is only ever needed to show a human a
-#: number; an oversized card passes its own size to :meth:`FrameGuide.mm`.
-CARD_MM: tuple[float, float] = (63.5, 88.9)
-CARD_W_MM, CARD_H_MM = CARD_MM
+#: the card a spec's millimetres are fractions of — :data:`proxdex.games.CARD_W_MM`,
+#: which is also the trim, because they are the same card. Re-exported as a pair for
+#: the callers that want one; the *value* is defined once, in `games`.
+CARD_MM: tuple[float, float] = (CARD_W_MM, CARD_H_MM)
 
 #: what a spec id may look like — it is a filename, a CLI value and a URL
 #: segment, so keep it to the shape every one of those carries without quoting
@@ -197,7 +201,7 @@ _mm = mm_to_inset  # the name this module used before the specs split
 # frame nobody has measured. Calipers on a real card (top 3.3 / bottom 3.6 /
 # left 3.2 / right 3.1 mm); the border wanders a little card-to-card, so these are
 # the tidy averages top/bottom 3.45, sides 3.15mm. Taken against the real card
-# (:data:`CARD_MM`), which is what the calipers were on.
+# (63.5×88.9mm), the card both games print on.
 _POKEMON_WOTC = FrameGuide(
     id=GuideId.POKEMON_WOTC.value,
     name="Pokémon · WOTC vintage (Base-Neo Destiny)",

@@ -63,9 +63,15 @@ log below is.
 
 Top and bottom are one number, and left and right are another: the cutting error is
 cancelled rather than recorded (step 5 below). Percentages are the stored form (the inset
-as a fraction of the card); millimetres are those percentages of **63.5×88.9mm**, the
-2.5×3.5in stock both games print on — except the two oversized specs, whose percentages are
-of the 89×127mm card they were read from and whose millimetres are stated as such.
+as a fraction of the card); millimetres are those percentages of **63.5×88.9mm** — the
+2.5×3.5in poker size both games print at, which is *also* what proxdex trims to, so the
+millimetres here are the ones that come off the printer. The exceptions are the two
+oversized specs, whose percentages are of the 88.9×127mm card they were read from.
+
+That is deliberately the **published spec and not a measured card.** Calipers on real cards
+read a little under — one report of 63×87.9mm — and 63×88 is widely quoted as a rounded
+metric figure. But a caliper reading is one card off one print run inside a ±0.5mm cutting
+tolerance, so the number both publishers state is the stable one to build on.
 
 **Every one of Scryfall's five frame generations resolves.** `1993` is the one that needs
 help from the set id as well, because it is three bands a millimetre apart — but its

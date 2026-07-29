@@ -23,13 +23,14 @@ import pytest
 from proxdex.bleed import fit_plan
 from proxdex.config import Config
 from proxdex.frames import FrameGuide, GuideId
+from proxdex.games import CARD_H_MM, CARD_W_MM
 
 WEBUI = Path(__file__).resolve().parents[1] / "src" / "proxdex" / "webui.html"
 EDGES = ("top", "right", "bottom", "left")
 
 #: real guides, plus a lopsided one no era has — an asymmetric target is where a
 #: transposed edge or a mis-split budget shows up
-WOTC = (3.45 / 88, 3.15 / 63, 3.45 / 88, 3.15 / 63)
+WOTC = (3.45 / CARD_H_MM, 3.15 / CARD_W_MM, 3.45 / CARD_H_MM, 3.15 / CARD_W_MM)
 MTG = (0.045, 0.052, 0.045, 0.052)
 LOPSIDED = (0.03, 0.07, 0.09, 0.04)
 
@@ -103,13 +104,18 @@ def solve_fit_js() -> str:
     raise AssertionError(msg)
 
 
-def run_js(cases: tuple[Case, ...], tmp_path: Path) -> list[dict[str, object] | None]:
+def run_js(
+    cases: tuple[Case, ...], tmp_path: Path, card: tuple[float, float]
+) -> list[dict[str, object] | None]:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed — the UI half of the parity check")
+    # the card size comes from the *config*, the same value the Python half is given.
+    # Hardcoding it here once meant the two halves were handed different cards the
+    # moment the trim changed, and the parity test failed on its own harness.
     payload = [
         {
-            "m": {"w": c.w, "h": c.h, "card_w_mm": 63.0, "card_h_mm": 88.0},
+            "m": {"w": c.w, "h": c.h, "card_w_mm": card[0], "card_h_mm": card[1]},
             "b": dict(zip("trbl", c.marks, strict=True)),
             "guide": {"inset": list(c.guide)},
             "stretch": c.stretch,
@@ -139,9 +145,11 @@ def cfg() -> Config:
 
 
 @pytest.fixture(scope="module")
-def js_results(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]:
+def js_results(
+    tmp_path_factory: pytest.TempPathFactory, cfg: Config
+) -> list[dict[str, object]]:
     """Every case solved once, in node — the subprocess is the slow part."""
-    out = run_js(CASES, tmp_path_factory.mktemp("js"))
+    out = run_js(CASES, tmp_path_factory.mktemp("js"), (cfg.card_w_mm, cfg.card_h_mm))
     assert all(r is not None for r in out), "solveFit refused a case it should solve"
     return [r for r in out if r is not None]
 
@@ -182,8 +190,9 @@ def test_stretch_hits_the_target_exactly(cfg: Config) -> None:
 
 
 def test_the_trim_is_the_card_aspect(cfg: Config) -> None:
-    """The border master is exactly 63:88 by construction — which is why `sheet`
-    must never stretch."""
+    """The border master is exactly the card's aspect by construction — which is why
+    `sheet` must never stretch. Read from the config rather than written out, so the
+    property is pinned and not one particular trim."""
     for case in CASES:
         plan = fit_plan(
             case.w,
@@ -193,7 +202,9 @@ def test_the_trim_is_the_card_aspect(cfg: Config) -> None:
             cfg,
             stretch=case.stretch,
         )
-        assert plan.trim_w / plan.trim_h == pytest.approx(63.0 / 88.0, rel=1e-12)
+        assert plan.trim_w / plan.trim_h == pytest.approx(
+            cfg.card_w_mm / cfg.card_h_mm, rel=1e-12
+        )
 
 
 def test_marks_that_leave_no_inner_frame_are_refused(
@@ -202,7 +213,7 @@ def test_marks_that_leave_no_inner_frame_are_refused(
     """Both halves say no rather than inventing a fit: the UI returns null (and
     the panel says the marks leave no inner frame), Python raises."""
     impossible = Case("impossible", 745, 1040, (0.6, 0.1, 0.6, 0.1), MTG)
-    assert run_js((impossible,), tmp_path) == [None]
+    assert run_js((impossible,), tmp_path, (cfg.card_w_mm, cfg.card_h_mm)) == [None]
     with pytest.raises(Exception, match="no inner frame"):
         fit_plan(
             impossible.w,

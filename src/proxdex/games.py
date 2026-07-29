@@ -77,6 +77,26 @@ _LAYOUT_NOTES: dict[Layout, str] = {
     Layout.MELD_RESULT: "The melded card, printed as an ordinary card of its own.",
 }
 
+#: **The card both games print on, and the one place it is written down.**
+#:
+#: 2.5 × 3.5 inches — the "poker size" playing-card standard — which is 63.5 × 88.9mm.
+#: Wizards states it for Magic, The Pokémon Company states the same 2.5 × 3.5in for
+#: Pokémon, and sleeve makers design to it. **The two games are identical**, so this is
+#: one constant and not one per game.
+#:
+#: Deliberately the **published spec and not a measured card.** Calipers on real cards
+#: read a little under (one reported 63 × 87.9), and 63 × 88 is widely quoted as a
+#: rounded metric figure — but a caliper reading is one card off one print run, inside a
+#: ±0.5mm cutting tolerance, and picking it would pin proxdex to somebody's off-cut. The
+#: published number is stable, citable and the same for both games.
+#:
+#: It is also **one** number on purpose. It was briefly two — this trim, and a separate
+#: "real card" in `frames` that a spec's millimetres were fractions of — and that made
+#: `frames show` report a width 0.8% off the one being printed. With one, a caliper
+#: reading of a 3.45mm border becomes a printed border of 3.45mm.
+CARD_W_MM = 63.5
+CARD_H_MM = 88.9
+
 #: planar, scheme and Vanguard cards are printed at this size, not 63×88 — so a
 #: sheet imposed at the standard trim would print them too small. proxdex says
 #: so rather than silently shrinking them.

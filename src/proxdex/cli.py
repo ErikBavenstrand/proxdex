@@ -191,8 +191,11 @@ levels     = 0.0
 # baseline to pull them to. Matching the *paper* is [print]'s job, at sheet time.
 
 [card]
-w_mm = 63.0
-h_mm = 88.0
+# 2.5x3.5in, the poker-size standard both games print at. One number: it is the
+# trim AND the card a frame spec's millimetres are measured against, so a caliper
+# reading of a 3.45mm border prints as a 3.45mm border.
+w_mm = 63.5
+h_mm = 88.9
 
 [sources]
 bleed_mm = 2.5              # cut bleed added to every edge by cardbleed

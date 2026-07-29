@@ -117,9 +117,12 @@ class TestAspect:
     def test_rounding_to_whole_pixels_is_not_a_finding(
         self, card: Card, cfg: Config
     ) -> None:
-        """cardbleed fits the aspect and then rounds, so 745 wide wants 1040.3 —
-        a slack under a pixel, not a defect."""
-        save(bordered_card(w=745, h=1040), card.stage_path(Stage.BORDERED))
+        """cardbleed fits the aspect and then rounds to whole pixels, so the exact
+        height is fractional and the stored one is a pixel or so off. Derived from the
+        config rather than written out: the property is "rounding is not a defect", not
+        one particular trim's numbers."""
+        want = round(745 * cfg.card_h_mm / cfg.card_w_mm)
+        save(bordered_card(w=745, h=want), card.stage_path(Stage.BORDERED))
         assert not one(card, cfg)
 
     def test_a_source_aspect_is_a_finding(self, card: Card, cfg: Config) -> None:
@@ -129,7 +132,8 @@ class TestAspect:
         assert not found[0].repairable
         # the detail has to be checkable by hand: what it is, and what it wants
         assert f"{SOURCE_W}×{SOURCE_H}px" in found[0].detail
-        assert f"{SOURCE_W}×838" in found[0].detail
+        wants = round(SOURCE_W * cfg.card_h_mm / cfg.card_w_mm)
+        assert f"{SOURCE_W}×{wants}" in found[0].detail
 
     def test_only_the_bordered_stage_is_measured(self, card: Card, cfg: Config) -> None:
         """A card whose border step was skipped keeps its source's aspect all the

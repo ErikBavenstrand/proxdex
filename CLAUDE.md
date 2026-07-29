@@ -461,21 +461,30 @@ the trim is the ghost's job, and the band's job is to be comparable with the mar
 gets.** A `FrameGuide` is **four numbers plus one flag** — id, name, game, inset, and
 `oversized`. It carries no note and no reference size: where a shipped spec's numbers came
 from is prose **above it in the source** and one row per card in
-`docs/measuring-frames.md`, which is a record no screen can render as a verdict, and
-the card size is one constant (`frames.CARD_MM = (63.5, 88.9)`) because **a Magic
-card and a Pokémon card are the same 2.5×3.5in stock**. That constant is
-deliberately the *card* and not the 63×88 proxdex **trims** to — a caliper reading is
-a fraction of the real card, and using the trim is 0.8% of error in every border.
-Insets are fractions, so the size is needed only to show a human millimetres;
-`FrameGuide.mm()` reports the millimetres of the card the spec is *about*.
+`docs/measuring-frames.md`, which is a record no screen can render as a verdict.
 
-**`oversized` is a boolean, and that is the whole of what `ref_mm` was really for.** There
-are exactly two card sizes in proxdex, so an arbitrary millimetre pair was only ever
-answering "ordinary card or the big one?". Dropping it entirely was a step too far, caught by
-`frames show mtg-vanguard` reporting **3.71/2.88mm "of a 63.5×88.9mm card"** — a width of a
-card that spec does not describe. The flag also decides what `frames set --oversized` stores,
-since the same border is a smaller *fraction* of a bigger card. Seven
-specs ship (`frames.SHIPPED`), so a fresh library borders a Base Set card with
+**There is exactly one card size, `games.CARD_W_MM`/`CARD_H_MM` = 63.5×88.9mm, and it is
+both the trim and the size a spec's millimetres are fractions of.** 2.5×3.5in, the
+poker-size standard; Wizards states it for Magic and The Pokémon Company states the same for
+Pokémon, so **the two games are identical** and this is one constant rather than one per
+game. Deliberately the **published spec and not a measured card**: calipers on real cards
+read a little under (one reported 63×87.9mm) and 63×88 is widely quoted as a rounded metric
+figure, but a caliper reading is one card off one print run inside a ±0.5mm cutting
+tolerance, and pinning proxdex to somebody's off-cut is worse than using the number both
+publishers state.
+
+It is **one** number for a reason. It was briefly two — the trim at 63×88 and a separate
+"real card" at 63.5×88.9 that specs' millimetres were fractions of, on the sound reasoning
+that a caliper reading is a fraction of the true card. The reasoning was right and the split
+was not: it made `frames show` report a width 0.8% off the one being printed. With them
+identical, **a caliper reading of a 3.45mm border prints as a 3.45mm border**. Insets are
+*fractions*, so they travel between sizes untouched; the only genuinely different card is
+the oversized one, and that is a **boolean** (`FrameGuide.oversized`), not a size pair.
+`FrameGuide.mm()` reports the millimetres of the card the spec is *about* — dropping that
+entirely was a step too far, caught by `frames show mtg-vanguard` reporting 3.71/2.88mm "of
+a 63.5×88.9mm card", a width of a card that spec does not describe.
+
+Seven specs ship (`frames.SHIPPED`), so a fresh library borders a Base Set card with
 nothing configured; a library adds its own as `<root>/frames/<id>.json`, mirroring
 `profiles/`. **A spec id is therefore an open set, not a `StrEnum`** — the same
 call `profiles` makes, for the same reason: a user can measure a new era tonight.

@@ -104,6 +104,9 @@ Compact backlog. `- [ ]` = to do, `- [x]` = done. Keep each item to one terse li
 - [x] Planes and phenomena share `mtg-oversized` (renamed from `mtg-scheme`) rather than being called borderless — same product line, same 89×127mm stock, same era, and the scheme's 2.98/3.00mm *is* the physical border an ordinary 2003-frame card carries. Unreadable directly, but the safe direction: calling a bordered card borderless throws its fit away and looks perfect
 - [x] Showcase frames take their generation's spec, and that is right rather than merely untested: a showcase is the same die and the same printed border, only the *interior* art and frame treatment differ. The survey's 31-of-54 result already said treatments sit on their generation's border, and five treated cards read by hand confirmed it
 
+- [ ] **A dangling `[print] profile` is not reported anywhere, it just raises at sheet time.** Found in a real library: `[print] profile = foil` survived the deletion of the built-in presets, so every `sheet` run died with `no print profile named 'foil'` and nothing before that said so. `frames check` reports a spec that has gone missing (`Fault.MISSING`) — profiles want the same, and `proxdex where` or `profile list` is the place to say it
+- [ ] `profile list` prints "→ is the active profile" even when *no* row is marked, which is exactly the case where the configured name does not exist — so the legend describes a marker that is absent for the one reason worth naming
+
 ## Pipeline defaults
 
 - [x] Grade defaults to identity — a look proxdex invented for every card is the same mistake as an invented print profile

@@ -9,8 +9,16 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      # `uv.lock` is committed, so every job here resolves the same versions a
+      # contributor does — and this is what keeps it honest. Without the check the
+      # lock rots silently: a dependency added to `pyproject.toml` and never locked
+      # still works everywhere (uv re-resolves on the fly) right up until somebody
+      # installs from the lock and gets a different set. It also gives `setup-uv`
+      # something to key its cache on; before the lock existed the cache was
+      # created, never invalidated, and never usefully hit.
+      - run: uv lock --check
       - run: uv run --group dev ruff check src tests
       - run: uv run --group dev ruff format --check src tests
       - run: uv run --group dev pyright
@@ -28,8 +36,8 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.11", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python }}
       - run: uv run proxdex --version
@@ -92,8 +100,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
       - name: A bare install, driven end to end
         shell: bash
         run: |

@@ -4,7 +4,6 @@ dist/
 build/
 *.egg-info/
 .venv/
-uv.lock
 .DS_Store
 
 # browser-automation screenshots

@@ -33,7 +33,14 @@ shouldn't be done right now. Treat it as a live queue:
 Everything runs through `uv` (src-layout, hatchling, dynamic version from
 `src/proxdex/_version.py`). The gate is lint + typecheck + tests, matching CI:
 
+**`uv.lock` is committed and CI checks it** (`uv lock --check`, in the lint job). Without
+that check the lock rots silently: a dependency added to `pyproject.toml` and never locked
+keeps working everywhere, because `uv run` re-resolves on the fly — right up until somebody
+installs from the lock and gets a different set. It is also what gives `setup-uv` a cache
+key; before the lock was tracked the cache was created, never invalidated and never hit.
+
 ```bash
+uv lock --check                           # the lock agrees with pyproject (CI runs this)
 uv sync --group dev                       # dev deps (ruff, pyright, pytest, + the ui extra)
 uv run --group dev ruff check src tests   # lint (ruff select = ALL, curated ignores)
 uv run --group dev ruff format src tests  # format (or --check to verify)

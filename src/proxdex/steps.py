@@ -71,6 +71,10 @@ class StepOption:
     #: an option with no default is simply omitted when unset (border's frame
     #: falls back to the card's own era, which only the CLI can resolve)
     optional: bool = False
+    #: what "unset" means, for the blank entry an optional control offers. Named
+    #: per option because the answer differs: border's frame falls back to the
+    #: card's set, upscale's factor to whatever reaches the target resolution.
+    auto_label: str = "Automatic"
     #: for NUMBER, the range it is meaningful over. The UI bounds its control
     #: with it and the API *rejects* anything outside — a silently clamped value
     #: would be a step that ran with settings nobody chose.
@@ -78,6 +82,10 @@ class StepOption:
     high: float | None = None
     #: the control's increment; only cosmetic
     step_by: float | None = None
+    #: what the number *is* — "dpi", "mm". Mirrors `config.setting(unit=…)`, which the
+    #: settings screen already renders, so a step's panel can say `dpi` beside the box
+    #: instead of showing a bare four-digit number nobody can interpret.
+    unit: str = ""
 
     @property
     def choices(self) -> tuple[str, ...]:
@@ -132,18 +140,26 @@ class StepOption:
         above = self.high is not None and number > self.high
         return None if below or above else number
 
+    @property
+    def flag(self) -> str:
+        """The long flag this option becomes. The wire key follows the ``Config``
+        field's shape (``min_dpi``), a flag is dashed like every other one —
+        and both spellings are generated from here so the UI cannot send the CLI
+        an option the CLI does not have."""
+        return self.key.replace("_", "-")
+
     def argv(self, value: Any) -> list[str]:
         """The CLI spelling of this setting — a flag pair, or a flag + value."""
         clean = self.coerce(value)
         if clean is None:
             return []
         if self.kind is OptKind.BOOL:
-            return [f"--{self.key}" if clean else f"--no-{self.key}"]
+            return [f"--{self.flag}" if clean else f"--no-{self.flag}"]
         if isinstance(clean, Enum):
-            return [f"--{self.key}", str(clean.value)]
+            return [f"--{self.flag}", str(clean.value)]
         if self.kind is OptKind.OPEN:
-            return [f"--{self.key}", str(clean)]
-        return [f"--{self.key}", f"{clean:g}"]
+            return [f"--{self.flag}", str(clean)]
+        return [f"--{self.flag}", f"{clean:g}"]
 
     def json(self, cfg: Config, root: Path | None = None) -> dict[str, Any]:
         offered = self.values(root)
@@ -162,9 +178,11 @@ class StepOption:
             ],
             "default": self.default(cfg),
             "optional": self.optional,
+            "auto_label": self.auto_label,
             "low": self.low,
             "high": self.high,
             "step_by": self.step_by,
+            "unit": self.unit,
         }
 
 
@@ -290,6 +308,7 @@ BORDER = StepSpec(
             kind=OptKind.OPEN,
             open_values=_spec_choices,
             optional=True,
+            auto_label="Automatic (card's set)",
         ),
         StepOption(
             key="stretch",
@@ -322,12 +341,31 @@ UPSCALE = StepSpec(
             config_field="upscayl_model",
         ),
         StepOption(
+            key="min_dpi",
+            label="Minimum resolution",
+            help="Dots per inch of the finished card that this master must reach. "
+            "The factor is worked out per card — the smallest that clears it — so a "
+            "small scan is enlarged harder than a large one. 1000 dpi is 2480px "
+            "across a 63mm card; 0 ignores this and uses the library's fixed factor.",
+            kind=OptKind.NUMBER,
+            config_field="upscayl_min_dpi",
+            low=0,
+            high=2400,
+            step_by=50,
+            unit="dpi",
+        ),
+        # Optional, with no config default, because "unset" is a real answer here and
+        # a better one than any factor: the target decides it per card. Asking for a
+        # factor is honoured as that factor — which is what the override is for.
+        StepOption(
             key="scale",
-            label="Scale",
-            help="How much to enlarge in one pass.",
+            label="Factor",
+            help="Override the factor for this run instead of letting the minimum "
+            "resolution choose it.",
             kind=OptKind.CHOICE,
             enum=UpscaylScale,
-            config_field="upscayl_scale",
+            optional=True,
+            auto_label="Automatic — clear the minimum",
         ),
         StepOption(
             key="double",
@@ -475,21 +513,24 @@ def click_options(key: str) -> Callable[[F], F]:
                 if opt.config_field
                 else ""
             )
+            # the second argument to `click.option` keeps the parameter named
+            # after the wire key, whatever the flag is spelled as
+            dashed = opt.flag
             if opt.kind is OptKind.BOOL:
-                flag = f"--{opt.key}/--no-{opt.key}"
+                flag = f"--{dashed}/--no-{dashed}"
                 kind: Any = None
             elif opt.kind is OptKind.CHOICE:
-                flag = f"--{opt.key}"
+                flag = f"--{dashed}"
                 kind = click.Choice(list(opt.choices))
             elif opt.kind is OptKind.OPEN:
                 # deliberately *not* a click.Choice: the allowed values live in a
                 # library that has not been opened yet when this decorator runs.
                 # The command validates against that library's registry and names
                 # the options in the error, which is the same text a Choice gives.
-                flag = f"--{opt.key}"
+                flag = f"--{dashed}"
                 kind = str
             else:
-                flag = f"--{opt.key}"
+                flag = f"--{dashed}"
                 # the same bounds the API enforces, so a number out of range is
                 # refused on both surfaces rather than on one
                 kind = (

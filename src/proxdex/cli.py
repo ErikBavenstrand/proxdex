@@ -13,7 +13,7 @@ import sys
 import tempfile
 import tomllib
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from enum import Enum, StrEnum
 from pathlib import Path
@@ -34,7 +34,6 @@ from rich.table import Table
 
 from proxdex import (
     bleed,
-    borders,
     frames,
     games,
     imports,
@@ -64,7 +63,7 @@ from proxdex.config import (
     UpscaylScale,
 )
 from proxdex.errors import FileError, ProxdexError
-from proxdex.frames import FrameGuide, GuideId
+from proxdex.frames import FrameGuide
 from proxdex.games import GameId
 from proxdex.library import (
     FRONT,
@@ -174,11 +173,15 @@ game = "pokemon"
 stretch = true
 
 [grade]
-# One identical look over every card, so a batch prints as a set. Printers and
-# matte paper dull an image, so the defaults lift it slightly.
-brightness = 1.03
-contrast   = 1.06
-saturation = 1.10
+# One identical look over every card, so a batch prints as a set. The defaults are
+# **identity** — grade changes nothing until you ask it to. A lift that suits your
+# printer and paper is a real thing to want, but it is a fact about your press, and
+# numbers proxdex invented for a press it has never seen are a guess wearing a label.
+# Print a card, look at it, then set these. (If the correction is the same for every
+# card on the sheet, it belongs in a [print] profile, not here.)
+brightness = 1.0
+contrast   = 1.0
+saturation = 1.0
 gamma      = 1.0
 # Stretch a single card's own black and white points to full range, blended by
 # this much (0 = off). Helps a flat, hazy scan; it reads that card only.
@@ -265,8 +268,14 @@ back_profile = ""
 # high-fidelity-4x | remacri-4x | ultramix-balanced-4x | ultrasharp-4x |
 # digital-art-4x. Anything else fails at load, naming these.
 upscayl_model = "digital-art-4x"
-upscayl_scale = 2                 # 1 | 2 | 3 | 4
-upscayl_double = true             # run the model twice (2x doubled = 4x, up to 16x)
+# The resolution every master must *clear*, in dots per inch of the finished card —
+# not a fixed factor. Sources arrive anywhere from 400 to 745px wide, so one factor
+# scatters the masters it makes (592 dpi on one card and 1011 on another, same
+# settings). The step picks the smallest factor that clears this, per card. 1000 dpi
+# is 2480px across a 63mm card. Set 0 to use upscayl_scale verbatim instead.
+upscayl_min_dpi = 1000
+upscayl_double = true             # run the model twice (2x twice = 4x, up to 16x)
+upscayl_scale = 2                 # 1 | 2 | 3 | 4 — the fallback when there is no target
 # upscayl_bin    = "/Applications/Upscayl.app/Contents/Resources/bin/upscayl-bin"
 # upscayl_models = "/Applications/Upscayl.app/Contents/Resources/models"
 """
@@ -1485,12 +1494,148 @@ def config_show(ctx: click.Context, match: str | None) -> None:
         # holds it looks like it is configuring something. Say so.
         err.print(
             f"[yellow]⚠[/] {len(stale)} key(s) in this file are not proxdex "
-            f"settings and are ignored: [dim]{', '.join(stale)}[/]"
+            f"settings and are ignored: [dim]{', '.join(stale)}[/]\n"
+            "[dim]  remove them with `proxdex config prune`[/]"
         )
     console.print(
         f"[dim]{lib.root / MARKER} — change one with "
         "`proxdex config set sheet.dpi=1200`[/]"
     )
+
+
+def _stale_keys(lib: Library) -> list[tuple[str, str, Any]]:
+    """Every ``[section] key`` in this library's file that nothing reads."""
+    return [
+        (section, key, value)
+        for section, key, value in _config_rows(lib)
+        if Config.field_name(section, key) is None
+    ]
+
+
+@config_cmd.command("prune")
+@click.option("--yes", is_flag=True, help="Delete without asking.")
+@click.pass_context
+def config_prune(ctx: click.Context, yes: bool) -> None:
+    """Delete the settings in proxdex.toml that nothing reads any more.
+
+    A key left behind by a removed feature is worse than clutter: it *looks* like it
+    is configuring something. Real libraries carry them — a border
+    [cyan]thresh[/] and two target ratios from the auto-detector that was deleted,
+    a [cyan]normalize[/] and its percentiles from the grade white-balance that turned
+    a neutral grey into deep blue. Nothing has read any of them for releases, and the
+    settings screen has been calling them ignored without offering to remove them.
+
+    Only ever keys with **no** :class:`Config` field. A real setting is changed with
+    [cyan]config set[/], never deleted here, so this cannot quietly reset one.
+    """
+    import tomlkit
+
+    lib = _lib(ctx)
+    stale = _stale_keys(lib)
+    if not stale:
+        console.print("[green]✓[/] nothing to prune — every key here is a real setting")
+        return
+    console.print(f"[bold]{len(stale)} ignored key(s)[/] in {lib.root / MARKER}")
+    for section, key, value in stale:
+        console.print(f"  [dim]\\[{section}][/] {key} = {_toml_text(value)}")
+    if not yes and not click.confirm("Delete them?", default=False):
+        console.print("[dim]left alone[/]")
+        return
+    path = lib.root / MARKER
+    original = path.read_text(encoding="utf-8")
+    doomed = {(s, k) for s, k, _ in stale}
+    pruned = _prune_text(original, doomed)
+    # Proved rather than trusted: the result must parse, and hold exactly the keys
+    # that were there minus the ones asked for. If the line pass got confused by
+    # something this file shape does not have, fall back to deleting the keys through
+    # tomlkit and leaving their comments — the wrong prose beats a broken config.
+    if _keys_of(pruned) != _keys_of(original) - doomed:
+        doc = tomlkit.parse(original)
+        for section, key, _ in stale:
+            table = doc.get(section)
+            if isinstance(table, dict) and key in table:
+                del table[key]
+        pruned = tomlkit.dumps(doc)
+        err.print("[dim]kept the comments — this file is not shaped as expected[/]")
+    path.write_text(pruned, encoding="utf-8", newline="\n")
+    console.print(f"[green]✓[/] removed {len(stale)} key(s) from {MARKER}")
+
+
+def _keys_of(text: str) -> set[tuple[str, str]]:
+    """Every ``(section, key)`` in some TOML, for checking an edit did what it said."""
+    doc = tomllib.loads(text)
+    return {
+        (section, key)
+        for section, table in doc.items()
+        if isinstance(table, dict)
+        for key in table
+    }
+
+
+_TOML_SECTION = re.compile(r"^\s*\[([^\]]+)\]")
+
+
+def _prune_text(text: str, doomed: set[tuple[str, str]]) -> str:
+    """``text`` without ``doomed``'s keys, **or the comments explaining them**.
+
+    A line pass rather than a tomlkit round-trip, for the comments: deleting the key
+    alone leaves its explanation behind, and an orphaned comment is the same trap one
+    level up. The real library's file would have ended up with "normalize: pull each
+    card to a common baseline first" sitting above ``brightness``, describing a
+    feature that was deleted for turning a neutral grey into deep blue. So a pruned
+    key takes its own prose with it, and every other byte of the file is untouched.
+
+    A section left holding nothing but comments goes too — ``[border]`` existed only
+    for the auto-detector's three settings. The caller re-parses the result and falls
+    back if any of this misread the file.
+    """
+    kept: list[str] = []
+    section = ""
+    # where each section's header sits in `kept`, and whether it gained a real key
+    headers: dict[int, bool] = {}
+    at_header = -1
+    for line in text.split("\n"):
+        found = _TOML_SECTION.match(line)
+        if found:
+            section = found.group(1).strip()
+            at_header = len(kept)
+            headers[at_header] = False
+            kept.append(line)
+            continue
+        key, sep, _ = line.partition("=")
+        name = key.strip()
+        if sep and (section, name) in doomed:
+            # take the contiguous comment lines written directly above it; a blank
+            # line or another setting ends the block, so no heading is ever eaten
+            while kept and kept[-1].lstrip().startswith("#"):
+                kept.pop()
+            continue
+        if sep and name and not name.startswith("#") and at_header >= 0:
+            headers[at_header] = True
+        kept.append(line)
+    return "\n".join(_drop_empty_sections(kept, headers))
+
+
+def _drop_empty_sections(lines: list[str], headers: dict[int, bool]) -> list[str]:
+    """Remove ``[section]`` headers that no longer have a setting under them."""
+    empty = {i for i, used in headers.items() if not used}
+    if not empty:
+        return lines
+    out: list[str] = []
+    skipping = False
+    for i, line in enumerate(lines):
+        if i in headers:
+            skipping = i in empty
+            if skipping:
+                # its own preceding comment block goes with it
+                while out and out[-1].lstrip().startswith("#"):
+                    out.pop()
+                continue
+        if skipping and (line.strip().startswith("#") or not line.strip()):
+            continue
+        skipping = False
+        out.append(line)
+    return out
 
 
 @config_cmd.command("set")
@@ -1593,6 +1738,7 @@ def upscale(
     ctx: click.Context,
     ids: tuple[str, ...],
     model: str | None,
+    min_dpi: float | None,
     scale: str | None,
     double: bool | None,
     face: int | None,
@@ -1623,11 +1769,22 @@ def upscale(
         )
     # the registry coerces each flag into its enum, or falls back to this
     # library's config — so only well-typed values reach upscayl-bin
-    opts = steps.resolve("upscale", cfg, model=model, scale=scale, double=double)
+    opts = steps.resolve(
+        "upscale",
+        cfg,
+        model=model,
+        min_dpi=min_dpi,
+        scale=scale,
+        double=double,
+    )
     use_model = cast("UpscaylModel", opts["model"])
-    use_scale = cast("UpscaylScale", opts["scale"])
     use_double = bool(opts["double"])
-    tag = f"{use_model.value} ×{use_scale.value}{' ×2' if use_double else ''}"
+    # `scale` is optional here: unset means "whatever reaches the target resolution",
+    # which is a different factor per card and so cannot be settled up front. An
+    # explicit --scale is honoured as that factor.
+    asked = cast("UpscaylScale | None", opts["scale"])
+    target = int(opts["min_dpi"] or 0)
+    run_cfg = replace(cfg, upscayl_min_dpi=target)
 
     def one(card: Card) -> None:
         for f in _faces(card, face):
@@ -1638,18 +1795,42 @@ def upscale(
             if dst.exists() and not force:
                 console.print(f"[dim]· {_label(card, f)}: already upscaled[/]")
                 continue
+            with Image.open(src) as im:
+                src_w = im.width
+            plan = upscale_mod.plan(
+                src_w,
+                sheet_mod.trim_mm(card, cfg)[0],
+                run_cfg,
+                scale=asked,
+                double=use_double,
+            )
+            # A master that will print visibly soft is a fact about the *source* that
+            # no setting fixes, so it is said rather than discovered on paper later —
+            # but **once per run**, not per card, because a line each would be 500
+            # warnings on a 500-card run.
+            if plan.short:
+                fell_short.append((_label(card, f), src_w, plan.dpi))
             upscale_mod.run(
-                src, dst, cfg, model=use_model, scale=use_scale, double=use_double
+                src, dst, cfg, model=use_model, scale=plan.scale, double=plan.double
             )
             _flatten_filed(dst)
             card.clear_skip(Stage.UPSCALED, f)
             _cascade(card, Stage.UPSCALED, f)
             console.print(
-                f"[green]✓[/] {_label(card, f)}: upscaled [dim]({tag})[/] → "
+                f"[green]✓[/] {_label(card, f)}: upscaled "
+                f"[dim]({use_model.value} {plan.label})[/] → "
                 f"{dst.relative_to(lib.root)}"
             )
 
+    fell_short: list[tuple[str, int, int]] = []
     _each(lib.select(ids), one, "upscaling")
+    if fell_short:
+        worst = min(dpi for _, _, dpi in fell_short)
+        err.print(
+            f"[yellow]⚠[/] {len(fell_short)} side(s) will print soft — as low as "
+            f"{worst}dpi across the card. [dim]That is the source's own resolution, "
+            "which no factor adds to: find a better scan if it matters.[/]"
+        )
     _reindex(lib)
 
 
@@ -1897,19 +2078,20 @@ def _warn_spec(card: Card, found: specs.Resolution) -> None:
 
 def _spec_row(spec: FrameGuide) -> tuple[str, ...]:
     top, right, bottom, left = spec.mm()
-    ref_w, ref_h = spec.ref_mm
     return (
         spec.id,
         spec.name,
         games.get(spec.game).name if spec.game else "any",
         f"{top:.2f} / {right:.2f} / {bottom:.2f} / {left:.2f}",
-        f"{ref_w:g}×{ref_h:g}",
+        # two of the shipped specs describe an 89×127 card, so a millimetre column
+        # with no card beside it would be read against the wrong one
+        "oversized" if spec.oversized else "",
     )
 
 
 def _spec_table(reg: specs.Registry) -> Table:
     table = Table(box=None, pad_edge=False, header_style="bold")
-    for col in ("Spec", "Name", "Game", "Border T/R/B/L (mm)", "Of a card"):
+    for col in ("Spec", "Name", "Game", "Border T/R/B/L (mm)", "Card"):
         table.add_column(col)
     for spec in reg.specs.values():
         table.add_row(*_spec_row(spec))
@@ -1963,9 +2145,9 @@ def frames_cmd(ctx: click.Context) -> None:
     [cyan]check[/] lists everything about this library's frames that needs a
     decision.
 
-    A spec is four numbers and a note about where they came from — there is no
-    confidence grade, because reading a border off the publisher's scan is not a
-    measurement of the card and grading it as one was worse than saying nothing.
+    A spec is four numbers — there is no confidence grade, because reading a border
+    off the publisher's scan is not a measurement of the card and grading it as one
+    was worse than saying nothing.
     The shipped MTG numbers are working defaults; measure a real card and
     [cyan]set[/] them.
     """
@@ -2035,7 +2217,6 @@ def frames_show(ctx: click.Context, spec_id: str) -> None:
             f"no frame spec '{spec_id}' — `proxdex frames list` shows them"
         )
     top, right, bottom, left = spec.mm()
-    ref_w, ref_h = spec.ref_mm
     stored = specs.path_for(lib.root, spec.id)
     where = (
         f"stored here ([dim]{stored.relative_to(lib.root)}[/])"
@@ -2048,11 +2229,11 @@ def frames_show(ctx: click.Context, spec_id: str) -> None:
         f"[bold]{spec.name}[/]  [dim]{spec.id}[/]\n"
         f"{games.get(spec.game).name if spec.game else 'any game'} · {where}\n"
         f"[dim]border:[/] top {top:.2f} · right {right:.2f} · bottom {bottom:.2f} "
-        f"· left {left:.2f} mm  [dim](of a {ref_w:g}×{ref_h:g}mm card)[/]\n"
+        f"· left {left:.2f} mm  [dim](of a {spec.card_mm[0]:g}×"
+        f"{spec.card_mm[1]:g}mm card"
+        f"{' — oversized' if spec.oversized else ''})[/]\n"
         f"[dim]inset:[/] " + " ".join(f"{v * 100:.3f}%" for v in spec.inset)
     )
-    if spec.note:
-        console.print(f"[dim]{escape(spec.note)}[/]")
     used = reg.uses(spec.id)
     if used:
         console.print("\n[bold]Used by[/]")
@@ -2077,8 +2258,10 @@ _EDGES = (
     click.option(
         "--oversized",
         is_flag=True,
-        help=f"Measured on an oversized card ({games.OVERSIZED_W_MM:g}×"
-        f"{games.OVERSIZED_H_MM:g}mm) rather than a standard one.",
+        help=f"These millimetres are of an oversized card ({games.OVERSIZED_W_MM:g}×"
+        f"{games.OVERSIZED_H_MM:g}mm) — a plane, scheme or Vanguard — rather than the "
+        "standard one. It changes the fractions stored, since the same border is a "
+        "smaller fraction of a bigger card.",
     ),
 )
 
@@ -2087,10 +2270,6 @@ def _edges(fn: Any) -> Any:
     for option in reversed(_EDGES):
         fn = option(fn)
     return fn
-
-
-def _ref(*, oversized: bool) -> tuple[float, float]:
-    return (games.OVERSIZED_W_MM, games.OVERSIZED_H_MM) if oversized else (63.0, 88.0)
 
 
 def _store(lib: Library, spec: FrameGuide) -> None:
@@ -2109,11 +2288,6 @@ def _store(lib: Library, spec: FrameGuide) -> None:
         f"{top:.2f} / {right:.2f} / {bottom:.2f} / {left:.2f} mm "
         f"→ {path.relative_to(lib.root)}"
     )
-    if not spec.note:
-        console.print(
-            "[dim]no --note: nothing records where these numbers came from, which "
-            "is the only account a spec has of how much to trust it[/]"
-        )
     if not frames.is_shipped(spec.id) and not _registry(lib).uses(spec.id):
         console.print(
             "[dim]nothing uses it yet — `proxdex frames assign "
@@ -2124,21 +2298,6 @@ def _store(lib: Library, spec: FrameGuide) -> None:
 @frames_cmd.command("set")
 @click.argument("spec_id", metavar="SPEC")
 @_edges
-@click.option(
-    "--card-w",
-    type=float,
-    default=None,
-    help="Width of the card you measured (mm). Default 63, or 88.9 with "
-    "--oversized. A real Magic/Pokémon card is 63.5×88.9mm, so if you put "
-    "calipers on one, say so — the insets are fractions of whatever you measured.",
-)
-@click.option("--card-h", type=float, default=None, help="Height of that card (mm).")
-@click.option(
-    "--note",
-    default="",
-    help="Where these numbers came from: which card, which calipers, or that you "
-    "typed them. The only record a spec has of how much to trust it.",
-)
 @click.pass_context
 def frames_set(
     ctx: click.Context,
@@ -2150,38 +2309,30 @@ def frames_set(
     name: str,
     game: str | None,
     oversized: bool,
-    card_w: float | None,
-    card_h: float | None,
-    note: str,
 ) -> None:
     """Record a spec's four border widths — a new one, or a correction.
 
-    One verb, because a spec is four numbers however you arrived at them. There
-    used to be three (measure / scan / estimate) and the middle one was a mistake:
-    it graded a border read off the publisher's scan as trustworthy, when a scan's
-    crop shifts every reading taken from it by the same unknown amount. Say what
-    you did in [cyan]--note[/] instead.
+    Millimetres of a real card, which is 63.5×88.9mm for both games. One verb,
+    because a spec is four numbers however you arrived at them. There used to be
+    three (measure / scan / estimate) and the middle one was a mistake: it graded a
+    border read off the publisher's scan as trustworthy, when a scan's crop shifts
+    every reading taken from it by the same unknown amount.
 
     Correcting a shipped spec is the expected case — the MTG numbers that ship are
     working defaults. [cyan]docs/measuring-frames.md[/] names the card to measure
-    for each and how to measure it.
+    for each, how to measure it, and is where to write down what you did.
 
     [dim]  proxdex frames set mtg-m15 --game mtg \\
-          --top 2.4 --right 2.4 --bottom 2.4 --left 2.4 \\
-          --card-w 63.5 --card-h 88.9 \\
-          --note "calipers on m15-281 Forest, 3 readings per edge"[/]
+          --top 2.4 --right 2.4 --bottom 2.4 --left 2.4[/]
     """
-    lib = _lib(ctx)
-    ref_w, ref_h = _ref(oversized=oversized)
     _store(
-        lib,
+        _lib(ctx),
         specs.spec(
             spec_id,
             name,
             games.parse(game),
             (top, right, bottom, left),
-            note,
-            (card_w or ref_w, card_h or ref_h),
+            oversized=oversized,
         ),
     )
 
@@ -2450,13 +2601,6 @@ def frames_preview(
 @click.option("--inner-right", type=float, default=None, help="Inner frac (right).")
 @click.option("--inner-bottom", type=float, default=None, help="Inner frac (bottom).")
 @click.option("--inner-left", type=float, default=None, help="Inner frac (left).")
-@click.option(
-    "--auto",
-    "auto",
-    is_flag=True,
-    help="Measure where the border currently sits from the image itself instead "
-    "of marking it by hand. Reports how much the measurement can be trusted.",
-)
 @steps.click_options("border")
 @click.option(
     "--save",
@@ -2479,7 +2623,6 @@ def border(
     inner_right: float | None,
     inner_bottom: float | None,
     inner_left: float | None,
-    auto: bool,
     stretch: bool | None,
     frame: str | None,
     save_frame: bool,
@@ -2489,22 +2632,22 @@ def border(
 ) -> None:
     """Reshape a card → stage 2 (bordered), before upscaling.
 
-    Three ways to say where the border is:
+    Two ways to say where the border is, and **nothing measures it for you** —
+    where a printed border sits is a reading, and a wrong one is invisible until
+    the card is cut:
 
     • [cyan]--inner-top/-right/-bottom/-left[/] <fraction 0-1>: where the card's
-    inner border edge currently sits. From the frame spec this library's rules
-    resolve for the card (see [cyan]proxdex frames[/]) [cyan]cardbleed[/] reshapes
-    to the exact card aspect with the correct border widths (add [cyan]--stretch[/]
-    to hit the borders exactly by un-distorting the art). Sets whose spec has not been
-    measured are called out — the fit still runs, but on an estimate.
-
-    • [cyan]--auto[/]: measure those four numbers off the image instead of typing
-    them. Each edge reports how much its scan lines agreed, so a card the
-    measurement does not suit says which edge to check. Pair it with
-    [cyan]--dry-run[/] to measure and write nothing.
+    inner border edge currently sits, which is what the web UI's align marks
+    place. From the frame spec this library's rules resolve for the card (see
+    [cyan]proxdex frames[/]) [cyan]cardbleed[/] reshapes to the exact card aspect
+    with the correct border widths (add [cyan]--stretch[/] to hit the borders
+    exactly by un-distorting the art).
 
     • [cyan]--top/--bottom/--left/--right[/] <mm>: just add that much border to
     each edge — no fit, no distortion.
+
+    A printing whose spec is [b]borderless[/] needs neither: there is no frame to
+    align to, so the fit is pure aspect correction and it runs on its own.
 
     Which spec that is, and *why*, is printed with every fit — a rule, the set's
     default, its era, or a pin. [cyan]--frame[/] overrides it for this run;
@@ -2519,16 +2662,6 @@ def border(
     if use_inner and not all(v is not None for v in inner):
         raise click.UsageError("give all four --inner-top/-right/-bottom/-left or none")
     grow_mm = {"top": top_mm, "right": right_mm, "bottom": bottom_mm, "left": left_mm}
-    if auto and use_inner:
-        raise click.UsageError(
-            "--auto measures the inner border itself — drop --inner-*, or drop "
-            "--auto to keep your own numbers"
-        )
-    if auto and max(grow_mm.values()) > 0:
-        raise click.UsageError(
-            "--auto fits to the frame spec; --top/--bottom/--left/--right only "
-            "add millimetres. Pick one."
-        )
     reg = _registry(lib)
     override = _spec(reg, frame)
     if save_frame and override is None:
@@ -2544,7 +2677,8 @@ def border(
         src = card.stage_path(Stage.ORIGINAL, f)
         if not src.exists():
             raise FileError(f"{name}: no original yet (fetch it first)")
-        w, h = borders.size(src)
+        with Image.open(src) as im:
+            w, h = im.width, im.height
         marks = cast("tuple[float, float, float, float]", inner) if use_inner else None
         # one call decides the spec, and it reports which of the seven ways it got
         # there: an override, this card's pin, its printing, a rule, the set's
@@ -2560,30 +2694,18 @@ def border(
                 "record it with `proxdex frames set`, assign it, or pass --frame to "
                 "fit against a spec for this run."
             )
-        if auto:
-            if chosen.spec.frameless:
-                # a borderless print has no frame to match, so there is nothing to
-                # measure: the marks are the image edges and the fit is pure
-                # aspect correction. Measuring anyway would find the art's own
-                # edge and crop the card to it.
-                marks = (0.0, 0.0, 0.0, 0.0)
-                console.print(
-                    f"  [dim]⌖ {name}: {chosen.spec.name} — nothing to measure, "
-                    "reshaping to the card aspect only[/]"
-                )
-            else:
-                measurement = borders.detect_inset(src)
-                tone = "green" if measurement.reliable else "yellow"
-                console.print(f"  [{tone}]⌖[/] {name}: {measurement.note}")
-                marks = measurement.inset
-                if measurement.frameless:
-                    # the image says there is no border, whatever the set's rules
-                    # expected — so fit the aspect and nothing else
-                    chosen = _resolve_spec(reg, card, GuideId.BORDERLESS.value)
+        if marks is None and chosen.spec.frameless:
+            # A borderless print has no frame to align to, so there is nothing for
+            # anyone to place: the marks are the image edges and the fit is pure
+            # aspect correction. This is the one case that needs no reading, which
+            # is why it is the one case that runs unasked.
+            marks = (0.0, 0.0, 0.0, 0.0)
+            console.print(
+                f"  [dim]⌖ {name}: {chosen.spec.name} — no border to align, "
+                "reshaping to the card aspect only[/]"
+            )
         if marks is not None:
-            guide = chosen.spec
-            if guide is None:  # pragma: no cover — refused above
-                raise FileError(f"{name}: no frame spec to fit against")
+            guide = chosen.spec  # refused above if nothing describes this printing
             _warn_spec(card, chosen)
             inner_t = marks
             plan = bleed.fit_plan(w, h, guide, inner_t, cfg, stretch=do_stretch)

@@ -240,3 +240,158 @@ class TestTheStepSurvivesIt:
             body = spec.json(without_upscayl(tmp_path))
             assert body["tool_ready"] is True
             assert body["tool"] is None
+
+
+class TestWhatFactorACardGets:
+    """The factor is derived from the source, and that is the whole point.
+
+    A fixed factor is the wrong thing to hold still: source images arrive anywhere
+    from 400 to 745px wide, so one factor scatters the masters it makes. Measured on
+    a real library, identical settings produced **592 dpi** on one card and **1011**
+    on another — and 592 dpi is a visibly softer print with nothing on screen to say
+    so. So what is configured is a resolution and the factor is arithmetic.
+
+    This is pinned rather than eyeballed because it is arithmetic nobody re-checks:
+    the number that comes out is a file size, and a file size looks fine at any
+    value. The reference row is a real card from a real library.
+    """
+
+    def test_the_reference_card_lands_exactly_where_it_used_to(self) -> None:
+        """`base3-4` Dragonite: a 627px bordered master that the library holds at
+        2508x3504. That was 2x-doubled by hand, at what worked out to 1011 dpi — just
+        over the shipped 1000 dpi minimum, so the derivation arrives at the same place
+        on its own. If it did not, the default would have quietly changed every master
+        in an existing library."""
+        plan = upscale.plan(627, 63.0, Config(upscayl_min_dpi=1000))
+        assert plan.out_px == 2508
+        assert (plan.scale.value, plan.double) == (2, True)
+        assert plan.dpi == 1011
+        assert not plan.short
+
+    def test_a_small_source_is_enlarged_harder_than_a_large_one(self) -> None:
+        """The behaviour a fixed factor cannot have. Both of these are real widths
+        from the same library, and under one factor the small one printed at 653 dpi
+        while the large one printed at 1184."""
+        cfg = Config()
+        small, large = upscale.plan(405, 63.0, cfg), upscale.plan(744, 63.0, cfg)
+        assert upscale.effective(small.scale, double=small.double) > upscale.effective(
+            large.scale, double=large.double
+        )
+        for plan in (small, large):
+            assert plan.dpi >= 1000, plan
+
+    def test_the_smallest_factor_that_clears_the_minimum_wins(self) -> None:
+        """The rule, stated directly: the result clears the minimum, and no smaller
+        factor would have. Both halves matter — the first is the promise, the second is
+        what stops a card being enlarged further than it needs to be."""
+        cfg = Config()
+        for width in (405, 500, 600, 625, 627, 733, 744, 1200, 2508):
+            plan = upscale.plan(width, 63.0, cfg)
+            assert plan.out_px >= plan.want_px, width
+            smaller = [
+                s
+                for s in type(plan.scale)
+                if upscale.effective(s, double=plan.double)
+                < upscale.effective(plan.scale, double=plan.double)
+            ]
+            for s in smaller:
+                rival = width * upscale.effective(s, double=plan.double)
+                assert rival < plan.want_px, (width, s)
+
+    def test_every_real_source_width_clears_it(self) -> None:
+        """The point of the whole thing. These are the widths a real library holds, and
+        under one fixed factor they scattered from 592 to 1011 dpi."""
+        cfg = Config()
+        for width in (405, 416, 600, 625, 627, 733, 734, 744):
+            plan = upscale.plan(width, 63.0, cfg)
+            assert plan.dpi >= 1000, (width, plan.dpi)
+            assert not plan.short, width
+
+    def test_clearing_the_minimum_beats_landing_near_it(self) -> None:
+        """A deliberate step, and `sheet_dpi` is the reason.
+
+        The doubled ladder is 1, 4, 9, 16, so a source a few percent under jumps a long
+        way: a 600px master goes to 5400px rather than the 2400px that would have landed
+        it at 968 dpi. That looks wasteful until you notice the page is rendered at
+        `sheet_dpi` — 1400 by default, 3472px across a 63mm card — so the 2400px version
+        would have been resampled *up* 1.45x by a plain filter at print time, which is
+        exactly the work the neural upscaler was run to avoid. Overshooting costs disk;
+        undershooting costs resolution nothing downstream can restore.
+        """
+        cfg = Config()
+        plan = upscale.plan(600, 63.0, cfg)
+        assert plan.out_px == 5400
+        assert plan.dpi > 1000
+        # the rung below would have landed under the minimum *and* under sheet_dpi
+        assert 600 * upscale.effective(plan.scale, double=True) > 600 * 4
+        assert upscale.target_px(63.0, cfg.sheet_dpi) > 2400
+
+    def test_a_source_too_small_to_clear_it_says_so(self) -> None:
+        """The one case the minimum cannot be met: there is no factor that fixes a 120px
+        scan, so the answer is the largest one *and* a flag — the alternative is finding
+        out on paper."""
+        plan = upscale.plan(120, 63.0, Config())
+        assert plan.scale.value == 4
+        assert plan.short
+        assert "under the minimum" in plan.label
+
+    def test_an_explicit_factor_is_honoured_and_says_nothing_about_dpi(self) -> None:
+        """Asking for a factor is asking for that factor. It is also the one case
+        with no target to report against, so the label must not invent one."""
+        from proxdex.config import UpscaylScale
+
+        plan = upscale.plan(627, 63.0, Config(), scale=UpscaylScale.X1)
+        assert (plan.scale, plan.want_px) == (UpscaylScale.X1, 0)
+        assert plan.out_px == 627 * 1**2  # X1 doubled is still X1
+        assert "dpi" not in plan.label
+
+    def test_no_target_falls_back_to_the_configured_factor(self) -> None:
+        """0 turns it off, and then the library's fixed factor stands — which is what
+        a library that had one before this existed keeps doing."""
+        from proxdex.config import UpscaylScale
+
+        plan = upscale.plan(627, 63.0, Config(upscayl_min_dpi=0))
+        assert plan.scale is UpscaylScale.X2
+        assert plan.want_px == 0
+
+    def test_an_oversized_card_wants_more_pixels_for_the_same_resolution(self) -> None:
+        """dpi is per inch of the *card*, so an 89mm planar card needs 1.4x the pixels
+        of a 63mm one to print at the same resolution — which is why this is a
+        resolution and not a pixel count. The same 627px source therefore has to be
+        enlarged a rung harder to clear the minimum on the bigger card."""
+        cfg = Config()
+        assert upscale.target_px(89.0, 1000) > upscale.target_px(63.0, 1000)
+        ordinary = upscale.plan(627, 63.0, cfg)
+        oversized = upscale.plan(627, 89.0, cfg)
+        assert oversized.want_px > ordinary.want_px
+        assert oversized.out_px > ordinary.out_px
+        # and both still clear it, measured against the card each is printed on
+        assert not ordinary.short
+        assert not oversized.short
+
+    def test_the_step_offers_the_minimum_and_an_automatic_factor(self) -> None:
+        """Both surfaces read the step registry, so what the UI renders and what the
+        CLI accepts come from here. The factor is *optional* with no config default:
+        unset has to mean "whatever clears the minimum" rather than some factor."""
+        spec = steps.get("upscale")
+        assert spec is not None
+        target = spec.option("min_dpi")
+        factor = spec.option("scale")
+        assert target is not None
+        assert factor is not None
+        assert target.default(Config()) == 1000
+        assert factor.optional
+        assert not factor.config_field
+        assert factor.default(Config()) is None
+        # and the flag is dashed even though the wire key is not
+        assert target.flag == "min-dpi"
+        assert target.argv(900) == ["--min-dpi", "900"]
+        # the unit is declared, so both surfaces can say *dpi* rather than a bare number
+        assert target.unit == "dpi"
+
+    def test_the_shipped_default_is_the_one_the_docs_name(self) -> None:
+        """1000 dpi, which is 2480px across a 63mm card. Pinned because it is quoted in
+        `DEFAULT_TOML`, the field help and the docs, and a drift between the number and
+        the prose is the kind of thing nobody re-checks."""
+        assert Config().upscayl_min_dpi == 1000
+        assert upscale.target_px(63.0, 1000) == 2480

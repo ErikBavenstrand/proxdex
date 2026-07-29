@@ -327,16 +327,25 @@ class Config:
     # "should" look like: card frames are deliberately different colours between
     # games and eras, so there is no common baseline to pull them to. Matching the
     # medium is a print-time job, done by a profile at sheet time.
+    #
+    # **Every default here is identity: grade changes nothing until you ask it to.**
+    # They used to lift the image (1.03 / 1.06 / 1.10) on the reasoning that paper and
+    # ink dull it — which is true, and still the wrong place to fix it twice over. It
+    # is a fact about *your* printer and *your* paper, so numbers proxdex invented for
+    # a press it has never seen are a guess wearing a label — the same mistake as the
+    # print presets that were deleted for it ("foil needs saturation 1.38" described
+    # exactly one setup). And a correction that is identical for every card on the
+    # sheet is by definition the medium's, which is what a print profile is *for* and
+    # where it can be measured instead of typed. So a run through the pipeline with
+    # nothing configured returns the card, and a look is something you chose.
     grade_brightness: float = setting(
-        1.03,
+        1.0,
         label="Brightness",
-        help="Applied identically to every card. Paper and ink dull an image, so "
-        "the defaults lift it slightly.",
+        help="1.0 leaves it be. Applied identically to every card, so it is a look "
+        "for the batch rather than a fix for one scan.",
     )
-    grade_contrast: float = setting(1.06, label="Contrast", help="1.0 leaves it be.")
-    grade_saturation: float = setting(
-        1.10, label="Saturation", help="1.0 leaves it be."
-    )
+    grade_contrast: float = setting(1.0, label="Contrast", help="1.0 leaves it be.")
+    grade_saturation: float = setting(1.0, label="Saturation", help="1.0 leaves it be.")
     grade_gamma: float = setting(
         1.0, label="Gamma", help="Below 1 darkens the midtones."
     )
@@ -387,10 +396,29 @@ class Config:
         help="Which network the upscale step runs by default. digital-art suits "
         "card art; remacri and ultrasharp favour photographic scans.",
     )
+    #: the resolution a master must clear, in dots per inch of the finished card. A
+    #: **minimum** rather than a fixed factor, because the factor is the wrong thing to
+    #: hold still: sources arrive anywhere from 400 to 745px wide, so one factor
+    #: scatters the masters it makes — measured on a real library, identical settings
+    #: gave 592 dpi on one card and 1011 on another. And a minimum rather than a target
+    #: because :attr:`sheet_dpi` renders the page at 1400 dpi, so a master under that is
+    #: resampled *up* by a plain filter at print time — which is the work the neural
+    #: upscaler was run to avoid. 0 turns it off and :attr:`upscayl_scale` is used.
+    upscayl_min_dpi: int = setting(
+        1000,
+        label="Minimum resolution",
+        unit="dpi",
+        help="Dots per inch of the finished card that a master must reach. The step "
+        "picks the smallest factor that clears it, so a small scan is enlarged harder "
+        "than a large one. 1000 dpi is 2480px across a 63mm card; 0 ignores this and "
+        "uses the fixed factor below.",
+    )
+    #: the fallback when there is no target, and the floor the derivation starts from
     upscayl_scale: UpscaylScale = setting(
         UpscaylScale.X2,
         label="Upscale factor",
-        help="How much to enlarge in one pass.",
+        help="How much to enlarge in one pass, when no minimum resolution is set. "
+        "With a minimum, this is ignored — the factor is worked out per card.",
     )
     #: "double upscayl" — run the model twice (2x doubled → 4x, up to 16x)
     upscayl_double: bool = setting(

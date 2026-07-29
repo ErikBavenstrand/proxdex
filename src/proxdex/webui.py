@@ -38,7 +38,6 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
 
 from proxdex import (
-    borders,
     calibrate,
     doctor,
     frames,
@@ -158,8 +157,6 @@ class StepBody(Body):
     inner: Edges | None = None
     #: plain per-edge growth in mm, for the no-fit path
     grow: Edges | None = None
-    #: measure the inner border off the image instead of being told where it is
-    auto: bool = False
 
 
 class FetchBody(Body):
@@ -179,11 +176,11 @@ class FlipBody(Body):
 class SpecBody(Body):
     """One frame spec, as the frames screen states it.
 
-    The four numbers are millimetres, like the CLI's — a border is a physical
-    width, and nobody measures a fraction with calipers. There is no confidence
-    field: a spec is its numbers plus a note about where they came from, and the
-    grade that used to sit here called a border read off a publisher's scan
-    trustworthy (see :mod:`proxdex.frames`).
+    The four numbers are millimetres of a real card (63.5×88.9mm, both games), like
+    the CLI's — a border is a physical width, and nobody measures a fraction with
+    calipers. There is no confidence field: a spec is its numbers, and the grade that
+    used to sit here called a border read off a publisher's scan trustworthy (see
+    :mod:`proxdex.frames`).
     """
 
     id: SpecName
@@ -193,13 +190,8 @@ class SpecBody(Body):
     right: Annotated[float, Field(ge=0, le=20)]
     bottom: Annotated[float, Field(ge=0, le=20)]
     left: Annotated[float, Field(ge=0, le=20)]
-    note: str = Field(default="", max_length=500)
-    #: the numbers were taken off an oversized card, not a 63×88 one
+    #: the millimetres are of an 89×127mm plane, scheme or Vanguard card
     oversized: bool = False
-    #: the card actually measured, when it was neither — a real Magic/Pokémon card
-    #: is 63.5×88.9mm, and the insets are fractions of whatever was measured
-    card_w: Annotated[float, Field(gt=0, le=200)] | None = None
-    card_h: Annotated[float, Field(gt=0, le=300)] | None = None
 
     def argv(self) -> list[str]:
         """This spec as CLI arguments — the one place the flags are spelled."""
@@ -222,12 +214,6 @@ class SpecBody(Body):
             args += ["--game", self.game.value]
         if self.oversized:
             args.append("--oversized")
-        if self.card_w:
-            args += ["--card-w", f"{self.card_w:g}"]
-        if self.card_h:
-            args += ["--card-h", f"{self.card_h:g}"]
-        if self.note:
-            args += ["--note", self.note]
         return args
 
 
@@ -543,7 +529,25 @@ def create_app(lib: Library) -> FastAPI:
             "sections": sections,
             "options": options,
             "docs": described,
+            # keys nothing reads any more. Served as a list rather than left for the
+            # UI to derive from `docs`, so the screen and `config prune` agree on
+            # exactly which keys are ignored.
+            "stale": [
+                f"{name}.{key}"
+                for name, table in sections.items()
+                for key in table
+                if Config.field_name(name, key) is None
+            ],
         }
+
+    @app.post("/api/config/prune")
+    def api_config_prune() -> dict[str, Any]:
+        """Delete every key nothing reads — `proxdex config prune --yes`.
+
+        Through the CLI like every other mutation, so there is one implementation of
+        which keys go and what happens to a table left empty.
+        """
+        return run_cli(["config", "prune", "--yes"])
 
     @app.put("/api/config")
     def api_config_put(body: ConfigBody) -> Any:
@@ -836,7 +840,8 @@ def create_app(lib: Library) -> FastAPI:
         if src is None or not src.exists():
             return {"error": "no image"}
         cfg = Config.load(lib.root)
-        w, h = borders.size(src)
+        with Image.open(src) as im:
+            w, h = im.width, im.height
         reg = specs.load(lib.root)
         found = _resolution(reg, card)
         guide = found.spec
@@ -856,54 +861,6 @@ def create_app(lib: Library) -> FastAPI:
             # align panel has to say out loud about it
             "resolution": found.json(),
             "pin": card.pin,
-        }
-
-    @app.get("/api/detect/{cid}")
-    def api_detect(
-        cid: str, stage: str | None = None, face: int = FRONT
-    ) -> dict[str, Any]:
-        """Measure where this side's printed border ends, for the align marks.
-
-        Read-only and cheap, so the border panel can offer "measure it" and the
-        marks land somewhere real before anyone drags them. The per-edge support
-        travels with the numbers: the UI flags the edges the scan lines disagreed
-        about rather than presenting all four as equally certain.
-        """
-        card = lib.find(cid)
-        if card is None:
-            return {"error": f"{cid}: not in this library"}
-        st = STAGE_BY_LABEL.get(stage) if stage else None
-        src = (
-            card.stage_path(st, face)
-            if st and card.has(st, face)
-            else card.best(*_BEST, face=face)
-        )
-        if src is None or not src.exists():
-            return {"error": "no image to measure"}
-        guide = _resolution(specs.load(lib.root), card).spec
-        if guide is None:
-            return {
-                "error": "no frame spec has been measured for this printing — "
-                "record one with `proxdex frames set`, or pick one for this run"
-            }
-        if guide.frameless:
-            return {
-                "inset": [0.0, 0.0, 0.0, 0.0],
-                "support": [1.0, 1.0, 1.0, 1.0],
-                "weak": [],
-                "reliable": True,
-                "frameless": True,
-                "note": f"{guide.name} — nothing to measure, so the fit is pure "
-                "aspect correction.",
-            }
-        found = borders.detect_inset(src)
-        return {
-            "inset": list(found.inset),
-            "support": list(found.support),
-            "weak": list(found.weak),
-            "reliable": found.reliable,
-            "frameless": found.frameless,
-            "note": found.note,
         }
 
     # ---- frame specs -------------------------------------------------------
@@ -1103,9 +1060,7 @@ def create_app(lib: Library) -> FastAPI:
             return _bad(wrong)
         args = [spec.step.value, *body.ids, *side, *spec.argv(body.settings)]
         if spec.step is Step.BORDER:
-            if body.auto:  # measure the inner border off the image
-                args.append("--auto")
-            elif body.inner is not None:  # marked border edges → spec-based fit
+            if body.inner is not None:  # marked border edges → spec-based fit
                 for edge, val in body.inner:
                     args += [f"--inner-{edge}", f"{val:g}"]
             elif body.grow is not None:  # plain per-edge growth, no fit
@@ -1512,10 +1467,10 @@ def _guide_json(guide: frames.FrameGuide) -> dict[str, Any]:
         "game": guide.game.value if guide.game else None,
         "inset": list(guide.inset),
         "mm": list(guide.mm()),
-        "ref_mm": list(guide.ref_mm),
+        "card_mm": list(guide.card_mm),
+        "oversized": guide.oversized,
         "shipped": frames.is_shipped(guide.id),
         "frameless": guide.frameless,
-        "note": guide.note,
     }
 
 

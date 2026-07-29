@@ -49,10 +49,6 @@ until it reaches paper or a pasted link:
 
 - `tests/test_faces.py` — filenames (face 0 has *no* suffix, so no library
   migrates), per-face state, rollup, which side prints.
-- `tests/test_borders.py` — `detect_inset` against synthetic cards whose border
-  width the test chose, the weak-edge/frameless reporting it promises, and the
-  three card classes it once could not measure at all (a gradient frame, a pale
-  cut edge outside a dark border, a decorated frame with two inner edges).
 - `tests/test_fit_parity.py` — the UI's `solveFit`, **sliced out of `webui.html`
   by brace matching and run in node**, against cardbleed's `solve_fit` over a
   table of fits. It exists because a drift between the two is invisible: the
@@ -78,7 +74,15 @@ until it reaches paper or a pasted link:
   at — a trait rule with no traits, and a pin whose spec was removed.
 - `tests/test_upscale.py` — that a missing upscaler disables *running* the step
   and nothing else (the stage, the skip and an already-upscaled image all
-  survive), and that the probe answers instead of raising.
+  survive), that the probe answers instead of raising, and **which factor a card
+  gets**: the derivation's output is a file size, and a file size looks fine at any
+  value, so the reference row is a real card (`base3-4`, 627px → 2508px) and the
+  ladder's cliff is pinned by the 600px case that fell off it.
+- `tests/test_config_prune.py` — that pruning removes exactly the keys nothing reads
+  **and their comments**, leaves every live setting and its prose alone, and yields a
+  file `Config.load` still agrees with. It rewrites the one file a person typed by
+  hand, and each way it can go wrong (a live setting silently reverted, a file left
+  unparseable, prose left describing a deleted feature) surfaces much later.
 - `tests/test_deps.py` — that every non-stdlib import is a *declared* dependency,
   or is guarded by a `try/except ModuleNotFoundError` that says how to install it.
   It reads `pyproject.toml` rather than trying the import, because in the
@@ -245,6 +249,12 @@ the `Config` field holding this library's default). The CLI's flags
 `/api/step`'s validation and the web UI's control panels are all derived from it.
 **Adding a step = one `StepSpec` + the code that does the work**; nothing else
 should need editing, and there is no second copy of the step list in JS.
+An `optional` option carries its own `auto_label`, because what "unset" *means* differs per
+option — border's frame falls back to the card's set, upscale's factor to whatever reaches
+the target resolution — and the UI used to hardcode the frame's wording for both. And a
+flag is spelled from `StepOption.flag` (`target_dpi` → `--target-dpi`) in **one** place, so
+`click_options` and `argv` cannot disagree; the first multi-word key found that they had,
+and the UI would have sent the CLI an option it does not have.
 `steps.STAGES` / `steps.BEST` are the one place stage order is written down.
 
 **The pipeline is the core abstraction.** Each card flows through four stages —
@@ -367,53 +377,104 @@ destroy work to fix a corner. What it cannot repair it does not touch: re-fittin
 border needs to know where the border is, which is a decision (the align marks), not
 a repair.
 
-**Border auto-detection (`borders.detect_inset`).** Each edge is scanned inward
-along 64 block-averaged lines until the picture stops looking like the border, and
-**every line decides that for itself**, from the pixels it holds in a small window
-just inside the cut edge: the range of colours there, widened by an absolute floor
-(`_MIN_DELTA`). It returns a `Detection` carrying **per-edge `support`** — the
-share of lines that agreed — because a decorated frame reaching into the top
-border says nothing about the left one. It is a *pre-placement*, never a decision:
-`border --auto` prints the note and names the weak edges, `/api/detect` serves the
-same, and the UI's align marks land there on first open with a clean/check chip.
+**There is no border auto-detection, and removing it was the point.** There was:
+`borders.detect_inset` scanned each edge inward and pre-placed the align marks, behind
+`border --auto`, `/api/detect` and a bulk Border action. The whole module, its route, its
+flag and its test file are **gone**, and nothing may reintroduce them. It was wrong in
+three ways that no screen showed, each found only by comparing it against a hand reading:
 
-Three things there were wrong once, each of which broke a whole class of card, and
-all three are pinned by `tests/test_borders.py`:
+1. **It over-read a black border whose frame was also dark.** It wants a *luminance* step,
+   so on a Beta Sol Ring (stone frame at 37 against a black border at 27) it walked past
+   the real edge to the light text box — 37-41px where the border ends at 23px, 65% too
+   far.
+2. **It read past a decorated frame's keylines.** On `dft-501` the flat yellow band ends
+   at 50px and it answered 56px, having crossed a black keyline, a thin yellow line and a
+   second black keyline.
+3. **It found a border on a card that has none.** `sld-912` is full-bleed; its dark art
+   read as a border at T4.04 R6.45%, and the fit cropped into the picture on all four
+   edges.
 
-- **One colour for the whole ring cannot describe a ring that is not one colour.**
-  A silver full-art frame is a gradient and an ex-era frame is a sheen, so the
-  ring's own spread set the tolerance at ~156 levels while the art sat 107 from
-  the ring's median — *inside* it. Nothing read as "not the border" and the card
-  came back with none. Judging per line fixed it because locally there is nothing
-  to average away: measured over a real 15-card library, ex-era cards went from
-  9-10% (nonsense; a border is ~3%) to 2-4%, and the silver card from nothing at
-  all to 2.73/3.82% at full support.
-- **The scan has to start where the reference is read from**, not at pixel 0. The
-  outer `_SKIN` is the cut edge, its antialiasing and whatever a transparent
-  die-cut corner was composited onto; scanning from before it made every card
-  whose extreme edge differs from its border (a black MTG border under a pale cut
-  edge) end on its first pixel and report no border at all.
-- **The median is the wrong summary when the lines find two edges**, and on a
-  decorated frame they do — a printed line just inside the colour. The median
-  lands in the *gap* between the two clusters, a number not one line measured.
-  `_consensus` takes the densest cluster instead (ties to the shallower, since the
-  border is the outermost ring), and that cluster's size *is* the support.
+Each of those produces four plausible numbers, and a plausible number presented as a
+measurement is worse than no number at all: it looks finished. Where the printed border
+sits is a **reading**, and proxdex asks for it rather than inventing it. The measurements
+that replaced it are in `docs/measuring-frames.md`, one row per card, taken by hand.
 
-A card with no border reads as `frameless`, which is a finding (borderless print)
-rather than a failure — and `--auto` then skips measuring entirely, because
-measuring a full-art card would find the art's own edge and crop the card to it.
-`frameless` is deliberately **not** "the numbers came out small": art that changes
-a little way in yields four plausible numbers no line agreed on, so the test is
-that *not one edge* cleared `_TRUST`. Cropping a card to its own art is the one
-outcome worse than declining to measure.
+**The overlay and the marks are different things, and only the marks are modal.** The
+target outline is a *statement about the card* — where its border belongs — so it is drawn
+whenever there is something to draw it on: over the original while the step is pending, and
+over the **finished master** once it is done, where it is the cheapest check there is that
+the fit landed (a correct master has its border exactly on that line, and you can see it in
+one look). The draggable marks belong to the **act of aligning** and to nothing else: they
+appear when you open them and not before.
+
+So the align *layer* — the one that swaps the viewer for an undistorted source with marks on
+it — owns the viewer only when there is a border to place: *pending* yes, *done* only if you
+asked for the marks again, **skipped never**. On a done step with the marks down the ordinary
+proof stands, compare tool and all, with the outline laid over it (`.al-band` alone, no
+layer). That works because a bordered master is exactly 63:88 by construction, so it fills
+the viewer with no letterboxing to correct for. Two things this got wrong on the way: a
+finished border step once showed the *original* with a target over it instead of its own
+output, and an overlay for placing a border you decided not to place is an invitation to do
+work that will not happen.
+
+**Skipped is settled, and it has to look settled** (`renderViewer`). It used to render
+exactly like *pending* — the dashed `is-input` frame, "Showing bordered — the input" — which
+reads as unfinished when it is a decision the pipeline honours: `sheet.print_ready` prints a
+skipped step's input *as the master*. So the three states are now three renderings: **done**
+shows its output in a solid frame with the compare tool; **skipped** shows the picture that
+will be printed, also solid, plated `<stage> — stands as the master` with a `skipped` pill
+and no overlay of any kind; **pending** keeps the dashed frame and the "not …d yet" badge,
+because that one really is unfinished.
+
+**So the border step opens on the target, not on an answer.** Focus Border and the align
+layer draws the *original*, untouched, with the frame spec's own dashed outline over it —
+where this card's border **should** be, from its set and id. From there: **Skip**, or
+**Align the border**, which puts the four draggable marks up starting at the spec's own
+numbers, so the gesture is moving them to where this card's border really is. Run is
+**held shut** until the marks are up and a fit solves (`borderReady()`), because a reshape
+with no idea where the border is has nothing to reshape against. Two consequences worth
+keeping straight:
+
+- **A borderless printing needs none of it.** There is no frame to put a mark on, so the
+  fit is pure aspect correction: the panel says so, Run is live from the start, and `border`
+  fills the marks in itself (`marks = (0, 0, 0, 0)`) rather than reporting "nothing to
+  expand". It is the one case that needs no reading, which is why it is the one case that
+  runs unasked — and `--frame borderless` is therefore the whole fix for a print whose
+  metadata is wrong about its own border.
+- **Border left the bulk actions.** It was only ever bulk-runnable *because* `--auto`
+  would measure each card, so with that gone it is one card at a time. Bulk **Skip** stays:
+  skipping fifty cards is a decision, not a reading.
+
+**The target band is drawn against the image, and three one-pixel bugs lived in it** —
+each of which read as bad geometry rather than as bad drawing, which is what makes them
+worth naming. (1) `border-width` does not accept a percentage, so the band written as
+`borderTopWidth: '2.88%'` drew *nothing at all*; `setBandLine` insets an inner `<i>`
+instead. (2) An `outline` paints entirely **outside** its box, so the band's line sat half
+a CSS pixel further out than the mark's hairline, which is centred on its value —
+`outline-offset: -.5px` puts both centres on one line. (3) The band used to be positioned
+on the **trim** box while the marks were up; since that box is anchored top-left, the whole
+trim-minus-image difference landed on the *right and bottom* edges, so the two lines
+agreed on two edges and disagreed on the other two. `drawBand()` always uses the image —
+the trim is the ghost's job, and the band's job is to be comparable with the marks.
 
 **Frame specs (`frames.py`) are geometry; `specs.py` decides which one a card
-gets.** A `FrameGuide` is **four numbers, a note and `ref_mm`** — nothing else. The
-note is prose saying where the numbers came from, and it is the *whole* account of
-how much to trust them; `ref_mm` is the card they were taken off, because an
-oversized card's 3mm border is a different *fraction* from a 63×88 one's, and so is
-a real card's (63.5×88.9mm, not the 63×88 proxdex trims to — getting that wrong is
-0.8% of error in every border). Eight
+gets.** A `FrameGuide` is **four numbers plus one flag** — id, name, game, inset, and
+`oversized`. It carries no note and no reference size: where a shipped spec's numbers came
+from is prose **above it in the source** and one row per card in
+`docs/measuring-frames.md`, which is a record no screen can render as a verdict, and
+the card size is one constant (`frames.CARD_MM = (63.5, 88.9)`) because **a Magic
+card and a Pokémon card are the same 2.5×3.5in stock**. That constant is
+deliberately the *card* and not the 63×88 proxdex **trims** to — a caliper reading is
+a fraction of the real card, and using the trim is 0.8% of error in every border.
+Insets are fractions, so the size is needed only to show a human millimetres;
+`FrameGuide.mm()` reports the millimetres of the card the spec is *about*.
+
+**`oversized` is a boolean, and that is the whole of what `ref_mm` was really for.** There
+are exactly two card sizes in proxdex, so an arbitrary millimetre pair was only ever
+answering "ordinary card or the big one?". Dropping it entirely was a step too far, caught by
+`frames show mtg-vanguard` reporting **3.71/2.88mm "of a 63.5×88.9mm card"** — a width of a
+card that spec does not describe. The flag also decides what `frames set --oversized` stores,
+since the same border is a smaller *fraction* of a bigger card. Seven
 specs ship (`frames.SHIPPED`), so a fresh library borders a Base Set card with
 nothing configured; a library adds its own as `<root>/frames/<id>.json`, mirroring
 `profiles/`. **A spec id is therefore an open set, not a `StrEnum`** — the same
@@ -491,26 +552,111 @@ other, and nothing in the image says so. It is systematic, so ten cards agreeing
 "trusted, nothing warns" dressed the guess up. (Pokémon's scans are visibly worse
 about this than Scryfall's, which is the observation that killed it.) Collapsing the
 three back into a boolean would have kept the same error, so what replaced them is
-**prose**: `FrameGuide.note` says which card, which calipers, or that somebody typed
-it, and every surface prints that sentence verbatim. One verb records a spec,
-`frames set`, and correcting a shipped one is the *expected* path — the shipped MTG
-numbers are working defaults that say so in their own notes.
-`docs/measuring-frames.md` names the five cards that settle them.
+**prose in the repository, not a field**. There *was* a `FrameGuide.note` carrying that
+sentence, and it is gone too: a per-spec provenance string is still a slot every screen
+renders beside the numbers, which is how a grade gets reinvented. So the account lives
+where it cannot be rendered as a verdict — a comment above each shipped spec in
+`frames.py`, and `docs/measuring-frames.md` as the log, **one row per card**, each row
+carrying the hand reading, a second independent measurement of the same image, and what
+it decided. One verb records a spec, `frames set` (four millimetres, a name and a game
+— nothing else), and correcting a shipped one is the *expected* path: every MTG number
+is a pixel reading of the publisher's own image. **Writing the row down is the step that
+used to be `--note`.**
 
-**Only measured specs ship, and there are three.** `pokemon-wotc` (calipers, and it
-covers *only* `base1-6`/`gym1-2`/`neo1-4` — it stops where the e-Card series begins),
-`mtg-1993` (a pixel reading of Scryfall's Beta Sol Ring scan), and `borderless`. Every
-other MTG spec was read off the publisher's scans and has been **withdrawn**, because
-two independent problems say a scan cannot fix an absolute width:
+**Calipers are deliberately not the plan any more.** They answered exactly one question —
+whether every spec is uniformly a hair narrow, because each is read off an image carrying
+its own crop — and that error is *shared*, so it lands on every card equally and changes no
+card's border relative to another's. Every question actually open is a **comparison**
+(Alpha against Unlimited, an oversized card's fraction, a token against its generation), and
+a common crop cancels in a comparison, so a pixel count settles those outright. All three
+questions on that worksheet came back answered, which is the argument for the approach.
+Do not reintroduce "confirm on paper" as a blocker: it blocked answerable questions behind
+a purchase.
+
+**The `1993` frame is three bands, and it took 26 sets to say so.** Scryfall calls Alpha,
+Unlimited, 4th Edition and every 1993-96 expansion one frame; the printings do not share a
+border. Every set of it has now been read by hand, and **they collapse into three bands rather
+than 26 numbers** — which is the whole point, because the code carries three rules and no table
+of sets:
+
+| band | sides / top px | mm | covers | spec |
+|---|---|---|---|---|
+| narrow | 23 / 32 | 1.96 / 2.74 | `lea`, `leb`, `ced`, `cei` | `mtg-1993-alpha` |
+| **ordinary** | 29 / 32 | 2.47 / 2.74 | **18 sets**, Arabian Nights → 4th Edition and the 1995-96 reprints | `mtg-1993` |
+| wide | 35 / 42.5 | 2.98 / 3.63 | `2ed`, `3ed` | `mtg-1993-unlimited` |
+
+The bands are separated by far more than the noise inside them: the ordinary band spans 27-32px
+(0.43mm) with a median of 29, band 1 sits 6px below its narrowest member, and band 3's top is
+6.5px clear of anything else in the frame. One pixel is 0.085mm, so **the boundaries are not a
+matter of taste** — and a card a pixel or two off its band is reading noise, not a spec.
+
+Three results worth keeping. The **Collectors' Editions confirm band 1 independently** (`ced`
+and `cei` read 23/32, Alpha to the pixel, and nothing about them fed into that number). Band 2
+**absorbed a briefly-separate `mtg-1993-4ed`** — 4th Edition reads 30/33 against the median's
+29/32, and one pixel per edge is not a spec. And 18 sets landing inside 0.43mm is what let
+`frame: 1993` have a **generation entry** again: with only Alpha and Revised read it resolved to
+nothing, because a generation-wide number would have been a coin flip across a 1mm spread —
+3,080 prints, 3.2% of Magic. That gap is closed.
+
+`4bb` is the one printing that fits no band: 36/40, which is **`mtg-1997`'s numbers exactly**,
+so `BASELINE` points its set there rather than inventing a spec (the basis on which `future`
+shares `mtg-2003`). A run-length scan reads it wider still, so it is not a misreading — the
+Foreign Black Border sets were printed in Belgium, a separate run. But its sibling `fbb` went
+the *other* way into band 2 at 27/30, so **there is no "foreign" rule to write**, and no colour
+rule either: Revised and 4th are both white and 5px apart, `fbb` and `4bb` are both black and
+9px apart in opposite directions.
+
+**What did not merge is worth knowing too**, at 0.085mm per pixel. `mtg-1993` (29/32) and
+`mtg-m15` (30/30) agree on the sides to within a pixel and stay separate, because M15's top
+*equals* its sides while the 1993 frame's exceeds them by a consistent 3px — that is the
+border's **shape**, not its size. `mtg-1993-unlimited` and `mtg-2003` have *identical* sides
+(35px) and a top 7.5px apart. `mtg-1997` and `mtg-2003` differ by 5px on top alone. Going the
+other way, the seven `2015` readings (28-30px: plain, etched, silver, extended-art,
+legendary-crown, token, emblem) sit in a 0.17mm band and are deliberately **one** spec, as are
+the five `2003` readings at 35/35 (black, white, `future`, two tokens).
+
+**Only measured specs ship, and they arrive one card at a time.** `pokemon-wotc`
+(calipers, and it covers *only* `base1-6`/`gym1-2`/`neo1-4` — it stops where the e-Card
+series begins), `borderless`, and one spec per MTG geometry somebody has read by hand:
+the three 1993 bands above, `mtg-1997` (`sld-1664` — a card that physically exists, where `me4-227` was an MTGO-only *render* of the frame template reading 1px wider), `mtg-2003` (`c13-259`, and it
+covers the `future` frame too because `mb2-233` measured the same), `mtg-m15` (`msc-211`),
+`mtg-yellow-band` (`dft-501`), and the two oversized ones below.
+
+**An oversized card needs its own spec even when its border is the same width, and that is
+the clearest thing in the whole file.** An Archenemy scheme measures 2.98/3.00mm —
+*physically identical* to an ordinary 2003-frame card's 2.99/2.98. But a spec is a
+**fraction** and the card is 89×127mm, so the same millimetres are 2.35%/3.37% against
+`mtg-2003`'s 3.37%/4.70%. Resolving a scheme by its frame generation, which is what happened
+before, asked for **4.27/4.18mm — 1.2mm too wide on every edge**, and looked right on screen
+because the overlay is drawn in fractions too. So `mtg-oversized` (`oarc-1★`, 1040×1490, covering **planes and phenomena as well as
+schemes**) and
+`mtg-vanguard` (`pvan-101`, **1060×1510**, a third size and genuinely thicker at 5.30/4.03mm)
+are read from the **layout** in `sources.mtg_frame`, like the yellow band, because the layout
+settles the geometry. A **plane** could not be read directly — art to the edges, uneven border — so it takes the
+number measured off the same stock rather than being called borderless. That is the safe
+direction under the project's own asymmetry (calling a bordered card borderless throws its fit
+away and looks perfect), and it is not a geometry guess: same product line, same 89×127mm
+stock, same era, and the scheme's 2.98/3.00mm *is* an ordinary 2003-frame card's border.
+
+**Tokens need no spec, and that is now measured rather than assumed.** A token's layout is
+bespoke (no mana cost, larger art), so "same stock, same die" was not good enough. Read by
+hand: `tmsh-3` and the emblem `tdft-13` are 30px all round, which is `mtg-m15` to the pixel;
+`p03-6` and `pcsp-1` (2003-frame tokens) are 35px, which is `mtg-2003`. A double-faced
+punchcard token has no border and its layout already says so. **Do not add a token spec** —
+it would be a duplicate of a number already here, and `TestTokensNeedNoSpec` says so. Each is stored as the **exact pixel fractions** of the
+image it was read off rather than converted through millimetres — Scryfall's images are
+opaque at all four mid-edges, so a pixel count is a fraction of the card directly, and each
+divides by the width of *its own* file (some come back 744 rather than 745). Adding one is
+purely additive: the generation resolved to nothing before, so nothing that resolved
+changes. Every spec that was read off the publisher's scans *by the old detector* was
+**withdrawn** first, because two independent problems say that cannot fix an absolute
+width:
 
 1. **A scan carries its own crop.** Trimmed 0.3mm inside the cut edge, every border
    read from it is 0.3mm narrow, every card agrees, and nothing in the image says so.
-2. **`detect_inset` over-reads a black border when the frame is also dark.** It wants a
-   *luminance* step, so on a Beta artifact (stone frame, luminance 37, against a black
-   border at 27) it walks past the real edge to the light text box and reports 37-41px
-   where the border ends at 23px — 65% too far. Judge by **colour** instead: the border
-   is neutral, the frame is a coloured texture, and that works on either border colour.
-   White-bordered readings were never affected, which is why the census used them.
+2. **The detector that read them was wrong in three ways**, which is why it no longer
+   exists — see the border-step section above. Its worst case was a black border under a
+   dark frame: 37-41px where the border ends at 23px, 65% too far.
 
 **So a printing with no measured spec resolves to nothing** — `Via.NONE`,
 `Resolution.spec is None` — and that is a *state*, not a failure. `frames check` names
@@ -519,19 +665,52 @@ it, `border` **refuses** the card, and `--frame` is the escape hatch. The per-ga
 unmeasured generation to another generation's numbers, which looks perfect and is
 wrong. `Resolution.have` is the predicate; every consumer checks it.
 
-`frames.FRAME_GENERATIONS[MTG]` therefore maps **only** `1993`, and the four absent
-generations are the design rather than an omission (pinned by a test that asserts
-exactly one of Scryfall's five documented values resolves). `sources.mtg_frame` likewise
-returns `borderless` and nothing else now — extended art and the yellow band are real
-distinct geometries, but their specs were scan-derived too.
+**The shipped baseline is one table with two typed keys (`frames.BASELINE`).** There were
+two — `ERAS` (set-id prefixes) and `FRAME_GENERATIONS` (the printing's frame) — and they
+were the same thing keyed two ways: both are the baseline a library's own rules are
+consulted *before*, and both answer `Via.ERA`. What differs is only *which fact about a
+card decides*, and that follows the game: Pokémon's yellow border ran for a known list of
+**sets**, MTG's changed with the printing's **frame generation** (which is why a modern set
+holding a retro-frame card resolves per card, never per set). So a `Baseline` is
+`(spec, sets, frames)` and a game fills in whichever key its border actually followed —
+pinned by `tests/test_frames.py`, which asserts each entry has exactly one. `baseline()`
+tries sets first and generations second in **two passes**, so which kind of key wins is a
+property of the function rather than of the order somebody listed the table in.
 
-What the scan survey *can* establish still stands, because a bias common to every scan
-cancels when populations are compared to each other: **31 of the 54 measured
-combinations of `frame` × `border_color` × `frame_effects` sit on their own
-generation's border**, so a legendary crown, an inverted text box, an etched foil,
-full art, and white/gold/silver borders need no spec. Those groupings and both sets of
-withdrawn numbers are kept in `docs/measuring-frames.md` as comparison targets for
-calipers, alongside the measurement log.
+Neither key is a bare `str` any more. `Generation` is a `StrEnum` of Scryfall's five
+documented values, coerced at the boundary by `frames.parse_generation` (the trait was
+written out of untyped JSON, so an unknown generation is **no answer** rather than a
+traceback or a stringly-typed fall-through), and a `Baseline.spec` is a `GuideId` because
+code names it. All five generations map, and `tests/test_frames.py` pins that the enum *is*
+Scryfall's list and that every member is claimed by an entry — so a sixth would resolve to
+nothing rather than take a stand-in, and widening it is a deliberate edit, never a silent one.
+`sources.mtg_frame` returns `borderless` **and** `mtg-yellow-band`: a yellow `border_color`
+is not an ink colour but Aetherdrift's box-topper band, 1.7mm wider on the sides than the
+generation it sits in, and the only combination in the survey where colour and geometry
+travel together.
+
+**Extended art needs no spec, and that was a correction.** The survey reported its sides at
+0 — "the art runs off the card" — and that was the old detector failing on dark art. Measured
+over 240 rows of `cmr-700`, the black border is 27-28px on both sides against a plain
+card's 29-30. It is the same border with a wider picture. The rest of the survey's negative
+result stands and is now checked against hand readings: **31 of the 54 measured
+combinations of `frame` × `border_color` × `frame_effects` sit on their own generation's
+border**, and the five treated cards read by hand confirm it (etched 29, silver 28, gold at
+1997's width, white at 2003's exact 35px against black's 35px — the cleanest demonstration
+that colour is not geometry). `docs/measuring-frames.md` keeps the survey's numbers beside
+the hand readings: it came out 0.03-0.11mm narrow on four generations of five, as a common
+crop predicts, and 0.76mm out on `1993`, which is the generation still under question.
+
+**A full-bleed printing that says `black` keeps the metadata's answer, deliberately.**
+`afr-353` (showcase) and `sld-912` (full art) have art at pixel 0 on three edges and
+Scryfall calls both `border_color: black`, so they resolve to `mtg-m15` like their
+neighbours. That stands: **the two errors are not equally bad.** Treating a borderless card
+as bordered costs a hair of border added outside a picture that already reaches the edge —
+you see it on the overlay and can pick `borderless` for the run. Treating a *bordered* card
+as borderless throws its border fit away entirely and looks perfect on screen. So nothing
+here guesses borderless from `full_art`, `showcase` or a dark edge; only
+`border_color == "borderless"` and the art-series layout say it, and `--frame borderless`
+or a `.pin` is there for the rest.
 
 One open question the scans cannot answer: Alpha and Beta read ~1mm narrower on the
 sides (1.88-2.05mm) than white-bordered Unlimited and Revised (2.98mm), and it is *not*
@@ -629,7 +808,7 @@ config edit.
 **CLI/UI parity is two-way and load-bearing.** Anything one can do, the other
 can: the UI's contact-sheet filters are `ls --only/--sort/--game/--set` (plus
 `ls --json`, the same shape `/api/cards` serves); its data sheet is `proxdex show`;
-its settings screen is `proxdex config show|set` (tomlkit, comment-preserving,
+its settings screen is `proxdex config show|set|prune` (tomlkit, comment-preserving,
 every value through `Config.coerce`); its batch list is `proxdex batches`; its
 delete is `proxdex rm`; its frame-specs screen is the `frames` group — specs, rules and warnings, with
 `frames preview` behind every Preview button, `frames check` behind the Warnings tab,
@@ -642,8 +821,8 @@ builder** is `sheet` with copies and per-run overrides (its live page count is
 --stage … --face …` call, so the CLI stays the only implementation); its **print
 screen** is `proxdex profile` + `proxdex calibrate`, one control per verb. Going the other way, `SheetBody.cards` lets the UI impose a
 *selection with copies* (`sheet <name> <id[:n]...>`), `FetchBody.related` is
-`fetch --related`, and `StepBody.auto` is `border --auto` — which is what makes the
-bulk Border action useful, since nobody is dragging marks onto fifty cards.
+`fetch --related`. Border is the one step with **no** bulk action, on both sides: it has
+to be told where each card's border is, one card at a time.
 **When you add a verb to one side, add it to the other in the same change.**
 
 **A flag that opens a local app gets the browser's equivalent, never the
@@ -696,9 +875,10 @@ The border tool has no mode: the marks are live whenever Border is focused (a
 once there *is* a result to look at, since the marks live over the source). A
 **loupe** shows source pixels at 6× on a crosshair while dragging, parked in the
 corner of the proof's own column furthest from the pointer; arrow keys nudge the
-selected mark and four numeric fields take an exact inset. A **cyan** ghost
-outlines the trim the fit will produce and shades the target border band — cyan
-is measurement, magenta is control, and the two never read as the same thing.
+selected mark and four numeric fields take an exact inset. A **dashed** ghost
+outlines the trim the fit will produce and, inside it, the border it is aiming at;
+the marks you drag are **solid** with grips. Same accent, different line style —
+see the theme note below for why that replaced a second hue.
 The JS `solveFit` **mirrors cardbleed's `solve_fit`**, and
 `tests/test_fit_parity.py` now holds the two to it: it cuts `solveFit` out of
 this file, runs it in node over fifteen fits (stretched and not, art too wide and
@@ -725,6 +905,24 @@ synchronously for anything already `complete`, so a cached image shows no loadin
 state at all. Focusing a step does not scroll to the top — it is not a new page.
 **Adding a render path? Ask what it destroys.**
 
+**And ask what order it runs in.** The reuse path must do `renderStepPanel` *then*
+`repaintProof`, matching the full build — because `renderStepPanel` emits an **empty**
+`#alpanel` and a fresh `#runbtn`, and it is `wireViewer` (inside `repaintProof`) that fills
+the align panel in and enables Run. Reversed, it blanked the panel it had just written: a
+done border step lost the target outline that is the whole check the fit landed, and only
+on that path, so it looked like a bug in the overlay rather than in the sequence.
+
+**Two async readers own the viewer, and both re-check they still do.** `startAlign` and
+`loadSpecFacts` await `/api/frame` and then write into `.viewer`, so each captures
+`viewerOwner(c)` — card, side **and step** — before the await and bails if it changed.
+Without the step in that key, running Border advanced focus while the request was in
+flight, and `buildAlignLayer` then grabbed the *upscale* step's viewer, hid its image and
+drew marks over it. That surfaced as three separate complaints — marks on the upscale
+proof, marks on a done border step, and the upscale proof still showing the pre-border
+picture until you clicked away — and was one missing guard plus `align.show` surviving the
+run (`afterStep` now puts the marks down: the act of aligning is over, and re-opening them
+is one click).
+
 **Routing + speed.** The UI is a real SPA with real URLs: `/library`,
 `/card/<id>[/<step>][?side=N]`, `/search?q=…`, `/import`, `/sheet`,
 `/print[?p=<profile>]`, `/settings`, driven by the History API
@@ -747,11 +945,74 @@ served from `/static` — never a CDN, so it works offline. On top sits a small
 theme layer in `webui.html`: colourless chrome (you are judging card colour on
 these screens), four surfaces one value-step apart so elevation never needs a
 shadow, one 4px spacing scale, and mono type for every id, dimension and
-percentage. Two accents, both borrowed from marks a press really prints —
-**registration magenta** for every control (and for the crop-mark corner
-brackets, `.marks`, which hover on contact-sheet tiles — never around the proof,
-where nothing may compete with the card), **registration cyan** for the one thing
-that is a measurement rather than a control (the target border). `/api/config`
+percentage.
+
+**Everything that sticks pins to `--bar`, which is measured.** The topbar is sticky, and
+four things sit below it: the card page's rail and step panel, the settings/frames tab bar,
+and the sheet builder's summary column. They each hardcoded `top: 4.5rem` — a *guess* at a
+bar whose height depends on whether its nav has wrapped. It is 53px at desktop widths and
+**138px at 560px**, so at narrow widths every one of them sat 66px *underneath* the bar it
+was supposed to sit below, and at wide widths it left a 19px gap. `syncBarHeight()` sets
+`--bar` from the bar's own `getBoundingClientRect` and keeps it there with a
+**ResizeObserver** — not a resize listener, because the bar changes height without the
+window changing size (a longer library path, a wrapped nav). `Math.ceil`, because half a
+pixel short is still underneath.
+
+**The stepper stays put, and below `lg` that needed `display: contents`.** The filmstrip is
+how you navigate between steps, so it has to stay reachable while you scroll the proof and
+the card-data sheet. On a wide screen the whole rail is sticky and it rides along. Below
+that the rail is a short full-width block at the top of a long page — and a sticky element
+**cannot outlive its containing block**, so however sticky the strip was it scrolled away
+with the rail. `\.rail { display: contents }` makes the rail's children items of the card
+grid, whose height is the page, which is the distance the strip has to stay put for. Only
+the *navigation* is pinned (`.stepnav` = face tabs + filmstrip); the card's name, the
+oversized note and Delete card stay in the flow. The strip lays out horizontally there,
+with the four stages **sharing** the width rather than side-scrolling: a strip you have to
+swipe hides half the pipeline behind a gesture, which for the thing you navigate with is
+worse than a truncated label.
+
+**A sticky strip must be opaque, or it is not a strip.** The frames screen's
+Specs/Rules/Warnings bar was transparent *and* static: it scrolled away, and the moment it
+was made sticky the page showed straight through it. `.tabbar` is the one class for "a
+section tab strip that sits under the topbar and stays there" — sticky at `var(--bar)`,
+`background: var(--ink)`, a hairline under it because it spans the page — and the settings
+and print sidebars become exactly that strip once they collapse below `lg` (row, opaque, the
+vertical divider hidden and the count un-floated, since neither means anything in a row).
+Those are direct children of their grid, so unlike the card rail they needed no
+`display: contents`.
+
+**One accent**, borrowed from the marks a press really prints —
+**registration magenta** — for every control, the crop-mark corner brackets
+(`.marks`, which hover on contact-sheet tiles — never around the proof, where
+nothing may compete with the card) and every overlay. There were two: cyan meant
+"a measurement rather than a control", which was a real distinction while the
+border was measured off the image and stopped being one when that was removed.
+Overlay lines that must be told apart differ by **line style** instead — dashed is
+what is being aimed at, solid is what you drag — which survives them landing on
+the same pixel, as they do at the moment the marks come up. A second hue did not:
+two differently-coloured hairlines a pixel apart read as a misalignment rather
+than as agreement.
+
+**Two one-pixel traps in that overlay, both of which looked like bad geometry.**
+CSS `border-width` does not accept a percentage, so the band written as
+`borderTopWidth: '2.88%'` silently drew *nothing*; it insets an inner element
+(`setBandLine`) now. And an `outline` paints entirely **outside** its box, so the
+band's line sat half a CSS pixel further out than the mark's hairline, which is
+centred on its value — 1-2 device pixels of disagreement between two things that
+are the same number. `outline-offset: -.5px` puts both centres on one line; it is
+load-bearing, not cosmetic.
+
+**`--card-radius` is measured, not nominal.** The alpha channel of 15 Scryfall
+PNGs — every frame generation, every border colour — starts its straight edge at
+exactly 32px on both axes: 4.30% of the width, 3.08% of the height, **2.73mm**, not
+varying by a pixel between them. It was the nominal 3mm, and that is the wrong
+number here because proxdex flattens the transparent corner to the card's own
+border colour when it files an image: the corner reaching the browser is *square*,
+and this radius is the only thing rounding it. Cutting 0.27mm harder than the
+die-cut leaves a wedge of page background inside the card's own black border,
+which on an MTG card reads as a bite out of each corner. One number, both games,
+used by the contact-sheet tiles, the proof viewer and the search results.
+`/api/config`
 returns an `options` map *and* a `docs` map derived from `Config`'s own field
 metadata, so a setting renders as a described form row, with its unit and real
 default, and no extra wiring. `webui.html` and `static/` ship via hatch
@@ -778,6 +1039,29 @@ request boundary — so **custom Upscayl models are not supported**; add a
 `UpscaylModel` member instead. The `init`-time template is `DEFAULT_TOML` in
 `cli.py` — keep its defaults in sync with `config.py`.
 
+**A key nothing reads is worse than clutter, and `config prune` removes it.** A
+`proxdex.toml` outlives the features that filled it: the real library carried `[border]
+thresh` plus two target ratios from the **deleted** auto-detector, and `[grade] normalize`,
+`black_pct`, `white_pct`, `match_border_target` from the **deleted** frame white-balance.
+Every one of them *looks* like it is configuring something. Both surfaces already said they
+were ignored — the settings screen chipped them `not a proxdex setting`, `config show`
+warned — and neither offered to remove them, which is half an answer. So there is one verb,
+`config prune` (`--yes`, or the settings screen's **Remove them**, which shells out to it),
+and it only ever touches keys with **no** `Config` field: a real setting is changed with
+`config set` and never deleted here, so this cannot quietly reset one.
+
+It is a **line pass** rather than a tomlkit round-trip, and that is the interesting part:
+deleting the key alone leaves its comment, and an orphaned comment is the same trap one
+level up — "normalize: pull each card to a common baseline first" sitting above
+`brightness`, describing a feature deleted for turning a neutral grey into deep blue. So a
+pruned key takes the contiguous comment block above it, a table left holding nothing goes
+too (`[border]` existed only for the detector), and every other byte is untouched. The
+result is **re-parsed and checked** against "the old keys minus the doomed ones" before it
+is written, falling back to a plain tomlkit deletion if the file is not shaped as expected
+— the wrong prose beats a broken config. Pinned by `tests/test_config_prune.py`, which
+earns its place because this rewrites the one file a person typed by hand and every failure
+mode is invisible until much later.
+
 **Grade is a look, and nothing else (`grade.py`).** Brightness, contrast,
 saturation, gamma, plus an optional per-card `levels` stretch. It does **not** try
 to normalise cards against each other. An earlier version did — it read each
@@ -789,6 +1073,48 @@ yellow-bordered card graded to **(19, 19, 129)** — deep blue — while the sam
 in a black-bordered card blew out to white. Do not reintroduce it. Matching the
 *medium* is real but belongs at print time, where the paper is the same for every
 card on the sheet.
+
+**And every grade default is identity.** They used to lift the image (brightness 1.03,
+contrast 1.06, saturation 1.10) on the reasoning that paper and ink dull it — true, and
+still the wrong place, twice over. It is a fact about *your* printer and *your* paper, so
+numbers proxdex invented for a press it has never seen are a guess wearing a label — the
+same mistake as the print presets that were deleted for it ("foil needs saturation 1.38"
+described exactly one setup). And a correction identical for every card on the sheet is by
+definition the medium's, which is what a print profile is *for* and where it can be
+measured rather than typed. So the pipeline with nothing configured returns the card, and
+a look is something you chose. `DEFAULT_TOML` says the same and says why.
+
+**The upscale factor is derived, because the factor is the wrong thing to hold still
+(`upscale.plan`).** Sources arrive anywhere from 400 to 745px wide, so one fixed factor
+scatters the masters it makes: measured on the real library, identical settings gave
+**592 dpi** on one card and **1011** on another, with nothing on screen to say so. So what
+is configured is a **minimum resolution** — `[tools] upscayl_min_dpi`, default 1000, which
+is 2480px across a 63mm card — and the factor is arithmetic: the smallest that clears it.
+`--scale` overrides for a run (the step's one `optional` option with no config default, so
+"unset" means "clear the minimum"); `min_dpi = 0` falls back to `upscayl_scale`.
+
+**A minimum and not a target, and `sheet_dpi` is why.** The page is rendered at
+`sheet_dpi` — 1400 by default, 3472px across a 63mm card — so a master below that is
+resampled *up* by a plain filter at print time, which is exactly the work the neural
+upscaler was run to avoid. Overshooting costs disk and a little time; undershooting costs
+resolution nothing downstream can restore. That does mean a **step**: the doubled ladder is
+1, 4, 9, 16, so a 600px master goes to 5400px rather than the 2400px that would have landed
+it at 968 dpi. Taken deliberately — the 2400px version would have been upsampled 1.45× by
+the sheet renderer anyway. Every source width the real library holds (405-744px) clears
+1000 dpi, and the bordered masters land at 4× just over it, so `base3-4`'s existing
+2508×3504 master is reproduced exactly.
+
+An earlier version aimed at a *target* and took the nearest factor by ratio, which was
+wrong in a way worth remembering: because the ladder is multiplicatively coarse, **every
+target from 1050 to 1450 dpi produced byte-identical output** across those widths — the
+setting looked precise and was not — while a card landing 3% under was left there and
+upsampled at print. A minimum says what it means.
+
+**Double Upscayl squares the factor** rather than doubling it (it runs the model over its
+own output, so 2× twice is 4× and 4× twice is 16×), which is why `effective()` exists rather
+than a multiplication inline. And `Plan.short` means **the largest factor still could not
+clear the minimum** — the one case that can happen — reported once per run rather than per
+card, because a line each would be 500 warnings on a 500-card run.
 
 **Print profiles (`profiles.py`, `media.py`).** A profile is one medium you own:
 a name, **the user's notes**, the starting `media.Recipe` it came from, and the
@@ -927,14 +1253,15 @@ the best round so far) and being able to hold it out (`calibrate disable`).
   paper's, and it belongs to a print profile.
 - ruff `select = ALL` with a curated ignore list (see `pyproject.toml`); pyright
   `strict` (numpy/pillow `reportUnknown*` disabled). Both must pass.
-- Frame specs must stay honest, and the mechanism is the **note**, not a grade: a
-  `FrameGuide` records where its numbers came from in words, and every surface
-  prints that sentence. Do not reintroduce a confidence level or a `measured`
-  boolean — a border read off a publisher's scan inherits the scan's crop, which no
-  sample size detects, so any grade that calls such a reading trustworthy is the bug
-  this replaced. `borders.detect_inset` stays honest the other way, by reporting
-  per-edge support so the UI/CLI can name the edges that disagreed rather than
-  presenting four numbers as equally sure.
+- Frame specs must stay honest, and the mechanism is **prose in the repository**, not a
+  field: a `FrameGuide` is four numbers, and where they came from is a comment above the
+  spec plus a row in `docs/measuring-frames.md`. Do not reintroduce a confidence level, a
+  `measured` boolean **or a `note` string** — a border read off a publisher's scan
+  inherits the scan's crop, which no sample size detects, so any grade that calls such a
+  reading trustworthy is the bug this replaced, and a per-spec provenance slot is how a
+  grade grows back. And do not reintroduce border **auto-detection**: measuring the border
+  off the image was tried, shipped and removed, because four plausible numbers presented
+  as a measurement is the same bug in a different place.
 - **Never reference a top-level object by name from an inline HTML handler.** An
   inline handler's scope chain starts at the *element*, and an `HTMLElement` has a
   legacy `align` property — so `onchange="align.show=…"` silently writes to a

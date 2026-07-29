@@ -11,11 +11,15 @@
    proxdex — a prepress console.
 
    The chrome is deliberately colourless: you are judging card colour on these
-   screens, so nothing around the image competes with it. Two accents, and both
-   are borrowed from the marks a press actually prints: registration MAGENTA
-   carries every interaction and every crop mark, registration CYAN carries the
-   one thing that is a measurement rather than a control — the target border the
-   fit is aiming at. Numbers are always monospaced: this is a measuring tool.
+   screens, so nothing around the image competes with it. **One accent** —
+   registration MAGENTA, borrowed from the marks a press actually prints — and it
+   carries every interaction, every crop mark and every overlay. There were two:
+   cyan meant "a measurement rather than a control", which was a real distinction
+   while the border was measured off the image, and stopped being one when that
+   was removed. Where two overlay lines need telling apart they differ by line
+   STYLE — dashed for what is being aimed at, solid for what you drag — because
+   that survives them landing on the same pixel, and a second hue did not.
+   Numbers are always monospaced: this is a measuring tool.
 
    Bootstrap 5.3 supplies the components (nav, buttons, forms, modal, toast,
    accordion, grid); everything below is the theme plus the five pieces
@@ -39,8 +43,6 @@
 
   --mark:     #f2418c;   /* registration magenta — marks + interaction */
   --mark-dim: rgba(242,65,140,.16);
-  --reg:      #22c9d6;   /* registration cyan — the measured target */
-  --reg-dim:  rgba(34,201,214,.14);
   --proof:    #5bd68a;   /* a step that is done */
   --hold:     #e8b44a;   /* a step deliberately skipped */
   --bad:      #ff6b6b;
@@ -71,14 +73,34 @@
   --bs-font-monospace: var(--font-mono);
   --bs-focus-ring-color: rgba(242,65,140,.3);
 
-  /* A real card's die-cut corner: 3 mm on a 63×88 mm card. Given as a
-     percentage PAIR (3/63 horizontal, 3/88 vertical) so the two axes come out
-     to the same absolute radius — a single percentage would make the corner an
-     ellipse — and so it scales with the tile instead of the fixed px it was.
-     3 mm is the spec both games are printed to (1/8" die) and matches what the
-     providers themselves render: Scryfall's PNG corner has the area of a
-     2.7 mm round, scrydex's modern Pokémon scans 3.1 mm. */
-  --card-radius: 4.76% / 3.41%;
+  /* A card's die-cut corner, **measured off the images proxdex actually shows**:
+     the alpha channel of 15 different Scryfall PNGs — every frame generation,
+     every border colour, 744-745×1040 — starts its straight edge at exactly
+     32 px on both axes. That is 4.30% of the width and 3.08% of the height, or
+     2.73 mm, and it does not vary by one pixel between them.
+
+     Given as a percentage PAIR so both axes come out to the same absolute
+     radius (a single percentage would make the corner an ellipse) and so it
+     scales with the tile instead of the fixed px it was.
+
+     It was 3 mm — the nominal 1/8" die — and that is the wrong number to use
+     here: proxdex flattens the transparent corner to the card's own border
+     colour when it files the image, so the corner arriving in the browser is
+     *square*, and the CSS radius is the only thing rounding it. Rounding it
+     0.27 mm harder than the die-cut leaves a wedge of page background inside
+     the card's own black border, which on an MTG card reads as a bite taken out
+     of each corner. Matching the measurement makes the cut land exactly where
+     the provider's die-cut was. One number, both games. */
+  --card-radius: 4.30% / 3.08%;
+
+  /* How tall the sticky topbar actually is, right now. Everything that sticks
+     below it pins to this. It was a hardcoded 4.5rem, which is a *guess* at a bar
+     whose height depends on whether its nav has wrapped: 52.9px at desktop widths
+     and **138px** at 560px, where the guess put every sticky element 66px
+     underneath the bar it was supposed to sit below. `syncBarHeight` keeps it
+     honest with a ResizeObserver; the value here is only the pre-measurement
+     default. */
+  --bar: 3.25rem;
 }
 body { background: var(--ink); -webkit-font-smoothing: antialiased; }
 /* Bootstrap's display utilities are !important, so [hidden] loses without this */
@@ -198,9 +220,6 @@ h6 { font-size: .9375rem; }
 .chip.good  { color: var(--proof); border-color: rgba(91,214,138,.4); }
 .chip.flip  { color: var(--mark);  border-color: rgba(242,65,140,.45); }
 .chip.bad   { color: var(--bad);   border-color: rgba(255,107,107,.4); }
-/* cyan is measurement everywhere in this UI, and a scanned spec is exactly that:
-   a number read off the publisher's own card, not a caliper reading and not a guess */
-.chip.reg   { color: var(--reg);   border-color: rgba(34,201,214,.4); }
 .pill {
   display: inline-flex; align-items: center; gap: .25rem; border-radius: 999px;
   padding: .1rem .55rem; font-size: .6875rem; font-weight: 600; white-space: nowrap;
@@ -295,9 +314,44 @@ body.hasbar { padding-bottom: 4.5rem; }
 }
 @media (min-width: 992px) {
   .cardgrid { grid-template-columns: 15rem minmax(0,1fr) 21rem; align-items: start; }
-  .rail, .steppanel { position: sticky; top: 4.5rem; }
+  .rail, .steppanel { position: sticky; top: var(--bar); }
 }
 .rail { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+
+/* The stepper is navigation, so it has to stay reachable while you scroll the
+   proof and the card-data sheet. On a wide screen the whole rail is sticky and
+   this rides along. Below that the rail is a full-width block that scrolled clean
+   off the top, so the stepper sticks on its own — and turns into a horizontal
+   strip, because the vertical filmstrip is 359px tall and pinning that would cover
+   half the viewport. Only the *navigation* is pinned: the card's name, the
+   oversized note and Delete card stay in the flow where they belong. */
+.stepnav { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+@media (max-width: 991.98px) {
+  /* `display: contents` so the rail's children become items of the card grid.
+     Without it the stepper is stuck *inside* the rail, and a sticky element cannot
+     outlive its containing block — the rail is a short block at the top of a long
+     page, so the strip scrolled away with it however sticky it was. As grid items
+     the containing block is the whole page, which is the distance it has to stay
+     put for. Same stacking as before; the gap comes from the grid instead. */
+  .rail { display: contents; }
+  .stepnav {
+    position: sticky; top: var(--bar); z-index: 20;
+    background: var(--ink); padding: var(--s2) 0;
+    /* the strip is the page's own width, so it needs its own edge under it */
+    box-shadow: 0 1px 0 var(--rule);
+  }
+  /* The four stages **share** the width — no side-scrolling. A strip you have to
+     scroll to see step 4 hides half the pipeline behind a gesture, which for the
+     thing you navigate with is worse than a tight fit. So each frame takes an equal
+     share and its name truncates; the thumbnail and the state dot never shrink,
+     because those are what you actually read at a glance. */
+  .stepnav .film { flex-direction: row; gap: var(--s2); }
+  .stepnav .frame { flex: 1 1 0; min-width: 0; padding: .375rem; gap: var(--s2); }
+  .stepnav .frame .who b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* the stage's own state is already a dot; its word would not fit beside three
+     others at this width */
+  .stepnav .frame .who span { display: none; }
+}
 
 /* face tabs — only ever rendered when the card really has two sides */
 .faces { display: flex; gap: 2px; padding: 2px; background: var(--stock-2);
@@ -388,10 +442,15 @@ img.skel::after { content: ""; }
   background: var(--stock-2); border: 1px solid var(--rule);
   border-radius: var(--card-radius); overflow: hidden;
 }
-/* while aligning, the corners are image data you are measuring against and must
-   not be clipped away — and the ghost trim needs to overflow the frame */
+/* Aligning needs the ghost trim to overflow the frame, so the viewer cannot clip
+   — but the card must still look like a card, with the same die-cut corner every
+   other step shows. So the radius moves onto the image itself (`.al-work`) and the
+   viewer keeps it for its own edge. It used to drop to a flat .25rem here, on the
+   reasoning that the corners were image data being measured against; nothing
+   measures them any more, and a square-cornered card on one step out of four is
+   just wrong. */
 .viewer.aligning {
-  border-radius: .25rem; overflow: visible;
+  border-radius: var(--card-radius); overflow: visible;
   /* the ghost trim is drawn *outside* the frame on purpose, so the column leaves
      room for it rather than letting it cross the caption underneath */
   margin-bottom: 2rem;
@@ -472,19 +531,40 @@ input[type="range"]::-webkit-slider-thumb {
 input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
 
 /* --- frame-align overlay -------------------------------------------------
-   Drag the four rules onto the card's real inner border edge. The marks are the
-   only magenta here; the cyan ghost is the *result* — where the trim will land
-   and how thick the target border is — so control and measurement never read as
-   the same thing. */
+   Everything here is the one accent colour. It used to be two — magenta for the
+   marks you drag, cyan for the target — on the reasoning that control and
+   measurement should never read as the same thing. That reasoning came from a
+   version where the target *was* a measurement, taken off the image. It is not
+   one any more: it is the frame spec, which is the same kind of thing as the
+   marks, and two accents for one idea is one accent too many.
+
+   What separates them is **line style, not hue**: the target and the trim it
+   produces are DASHED, the marks you drag are SOLID and carry grips. That also
+   fixes a thing that read as a bug — at the moment the marks come up they sit on
+   the spec's own numbers, so mark and target coincide, and two different-coloured
+   hairlines a pixel apart looked like a misalignment rather than agreement. */
 .alignlayer { position: absolute; inset: 0; z-index: 5; }
-.al-work { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; }
-/* the trim the fit will produce, and the border it is aiming at */
-.al-ghost { position: absolute; z-index: 6; pointer-events: none; border: 1px dashed var(--reg); }
-.al-band {
-  position: absolute; z-index: 6; pointer-events: none;
-  border: 0 solid var(--reg-dim); background: none;
+.al-work {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill;
+  border-radius: var(--card-radius);
 }
-.al-band i { position: absolute; inset: 0; outline: 1px solid rgba(34,201,214,.5); }
+/* the trim the fit will produce, and the border it is aiming at */
+.al-ghost { position: absolute; z-index: 6; pointer-events: none; border: 1px dashed var(--mark); }
+.al-band { position: absolute; z-index: 6; pointer-events: none; }
+/* The target border, drawn as the *inner* edge of the band: `i` is inset from the
+   band box by the spec's own per-edge fractions and outlined in the accent. It is inset
+   rather than bordered because `border-width` does not accept a percentage — which
+   is why an earlier version of this, written as border widths, silently drew
+   nothing. The tint fills the band itself so a thin border still reads as one. */
+/* `outline-offset: -.5px` is load-bearing: an outline paints entirely *outside*
+   the box, so without it this line's centre sits half a pixel further out than the
+   mark's hairline (which is centred on its value) — and the two, meant to agree
+   exactly, read as 1-2 device px apart. Pulling it in by half its width puts both
+   centres on the same geometric line. */
+.al-band i {
+  position: absolute; inset: 0;
+  outline: 1px dashed rgba(242,65,140,.8); outline-offset: -.5px;
+}
 
 /* a mark: one hairline at constant width, plus two grips placed a quarter and
    three quarters along it — clear of the corners, where the border you are
@@ -666,7 +746,34 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
 .setgrid { display: grid; gap: var(--s4); grid-template-columns: minmax(0,1fr); }
 @media (min-width: 992px) { .setgrid { grid-template-columns: 13rem minmax(0,1fr); } }
 .secnav { display: flex; flex-direction: column; gap: 2px; }
-@media (min-width: 992px) { .secnav { position: sticky; top: 4.5rem; } }
+@media (min-width: 992px) { .secnav { position: sticky; top: var(--bar); } }
+
+/* A section tab strip that sits under the topbar and stays there — the frames
+   screen's Specs/Rules/Warnings, and the settings and print sidebars once they
+   collapse below `lg`. **Opaque on purpose**: a transparent sticky strip lets the
+   page scroll straight through it, which is what "the top bar overlaps" means.
+   The hairline under it is the strip's own edge, since it spans the page. */
+.tabbar {
+  position: sticky; top: var(--bar); z-index: 20;
+  display: flex; flex-direction: row; flex-wrap: wrap; gap: .25rem;
+  background: var(--ink); padding: var(--s2) 0; box-shadow: 0 1px 0 var(--rule);
+}
+@media (max-width: 991.98px) {
+  /* the sidebars become that same strip: sticky, opaque, and laid out as a row.
+     They are direct children of the grid, so the containing block is already the
+     page — no `display: contents` needed the way the card rail needed it. */
+  .setgrid > .secnav {
+    position: sticky; top: var(--bar); z-index: 20;
+    flex-direction: row; flex-wrap: wrap;
+    background: var(--ink); padding: var(--s2) 0; box-shadow: 0 1px 0 var(--rule);
+  }
+  /* a vertical divider means nothing in a row, and the count reads beside its
+     label rather than floated to an edge that is no longer there */
+  .setgrid > .secnav hr { display: none; }
+  .setgrid > .secnav button { border-left: 0; border-bottom: 2px solid transparent; }
+  .setgrid > .secnav button.on { border-bottom-color: var(--mark); }
+  .setgrid > .secnav button .cnt { float: none; margin-left: .35rem; }
+}
 .secnav button {
   text-align: left; background: none; border: 0; color: var(--dim);
   font-size: .8125rem; font-weight: 600; padding: .4rem .625rem;
@@ -695,7 +802,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
 /* ---------- sheet builder ------------------------------------------------- */
 .sheetgrid { display: grid; gap: var(--s4); grid-template-columns: minmax(0,1fr); }
 @media (min-width: 1200px) { .sheetgrid { grid-template-columns: minmax(0,1fr) 23rem; }
-  .sheetgrid > div:last-child { position: sticky; top: 4.5rem; align-self: start; } }
+  .sheetgrid > div:last-child { position: sticky; top: var(--bar); align-self: start; } }
 /* a copies stepper: − N + as one control, so the count reads as a quantity */
 .stepn { display: inline-flex; align-items: stretch; border: 1px solid var(--rule);
   border-radius: .375rem; overflow: hidden; background: var(--stock-2); }
@@ -731,9 +838,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
 .slot .mono { font-size: .5625rem; color: var(--faint); }
 .slot.used { border-style: solid; border-color: var(--rule-2); background: var(--stock-3); }
 .slot.used b { color: var(--type); }
-/* cyan is measurement in this UI, and the next slot is where one will be taken */
-.slot.next { border-color: var(--reg); border-style: solid; }
-.slot.next b { color: var(--reg); }
+/* the next slot is where the following round gets printed */
+.slot.next { border-color: var(--mark); border-style: solid; }
+.slot.next b { color: var(--mark); }
 /* the convergence trail — the whole point of iterating, so it is a picture */
 .trend { display: flex; align-items: flex-end; gap: var(--s2); height: 4.5rem; }
 .tbar { flex: 0 0 2.5rem; display: flex; flex-direction: column; align-items: center;
@@ -1352,13 +1459,17 @@ function paintBulk(){
   document.body.classList.toggle('hasbar', n > 0);
   if(!n){ host.innerHTML = ''; return; }
   const runnable = PIPE().filter(s => s.skippable);
+  // Border is not among them: it needs to be told where each card's border is,
+  // one card at a time, and there is no longer anything that would guess. Skip
+  // still applies in bulk — skipping fifty cards is a decision, not a reading.
+  const bulkRun = runnable.filter(s => s.key !== 'border');
   host.innerHTML = `<div class="actionbar">
     <b class="mono">${n} selected</b>
     <button class="btn btn-sm btn-outline-secondary" onclick="pickAll()">Select all shown</button>
     <button class="btn btn-sm btn-ghost" onclick="clearPicks()">Clear</button>
     <span class="ms-auto d-flex flex-wrap gap-2 align-items-center">
       <span class="eyebrow">Run</span>
-      ${runnable.map(s => `<button class="btn btn-sm btn-primary"
+      ${bulkRun.map(s => `<button class="btn btn-sm btn-primary"
         onclick="bulkStep('${s.key}')" ${s.tool_ready === false ? 'disabled' : ''}
         title="${s.tool_ready === false ? esc(s.tool.message) : ''}"
         >${esc(s.label)}</button>`).join('')}
@@ -1381,17 +1492,9 @@ function pickAll(){ visible().forEach(c => state.sel.add(c.id)); render(); paint
 function clearPicks(){ state.sel.clear(); render(); }
 async function bulkStep(key){
   const ids = [...state.sel];
-  // border needs to know where each card's border is, and nobody is going to
-  // drag marks onto fifty cards — so in bulk it measures each one and says so
-  const auto = key === 'border';
-  const extra = auto
-    ? ' Each card\'s border is measured off its own image; check the ones the'
-      + ' measurement was unsure about afterwards.'
-    : ' Later stages that already exist will be rebuilt.';
-  if(!await ask(`Run ${SPEC(key).label.toLowerCase()} on ${ids.length} card(s)?` + extra,
-    'Run')) return;
-  await act('/api/step', {cmd:key, ids, force:true, auto},
-    `${key} · ${ids.length} card(s)`);
+  if(!await ask(`Run ${SPEC(key).label.toLowerCase()} on ${ids.length} card(s)?`
+    + ' Later stages that already exist will be rebuilt.', 'Run')) return;
+  await act('/api/step', {cmd:key, ids, force:true}, `${key} · ${ids.length} card(s)`);
 }
 async function bulkPipe(cmd, key){
   const ids = [...state.sel];
@@ -1435,7 +1538,7 @@ function go(view){ navigate({view, id:null, step:null}); }
 function openCard(id, ev){
   if(ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button)) return true;
   if(ev) ev.preventDefault();
-  align.show = null;
+  align.show = false;   // every card opens on its target outline, not on marks
   navigate({view:'card', id, face:0, step:null});
   return false;
 }
@@ -1451,7 +1554,7 @@ function cycleFocus(d){
   focusStep(PIPE()[(i + d + PIPE().length) % PIPE().length].key);
 }
 function focusFace(f){
-  align.show = null;         // the other side is at its own point in the pipeline
+  align.show = false;        // the other side is its own border to place
   navigate({view:'card', id:state.id, face:f, step:state.step});
 }
 function flipFace(){
@@ -1552,8 +1655,14 @@ function renderCard(){
   const token = `${c.id}/${state.face}/${c.rev}`;
   if(_built === token && $('#stagewrap')){
     paintFilm(c);
-    repaintProof(c, state.step);
+    // panel first, proof second — the same order the full build below uses, and it
+    // matters: `renderStepPanel` emits an *empty* `#alpanel` and a fresh `#runbtn`,
+    // and it is `wireViewer` (inside `repaintProof`) that fills the align panel in
+    // and enables Run. Reversed, the panel it had just written was blanked again, so
+    // a done border step lost the target outline that is the whole check that the fit
+    // landed — visible only on this path, where the card shell is reused.
     renderStepPanel(c, state.step);
+    repaintProof(c, state.step);
     return;
   }
   _built = token;
@@ -1581,8 +1690,10 @@ function renderCard(){
           <div class="mono faint" style="font-size:.75rem">${esc(c.id)}</div>
           ${kindChips(c) ? `<div class="d-flex flex-wrap gap-1 mt-2">${kindChips(c)}</div>` : ''}
         </div>
-        ${faceTabs(c)}
-        <div class="film">${filmstrip(c)}</div>
+        <div class="stepnav">
+          ${faceTabs(c)}
+          <div class="film">${filmstrip(c)}</div>
+        </div>
         ${c.oversized ? `<div class="panel-2 p-2">
           <div class="eyebrow mb-1">Oversized card</div>
           <p class="hint mb-0">Printed at ${esc(trimMm(trimOf('oversized')))}mm, not
@@ -1700,7 +1811,13 @@ function unskelAll(root){
 function renderViewer(c, key){
   const s = SPEC(key), st = stStatus(c, s.stage);
   const inp = stepInput(c, key);
-  const aligning = key === 'border' && marksOn(c);
+  // The align layer owns the viewer only when there is a border to place. Pending:
+  // yes, that is the whole job. Done: only if you asked for the marks again, since
+  // otherwise the thing to look at is the result. **Skipped: never** — a skipped
+  // step is settled, and an overlay for placing a border you decided not to place
+  // is an invitation to do work that will not happen.
+  const aligning = key === 'border' && st !== 'skipped'
+    && (st !== 'done' || align.show);
 
   if(st === 'done'){
     // This step's own output. With an input to compare against, the compare tool
@@ -1731,19 +1848,44 @@ function renderViewer(c, key){
       </div>
       <div class="proof"><div class="viewer ${aligning ? 'aligning' : ''}">
         <img class="stageimg skel" alt="${esc(s.stage)}" src="${base}"
-             onload="unskel(this)">${over}
+             onload="unskel(this)">${over}${
+        // A finished border, with the spec's own outline over it: the cheapest
+        // possible check that the fit landed, since a correct master has its border
+        // exactly on this line. Nothing draggable — the marks belong to the act of
+        // aligning, not to looking at the result. It can sit straight over the
+        // viewer because a bordered master is exactly 63:88 by construction, so
+        // `object-fit: contain` fills it with no letterboxing to account for.
+        key === 'border' && !aligning ? '<div class="al-band" id="al_band"><i></i></div>' : ''}
       </div></div>
       ${fullLink(c, s.stage)}`;
   }
+  // **Skipped is settled, and it has to look settled.** It used to render exactly
+  // like pending — the dashed "this is only the input" frame — which reads as
+  // unfinished work when it is a decision that has already been made, and one the
+  // pipeline honours: `sheet.print_ready` prints a skipped step's input as the
+  // master. So the picture is shown plainly, in a solid frame, and the plate says
+  // what it is rather than what it is waiting for.
+  if(st === 'skipped' && inp){
+    return `
+      <div class="plate">
+        <span class="what"><b>${esc(inp)}</b><span class="d-none d-sm-inline">
+          — stands as the master</span></span>
+        <span class="pill skipped">${esc(s.label.toLowerCase())} skipped</span>
+      </div>
+      <div class="proof"><div class="viewer">
+        <img class="stageimg skel" alt="${esc(inp)}" onload="unskel(this)"
+             src="${viewsrc(c.id, inp, state.face)}">
+      </div></div>
+      ${fullLink(c, inp)}`;
+  }
   if(inp){
-    // an input, shown as it really looks: no dim, no text over the card
+    // pending: an input, shown as it really looks — no dim, no text over the card,
+    // and a dashed frame because this one *is* unfinished
     return `
       <div class="plate">
         <span class="what">Showing <b>${esc(inp)}</b><span class="d-none d-sm-inline">
           — the input</span></span>
-        <span class="pill ${st === 'skipped' ? 'skipped' : 'waiting'}">${
-          st === 'skipped' ? `${esc(s.label.toLowerCase())} skipped` : `not ${esc(s.label.toLowerCase())}d yet`
-        }</span>
+        <span class="pill waiting">not ${esc(s.label.toLowerCase())}d yet</span>
       </div>
       <div class="proof"><div class="viewer is-input ${aligning ? 'aligning' : ''}">
         <img class="stageimg skel" alt="${esc(inp)}" onload="unskel(this)"
@@ -1832,8 +1974,17 @@ function wireViewer(c, key){
       addEventListener('pointermove', move); addEventListener('pointerup', up);
     });
   }
-  if(key === 'border' && marksOn(c)) startAlign();
-  else if(key === 'border'){ align.on = false; renderAlignPanel(); }
+  if(key === 'border'){
+    const st = stStatus(c, SPEC('border').stage);
+    if(st !== 'skipped' && (st !== 'done' || align.show)) startAlign();
+    else {
+      align.on = false;
+      renderAlignPanel();
+      // the done view's target outline needs the resolved spec; if it has not been
+      // read yet, `loadSpecFacts` paints it when it lands
+      drawBand();
+    }
+  }
 }
 
 /* ---- card data: everything the provider says about this card -------------
@@ -1938,6 +2089,23 @@ function factColumns(groups){
   return cols.filter(c => c.length);
 }
 function retryDetails(){ delete state.details[state.id]; loadDetails(state.id); }
+
+/* `--bar` is the topbar's real height, and everything that sticks pins to it.
+   It has to be measured rather than assumed: the bar is 52.9px once its nav fits
+   on one line and 138px at 560px wide where it wraps, and the 4.5rem this
+   replaced put every sticky element 66px *underneath* the bar at that width.
+   A ResizeObserver rather than a resize listener, because the bar can change
+   height without the window changing size — a longer library path, a wrapped
+   nav, a toast pushing the row. */
+function syncBarHeight(){
+  const bar = $('.topbar'); if(!bar) return;
+  // ceil, not round: half a pixel short and everything sticky sits *under* the bar
+  const set = () => document.documentElement.style.setProperty(
+    '--bar', `${Math.ceil(bar.getBoundingClientRect().height)}px`);
+  set();
+  if(typeof ResizeObserver === 'function') new ResizeObserver(set).observe(bar);
+  else addEventListener('resize', set);
+}
 /* The column count is width-derived, so a resize has to re-lay it out — but
    only when the count actually changes, and never mid-drag. */
 let _factCols = 0, _resizeTimer;
@@ -1990,8 +2158,10 @@ function optField(o){
     return `<div class="opt">${ctl}<span class="why">${esc(o.help)}</span></div>`;
   }
   if(o.kind === 'choice'){
+    // what "unset" means comes from the option's own schema — border's frame falls
+    // back to the card's set, upscale's factor to whatever reaches the target
     const auto = o.optional
-      ? `<option value="">Automatic (card's set)</option>` : '';
+      ? `<option value="">${esc(o.auto_label || 'Automatic')}</option>` : '';
     ctl = `<select class="form-select form-select-sm mono" id="${id}" onchange="onSetting()">${auto}${
       o.choices.map(v => `<option ${String(v) === String(o.default) ? 'selected' : ''}
         >${esc(String(v))}</option>`).join('')}</select>`;
@@ -1999,9 +2169,13 @@ function optField(o){
     // the range and increment come from the option's own schema — the API refuses
     // anything outside it, so the control must not offer it
     const bound = (name, v) => v === null || v === undefined ? '' : ` ${name}="${v}"`;
-    ctl = `<input class="form-control form-control-sm mono" type="number" id="${id}"
+    // the unit comes from the option's own schema, like the settings screen's does —
+    // "1400" alone is a number nobody can interpret, "1400 dpi" is a resolution
+    ctl = `<span class="d-flex align-items-center gap-1"><input
+      class="form-control form-control-sm mono" type="number" id="${id}"
       value="${esc(o.default ?? '')}"${bound('min', o.low)}${bound('max', o.high)}${
-      bound('step', o.step_by) || ' step="any"'} oninput="onSetting()">`;
+      bound('step', o.step_by) || ' step="any"'} oninput="onSetting()">${
+      o.unit ? `<span class="faint" style="font-size:.75rem">${esc(o.unit)}</span>` : ''}</span>`;
   }
   return `<div class="opt">
     <div class="setting"><label for="${id}">${esc(o.label)}</label>${ctl}</div>
@@ -2032,17 +2206,16 @@ function sourceExtra(){
 function footer(c, key, st){
   const s = SPEC(key), done = st === 'done';
   const first = key === PIPE()[0].key;
-  // border without marks measures the border itself, so the button says so
-  const measuring = key === 'border' && !(align.on && align.plan);
-  const verb = measuring ? 'Measure & reshape' : s.run_label;
-  const label = done ? (first ? 'Fetch again' : `${verb} again`) : verb;
+  const label = done ? (first ? 'Fetch again' : `${s.run_label} again`) : s.run_label;
+  // Border needs the marks placed before it can fit anything, so it starts
+  // disabled and `syncRunLabel` opens it once they are up (or at once, if the
+  // printing is borderless and there is nothing to place).
+  const held = key === 'border' && !borderReady();
   const run = first
     ? `<button class="btn btn-sm btn-primary" onclick="refetch()">${esc(label)}</button>`
     : `<button class="btn btn-sm btn-primary" id="runbtn" onclick="runStep('${key}')"
-        ${runnable(c, key) ? '' : 'disabled'}
-        title="${measuring
-          ? 'Reads the border position off the image, then fits to the frame spec'
-          : 'Fits to the frame spec using the marks you placed'}"
+        ${runnable(c, key) && !held ? '' : 'disabled'}
+        title="${held ? 'Align the border first — nothing has measured where it sits' : ''}"
         >${esc(label)}</button>`;
 
   const sec = [];
@@ -2081,13 +2254,14 @@ async function runStep(cmd, bothSides){
   const body = {cmd, ids:[c.id], settings:stepSettings(cmd), force:true};
   if(!bothSides && twoSided(c)) body.face = state.face + 1;
   if(cmd === 'border'){
-    if(align.on && align.plan){   // marks are placed: fit to exactly those
+    if(align.on && align.plan && marksOn()){  // marks are placed: fit to those
       body.inner = {top:align.blue.t, right:align.blue.r,
                     bottom:align.blue.b, left:align.blue.l};
-    } else {
-      // nobody placed marks, and a reshape with no idea where the border is
-      // would do nothing at all — so measure it first and say so on the button
-      body.auto = true;
+    } else if(!noBorder()){
+      // Nothing knows where this card's border is, and nothing is going to guess.
+      // A borderless printing needs no marks, so it falls through to plain `border`.
+      toast('Align the border first — open the marks and place them.');
+      return;
     }
   }
   await act('/api/step', body, `${cmd} · ${c.id}`);
@@ -2126,6 +2300,15 @@ async function importOriginal(inp){
 }
 function afterStep(cmd){   // advance focus on run/skip; stay put on reset/unskip
   const c = card(); if(!c) return;
+  // The marks belong to the *act* of aligning, and that act is over. Left up, they
+  // survived the run: coming back to a done border step opened on draggable marks
+  // over the original instead of on the master with its target outline, which is the
+  // one cheap check that the fit landed. Re-opening them is one click ("Align it
+  // again") and asking for them is the only thing that should turn them on.
+  align.show = false;
+  // the fit that was just recorded, and the pixels it was measured against, are both
+  // answers this held a copy of — re-read them rather than draw the previous run's
+  align.meas = null; align.facts = null;
   let step = state.step;
   if(cmd !== 'reset' && cmd !== 'unskip'){ const n = nextActionable(c); if(n) step = n; }
   // replace, not push: the focus moved as a *result* of the action, so Back
@@ -2141,63 +2324,100 @@ async function delCard(){
 }
 
 /* ---------- frame align --------------------------------------------------
-   Put the four marks on the card's actual inner border edge. The card's game +
-   set give the true border width, so one per-edge extension fixes aspect AND
-   border together — never guessed automatically.
+   Where a card's printed border sits is a *reading*, and proxdex does not take it
+   for you. It used to: `detect_inset` scanned the image and pre-placed the marks.
+   That is gone, because the reading was wrong in ways nothing on screen showed —
+   it over-read a black border whose frame was also dark, it read past a
+   decorated frame's keylines, and it found a border on a full-bleed card that
+   has none. A number no one took, presented as a measurement, is worse than no
+   number: it looks finished.
 
-   The marks are always live while Border is focused: there is no mode to enter
-   and nothing to cancel. A mark can be dragged, or selected and nudged with the
-   arrow keys, or typed as a percentage — because "close enough by eye" is
-   exactly what the border step exists to avoid. */
+   So the border step opens showing **where the border should be** — the frame
+   spec's own dashed outline over the untouched original, with nothing to drag
+   and nothing already decided. From there you either skip the step or open the
+   marks and place them yourself. A mark can be dragged, or selected and nudged
+   with the arrow keys, or typed as a percentage. */
 const align = {
   on:false, meas:null, facts:null, blue:{t:.08, r:.08, b:.08, l:.08},
   plan:null, guide:'', sel:null, img:null,
   // which card+side the current marks were placed on, so switching either one
   // starts from a fresh rectangle instead of inheriting someone else's border
   owner:null,
-  // whether the marks are drawn on the card. Not a mode you enter — a setting in
-  // the panel like every other, and left null so it can default per state: on
-  // while there is a border to place, off once there is a result to look at
-  // (the marks live over the source, so they'd hide it).
-  show:null,
+  // whether the marks are on the card and draggable. Always starts **off**: the
+  // step opens on the target outline, and placing the marks is a thing you
+  // choose to do. It is not a mode — the panel and Skip are there either way.
+  show:false,
 };
-/* The marks are live by default exactly when there is still a border to place. */
 /* Inline handlers must never touch a top-level object by name. An inline
    handler's scope chain starts at the *element*, and an HTMLElement carries a
    legacy `align` property — so `align.show = …` in an attribute quietly writes
    to a discarded String wrapper instead of the align state. Every handler goes
    through a named function for that reason. */
-function toggleMarks(el){ align.show = el.checked; renderCard(); }
+function showMarks(on){ align.show = !!on; renderCard(); }
+/* Back to where the spec says the border should be — the same place the marks
+   are first placed, so Reset means "undo my dragging", not "jump to 8%". */
 function resetMarks(){
-  align.blue = {t:.08, r:.08, b:.08, l:.08};
+  align.blue = targetMarks();
   positionLines(); computeExtend(); syncRunLabel();
 }
 function setSearchRelated(on){ state.search.related = on; }
 
-const marksOn = c => align.show === null
-  ? stStatus(c, SPEC('border').stage) !== 'done' : align.show;
+/* The spec's own inset, as mark positions. A borderless spec is all zeros, which
+   is exactly right: the marks would sit on the image edges. */
+function targetMarks(){
+  const g = align.meas && activeGuide();
+  return g ? {t:g.inset[0], r:g.inset[1], b:g.inset[2], l:g.inset[3]}
+           : {t:.08, r:.08, b:.08, l:.08};
+}
+/* Nothing to align on a borderless print: there is no frame to put a mark on,
+   and the fit is pure aspect correction, so `border` runs it on its own. */
+const noBorder = () => !!(align.meas && activeGuide() && activeGuide().frameless);
+const marksOn = () => align.show && !noBorder();
 const EDGE_NAME = {t:'top', r:'right', b:'bottom', l:'left'};
 
 /* Read this side's image size and frame resolution without turning the marks on.
    Keyed by card and side so a repaint cannot start a second request, and cleared
    by every action that could change the answer (a pin, a run). */
+/* Who the viewer belongs to right now — card, side **and step**. Both readers below
+   await a request and then write into `.viewer`, so each has to re-check that the
+   answer is still about the thing on screen. Leaving the step out of it is what let
+   the align layer land on the *upscale* proof: Run border → focus advances → the
+   in-flight `/api/frame` resolves → `buildAlignLayer` grabs `$('.viewer')`, which is
+   now the next step's, hides its image and draws marks over it. That read as three
+   separate bugs (marks on upscayl, marks on a done border, upscayl showing the
+   pre-border picture) and was one missing guard. */
+const viewerOwner = c => `${c.id}/${state.face}/${state.step}`;
+
 async function loadSpecFacts(c){
   const key = `${c.id}/${state.face}`;
   if(align.meas || align.facts === key) return;
   align.facts = key;
+  const drawnFor = viewerOwner(c);
   try{
     const m = await get(`/api/frame/${encodeURIComponent(c.id)}`
       + `?stage=${PIPE()[0].stage}&face=${state.face}`);
-    if(m && !m.error && align.facts === key){ align.meas = m; renderAlignPanel(); }
+    if(m && !m.error && align.facts === key){
+      align.meas = m;
+      if(viewerOwner(c) !== drawnFor) return;   // we are looking at something else now
+      renderAlignPanel();
+      if(!align.on) drawBand();   // the done view's outline, now that the spec is known
+    }
   } catch { /* the panel simply says nothing about the spec */ }
 }
 
 async function startAlign(){
   const c = card(); if(!c) return;
+  // whose viewer this is *now* — `align.owner` below is a different thing (the card
+  // and side the mark positions belong to, which survives a step change on purpose)
+  const drawnFor = viewerOwner(c);
+  let meas = null;
   try {
-    align.meas = await get(`/api/frame/${encodeURIComponent(c.id)}`
+    meas = await get(`/api/frame/${encodeURIComponent(c.id)}`
       + `?stage=${PIPE()[0].stage}&face=${state.face}`);
-  } catch { align.meas = null; }
+  } catch { meas = null; }
+  // the await is the whole reason for this check: focus may have moved on
+  if(viewerOwner(c) !== drawnFor) return;
+  align.meas = meas;
   const m = align.meas;
   if(!m || m.error){ align.on = false; renderAlignPanel(); return; }
   align.on = true;
@@ -2205,19 +2425,20 @@ async function startAlign(){
   const fresh = align.owner !== owner;
   if(fresh){ align.owner = owner; align.blue = {t:.08, r:.08, b:.08, l:.08}; }
   align.guide = $('#so_frame') ? $('#so_frame').value : '';
-  // show the scan at its own aspect: the marks measure the source, undistorted
+  // show the scan at its own aspect: the marks are placed on the source, undistorted
   const v = $('.viewer');
   if(v) v.style.aspectRatio = `${m.w} / ${m.h}`;
   // the loupe reads real source pixels, so it needs the image itself
   align.img = new Image();
   align.img.src = viewsrc(c.id, PIPE()[0].stage, state.face);
+  // the marks start where the spec says the border should be. Not a measurement
+  // of this card — the target, stated plainly, which is the honest starting point
+  // and the one place a person can drag *from* rather than guess at.
+  if(fresh) align.blue = targetMarks();
   buildAlignLayer(c);
   renderAlignPanel();
-  positionLines();
-  computeExtend();
-  // land the marks on a measurement rather than on an arbitrary 8%: it is where
-  // the border actually is, and every mark is still yours to move
-  if(fresh) measureBorder();
+  if(marksOn()){ positionLines(); computeExtend(); }
+  else drawTarget();
 }
 function buildAlignLayer(c){
   endDrag();
@@ -2231,7 +2452,7 @@ function buildAlignLayer(c){
     <img class="al-work" alt="Original scan" src="${viewsrc(c.id, PIPE()[0].stage, state.face)}">
     <div class="al-ghost" id="al_ghost"></div>
     <div class="al-band" id="al_band"><i></i></div>
-    ${['top','bottom','left','right'].map(e => `
+    ${!marksOn() ? '' : ['top','bottom','left','right'].map(e => `
       <div class="al-line ${e}" data-e="${e[0]}" tabindex="0"
            role="slider" aria-label="${e} border edge">
         <span class="al-tag">${e[0].toUpperCase()}</span>
@@ -2412,27 +2633,49 @@ function computeExtend(){
   align.plan = solveFit(align.meas, align.blue, stretch, activeGuide());
   drawGhost();
   renderExtReadout();
+  // the Run button is held shut until there is a fit to run, and this is the
+  // moment there is one — the panel is drawn before the plan is solved, so
+  // stating it only there would leave the button disabled with marks up
+  syncRunLabel();
 }
-/* The result, drawn where it will actually land: a dashed outline for the trim
-   the fit produces, and a cyan band for the border it is aiming at. Both are in
-   the source image's own coordinates, so you can see the marks against them. */
+/* Where the border should be, on **this image** — the spec's own inset taken
+   against the picture in front of you, which is the only frame of reference the
+   marks share. It used to be drawn on the *trim* box while the marks were up, and
+   because that box is anchored at the top left, the whole difference between trim
+   and image (a pixel or two) landed on the right and bottom edges: the two things
+   that are the same number disagreed there and nowhere else. The trim is the
+   ghost's job; the band's job is to be comparable with the marks. */
+function drawBand(){
+  const band = $('#al_band'); if(!band) return;
+  const g = align.meas && activeGuide();
+  if(!g || g.frameless){ band.hidden = true; return; }
+  band.hidden = false;
+  Object.assign(band.style, {left:'0%', top:'0%', width:'100%', height:'100%'});
+  setBandLine(band, g.inset);
+}
+/* The step's opening state: the target alone. No ghost, because with no marks
+   placed there is no fit to preview yet. */
+function drawTarget(){
+  const ghost = $('#al_ghost');
+  if(ghost) ghost.hidden = true;
+  drawBand();
+}
+/* The target line, inset from the band box by the spec's four fractions. */
+function setBandLine(band, inset){
+  const i = band.querySelector('i'); if(!i) return;
+  const [t, r, b, l] = inset;
+  i.style.inset = `${t * 100}% ${r * 100}% ${b * 100}% ${l * 100}%`;
+}
 function drawGhost(){
-  const ghost = $('#al_ghost'), band = $('#al_band'), p = align.plan;
-  if(!ghost || !band) return;
-  if(!p){ ghost.hidden = band.hidden = true; return; }
-  ghost.hidden = band.hidden = false;
+  const ghost = $('#al_ghost'), p = align.plan;
+  if(!ghost) return;
+  if(!p){ ghost.hidden = true; drawBand(); return; }
+  ghost.hidden = false;
   const pct = (v, span) => (v / span) * 100;
   const L = -pct(p.ext.left, p.w2), T = -pct(p.ext.top, p.h2);
   const W = pct(p.tw, p.w2), H = pct(p.th, p.h2);
   Object.assign(ghost.style, {left:`${L}%`, top:`${T}%`, width:`${W}%`, height:`${H}%`});
-  // the target border sits inside the trim, by the guide's own inset
-  const g = p.guide;
-  Object.assign(band.style, {
-    left:`${L}%`, top:`${T}%`, width:`${W}%`, height:`${H}%`,
-    borderTopWidth: `${g.top * H}%`, borderBottomWidth: `${g.bottom * H}%`,
-    borderLeftWidth: `${g.left * W}%`, borderRightWidth: `${g.right * W}%`,
-    borderStyle: 'solid',
-  });
+  drawBand();
 }
 function renderExtReadout(){
   const p = align.plan, rd = $('#al_read'); if(!rd) return;
@@ -2449,14 +2692,6 @@ function syncEdgeFields(){
     const el = $('#al_' + e);
     if(el && document.activeElement !== el) el.value = (align.blue[e] * 100).toFixed(2);
   }
-}
-function marksToggle(c){
-  const on = marksOn(c);
-  return `<div class="form-check mb-2">
-    <input class="form-check-input" type="checkbox" id="al_show" ${on ? 'checked' : ''}
-           onchange="toggleMarks(this)">
-    <label class="form-check-label" style="font-size:.8125rem" for="al_show">
-      Show the align marks on the card</label></div>`;
 }
 /* Which spec is in force, *why*, and the one control that changes it for good.
    Shown whether or not the marks are up: it is a fact about the card, not about
@@ -2481,36 +2716,83 @@ function whyThisSpec(){
 function renderAlignPanel(){
   const p = $('#alpanel'), c = card(); if(!p || !c) return;
   if(!align.on){
+    // The layer is down: either there is no source yet, the step is skipped, or it
+    // is done and you are looking at the result. Which spec is in force is a fact
+    // about the card either way, so it is still stated — and when the step could be
+    // (re)done, the way back to the marks is here.
     const noSource = stStatus(c, PIPE()[0].stage) !== 'done';
+    const st = stStatus(c, SPEC('border').stage);
+    const openable = !noSource && st !== 'skipped';
     p.innerHTML = `<hr class="rule" style="margin:.875rem 0">
-      <div class="eyebrow mb-1">Where the border is now</div>
+      <div class="eyebrow mb-1">Where the border should be</div>
       ${noSource
-        ? `<p class="hint mb-0">Fetch this side's original first — the fit is measured
-           against it.</p>`
-        : marksToggle(c) + `<p class="hint mb-0">Turn the marks on to place the inner
-           border edge again and reshape from the original.</p>` + whyThisSpec()}`;
-    // which spec is in force is a fact about the card, so it is read even with the
-    // marks down — once per card and side, and the panel repaints when it lands
+        ? `<p class="hint mb-0">Fetch this side's original first — the border is
+           placed on it.</p>`
+        : (st === 'skipped'
+            ? `<p class="hint mb-0">Border is skipped, so the original stands as the
+               master. Unskip it to place a border.</p>`
+            : `<p class="hint mb-0">The frame spec for this card${
+                st === 'done' ? ', which this master was fitted to' : ', ready to align against'
+              }.</p>`) + whyThisSpec()}
+      ${openable ? `<div class="d-grid gap-2 mt-2">
+        <button class="btn btn-sm btn-outline-primary" onclick="showMarks(true)">${
+          st === 'done' ? 'Align it again' : 'Align the border'}</button></div>` : ''}`;
+    // read once per card and side; the panel repaints when it lands
     if(!noSource) loadSpecFacts(c);
     return;
   }
   const g = activeGuide();
-  // the spec's own account of where its numbers came from, verbatim and unchipped.
-  // There is no grade to show: a spec is four numbers and this sentence.
-  const warn = g.note ? `
+  // Nothing to place on a borderless print, so the panel says so instead of
+  // offering marks that would sit on the image edges and mean nothing.
+  if(g.frameless){
+    p.innerHTML = `<hr class="rule" style="margin:.875rem 0">
+      <div class="eyebrow mb-1">Where the border should be</div>
+      <div class="d-flex gap-2 align-items-start mb-2">
+        <span class="chip faint flex-shrink-0">no border</span>
+        <span class="hint">${esc(g.name)}</span>
+      </div>
+      <p class="hint">There is no printed frame to align to, so this reshapes to the
+        card aspect and nothing else. Run it as it is.</p>
+      ${whyThisSpec()}`;
+    syncRunLabel();
+    return;
+  }
+  if(!marksOn()){
+    p.innerHTML = `<hr class="rule" style="margin:.875rem 0">
+      <div class="eyebrow mb-1">Where the border should be</div>
+      <div class="d-flex gap-2 align-items-start mb-2">
+        <span class="chip faint flex-shrink-0">this spec</span>
+        <span class="hint">${esc(g.name)}</span>
+      </div>
+      <p class="hint">The <b style="color:var(--mark)">dashed</b> outline is where
+        this card's border belongs. Nothing has measured where it actually sits — that is
+        yours to place, because a border read off the image is wrong in ways no
+        screen shows until the card is cut.</p>
+      <div class="d-grid gap-2 mb-2">
+        <button class="btn btn-sm btn-outline-primary" onclick="showMarks(true)">
+          Align the border</button>
+      </div>
+      ${whyThisSpec()}`;
+    syncRunLabel();
+    return;
+  }
+  // which spec the marks started on, named. There is no grade to show and no
+  // provenance sentence: a spec is four numbers, and where a shipped one's came from
+  // is written down a card per row in `docs/measuring-frames.md`.
+  const warn = `
     <div class="d-flex gap-2 align-items-start mt-2">
       <span class="chip faint flex-shrink-0">${g.frameless ? 'no border' : 'this spec'}</span>
-      <span class="hint">${esc(g.note)}</span>
-    </div>` : '';
+      <span class="hint">${esc(g.name)}</span>
+    </div>`;
   const why = whyThisSpec();
   p.innerHTML = `
     <hr class="rule" style="margin:.875rem 0">
     <div class="eyebrow mb-1">Where the border is now</div>
-    ${marksToggle(c)}
     <p class="hint">Drag <b style="color:var(--mark)">T R B L</b> onto the card's inner
       border edge — a loupe follows each one. Arrow keys nudge the selected mark;
-      the <b style="color:var(--reg)">cyan</b> outline is the trim you'll get and the
-      band is the border it's aiming at.</p>
+      the <b style="color:var(--mark)">dashed</b> outlines are the trim you'll get and
+      the border it's aiming at. They start on the spec's own numbers, so
+      what you are doing is moving them to where this card's border really is.</p>
     <div class="edges mb-2">
       ${['t','r','b','l'].map(e => `<div>
         <label for="al_${e}">${EDGE_NAME[e]} %</label>
@@ -2519,11 +2801,11 @@ function renderAlignPanel(){
                onfocus="selectEdge('${e}')"></div>`).join('')}
     </div>
     <div class="d-flex gap-2 mb-2">
-      <button class="btn btn-sm btn-outline-secondary flex-fill" onclick="measureBorder()"
-        title="Read the border's position off the image">Measure it</button>
-      <button class="btn btn-sm btn-ghost flex-fill" onclick="resetMarks()">Reset</button>
+      <button class="btn btn-sm btn-outline-secondary flex-fill" onclick="resetMarks()"
+        title="Back to the spec's own numbers">Reset</button>
+      <button class="btn btn-sm btn-ghost flex-fill" onclick="showMarks(false)"
+        title="Put the marks away and look at the target again">Done</button>
     </div>
-    <div id="al_measured"></div>
     ${warn}
     ${why}
     <div id="al_read" class="mt-2"></div>`;
@@ -2550,48 +2832,22 @@ async function unpinCard(){
   renderCard();
 }
 
-/* The border button either measures first or uses the marks, and the marks come
-   up after the panel is drawn — so its label is re-stated once they do, rather
-   than promising one thing and doing the other. */
+/* Border can only run once it knows where the border is, and the marks come up
+   after the panel is drawn — so the button is re-stated when they do rather than
+   offering a reshape that has nothing to reshape against. A borderless print is
+   the exception: there is nothing to place, so it is runnable from the start. */
+function borderReady(){ return noBorder() || !!(align.on && align.plan && marksOn()); }
 function syncRunLabel(){
   const btn = $('#runbtn'), c = card();
   if(!btn || !c || state.step !== 'border') return;
-  const s = SPEC('border'), marks = align.on && align.plan;
-  const verb = marks ? s.run_label : 'Measure & reshape';
-  btn.textContent = stStatus(c, s.stage) === 'done' ? `${verb} again` : verb;
-  btn.title = marks
-    ? 'Fits to the frame spec using the marks you placed'
-    : 'Reads the border position off the image, then fits to the frame spec';
-}
-
-/* Read the border's position off the image and put the marks there. A
-   pre-placement, not a decision: each edge reports how many of its scan lines
-   agreed, the weak ones are named, and every mark is still yours to nudge. */
-async function measureBorder(){
-  const c = card(); if(!c) return;
-  const host = $('#al_measured');
-  if(host) host.innerHTML = '<p class="hint mb-2">Measuring…</p>';
-  let d;
-  try{
-    d = await get(`/api/detect/${encodeURIComponent(c.id)}?stage=${PIPE()[0].stage}`
-      + `&face=${state.face}`);
-  } catch(e){ d = {error: String(e)}; }
-  if(!host) return;
-  if(d.error){
-    host.innerHTML = `<p class="hint mb-2" style="color:var(--bad)">${esc(d.error)}</p>`;
-    return;
-  }
-  const [t, r, b, l] = d.inset;
-  align.blue = {t, r, b, l};
-  positionLines(); computeExtend();
-  syncRunLabel();
-  const weak = d.weak || [];
-  host.innerHTML = `
-    <div class="d-flex align-items-start gap-2 mb-2">
-      <span class="chip ${d.reliable ? 'good' : 'warn'} flex-shrink-0">${
-        d.frameless ? 'no frame' : d.reliable ? 'clean' : 'check ' + weak.join(' + ')}</span>
-      <span class="hint">${esc(d.note)}</span>
-    </div>`;
+  const s = SPEC('border'), ready = borderReady();
+  btn.textContent = stStatus(c, s.stage) === 'done'
+    ? `${s.run_label} again` : s.run_label;
+  btn.disabled = !ready;
+  btn.title = ready
+    ? (noBorder() ? 'Reshapes to the card aspect — this printing has no frame'
+                  : 'Fits to the frame spec using the marks you placed')
+    : 'Align the border first — nothing has measured where it sits';
 }
 
 /* ---------- search -------------------------------------------------------
@@ -3147,7 +3403,7 @@ async function renderFrames(){
         secret-rare tail is not the same frame as its set's ordinary cards — so rules
         pick per card, and nobody chooses a spec by hand.</span>
     </div>
-    <div class="secnav mb-3" style="display:flex;gap:.25rem;flex-wrap:wrap">
+    <div class="secnav tabbar mb-3">
       ${tabs.map(([k,label]) => `<button class="${framesUi.tab === k ? 'on' : ''}"
         onclick="pickFramesTab('${k}')">${label}</button>`).join('')}
     </div>
@@ -3165,19 +3421,20 @@ function paintFrames(){
 }
 
 /* Every spec, its numbers in millimetres (a border is a physical width — nobody
-   measures a percentage with calipers) and the note saying where they came from.
-   That note is the *whole* account of how much to trust a spec: there is no
-   confidence chip, because the one that used to sit here graded a border read off
-   a publisher's scan as trustworthy, and a scan's crop shifts every reading taken
-   from it by the same unknown amount. */
+   measures a percentage with calipers), of a real card — 63.5×88.9 mm, which is what
+   both games print on. There is no confidence chip and no provenance column: the
+   grade that used to sit here called a border read off a publisher's scan
+   trustworthy, and a scan's crop shifts every reading taken from it by the same
+   unknown amount. Where a shipped number came from is written down one card per row
+   in `docs/measuring-frames.md`. */
 function specsPanel(reg){
   const rows = reg.specs.map(g => `<tr>
       <td class="mono">${esc(g.id)}</td>
-      <td>${esc(g.name)}<div class="hint">${esc(g.note || '—')}</div></td>
+      <td>${esc(g.name)}</td>
       <td class="faint">${esc(g.game || 'any')}</td>
       <td class="mono">${g.frameless ? '<span class="faint">none</span>'
         : g.mm.map(v => v.toFixed(2)).join(' / ')}</td>
-      <td class="mono faint">${g.ref_mm.map(v => (+v).toFixed(1)).join('×')}</td>
+      <td class="faint">${g.oversized ? 'oversized' : ''}</td>
       <td class="text-end">
         ${reg.reserved.includes(g.id) ? '<span class="chip faint">reserved</span>' :
           `<button class="btn btn-sm btn-ghost" onclick="editSpec('${esc(g.id)}')">Edit</button>`}
@@ -3187,8 +3444,8 @@ function specsPanel(reg){
     </tr>`).join('');
   return `<div class="panel p-3 mb-3">
     <div class="tblwrap"><table class="tbl">
-      <thead><tr><th>Spec</th><th>Name &amp; where the numbers came from</th><th>Game</th>
-        <th>T / R / B / L mm</th><th>Of a card</th><th></th></tr></thead>
+      <thead><tr><th>Spec</th><th>Name</th><th>Game</th>
+        <th>T / R / B / L mm</th><th>Card</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>
   </div>
   ${specForm()}`;
@@ -3206,10 +3463,9 @@ function specForm(){
       min="0" max="20" value="${e[k] ?? ''}"></div>`;
   return `<div class="panel p-3">
     <div class="eyebrow mb-2">${e.id ? 'Correct ' + esc(e.id) : 'Add a spec'}</div>
-    <p class="hint">Four border widths off a real card, measured from the cut edge to
-      the inner edge of the printed border, at the middle of each edge. Say which card
-      in the note — that sentence is the only record of how much to trust these
-      numbers, and it is shown wherever the fit is reported.</p>
+    <p class="hint">Four border widths off a real card — <b>63.5×88.9 mm</b>, the stock
+      both games print on — measured from the cut edge to the inner edge of the printed
+      border, at the middle of each edge.</p>
     <div class="row g-2 mb-2">
       <div class="col-sm-4"><label class="eyebrow d-block mb-1" for="sp_id">Id</label>
         <input class="form-control form-control-sm mono" id="sp_id" placeholder="pokemon-swsh"
@@ -3227,22 +3483,11 @@ function specForm(){
     <div class="edges mb-2">${num('top','Top')}${num('right','Right')}${num('bottom','Bottom')}${num('left','Left')}</div>
     <div class="form-check mb-2">
       <input class="form-check-input" type="checkbox" id="sp_oversized" ${e.oversized ? 'checked' : ''}>
-      <label class="form-check-label" for="sp_oversized">Measured on an oversized card (89×127 mm)</label>
+      <label class="form-check-label" style="font-size:.8125rem" for="sp_oversized">
+        Measured on an <b>oversized</b> card (89&times;127 mm) — a plane, scheme or Vanguard</label>
+      <p class="hint mb-0">The same border is a smaller <i>fraction</i> of a bigger card, so
+        this changes what gets stored. Leave it off for an ordinary 63.5&times;88.9 mm card.</p>
     </div>
-    <div class="row g-2 mb-2">
-      <div class="col-sm-3"><label class="eyebrow d-block mb-1" for="sp_card_w">Card width mm</label>
-        <input class="form-control form-control-sm" id="sp_card_w" type="number" step="0.1"
-          min="0" max="200" placeholder="63" value="${e.card_w ?? ''}"></div>
-      <div class="col-sm-3"><label class="eyebrow d-block mb-1" for="sp_card_h">Card height mm</label>
-        <input class="form-control form-control-sm" id="sp_card_h" type="number" step="0.1"
-          min="0" max="300" placeholder="88" value="${e.card_h ?? ''}"></div>
-      <div class="col-sm-6"><p class="hint mb-0 mt-4">Leave blank for the standard 63×88.
-        A real Magic or Pokémon card is <b>63.5×88.9 mm</b> — if you put calipers on one,
-        say so here: the insets stored are fractions of whatever you measured.</p></div>
-    </div>
-    <label class="eyebrow d-block mb-1" for="sp_note">Where these numbers came from</label>
-    <input class="form-control form-control-sm mb-2" id="sp_note"
-      placeholder="calipers on m15-281 Forest, 3 readings per edge" value="${esc(e.note || '')}">
     <div class="d-flex gap-2">
       <button class="btn btn-sm btn-primary" onclick="saveSpec()">Save spec</button>
       ${e.id ? '<button class="btn btn-sm btn-ghost" onclick="cancelSpec()">Cancel</button>' : ''}
@@ -3252,11 +3497,7 @@ function specForm(){
 function editSpec(id){
   const g = (framesUi.reg.specs || []).find(s => s.id === id);
   if(!g) return;
-  const oversized = Math.round(g.ref_mm[0]) === 89;
-  framesUi.editing = {id:g.id, name:g.name, game:g.game || '', note:g.note,
-                      oversized:oversized,
-                      card_w:oversized ? '' : (g.ref_mm[0] === 63 ? '' : g.ref_mm[0]),
-                      card_h:oversized ? '' : (g.ref_mm[1] === 88 ? '' : g.ref_mm[1]),
+  framesUi.editing = {id:g.id, name:g.name, game:g.game || '', oversized:!!g.oversized,
                       top:+g.mm[0].toFixed(3), right:+g.mm[1].toFixed(3),
                       bottom:+g.mm[2].toFixed(3), left:+g.mm[3].toFixed(3)};
   framesUi.tab = 'specs';
@@ -3272,9 +3513,7 @@ async function saveSpec(){
     game: v('game') || null,
     top:+v('top') || 0, right:+v('right') || 0,
     bottom:+v('bottom') || 0, left:+v('left') || 0,
-    note: v('note').trim(),
     oversized: !!($('#sp_oversized') && $('#sp_oversized').checked),
-    card_w: +v('card_w') || null, card_h: +v('card_h') || null,
   };
   if(!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(body.id))
     return toast('An id is lowercase letters, digits and single dashes — it becomes a filename.', 9000);
@@ -3543,10 +3782,42 @@ function paintSection(){
     return;
   }
   const sec = settingsUi.section, kv = state.cfg.sections[sec] || {};
-  host.innerHTML = `<div class="panel p-3">
+  host.innerHTML = stalePanel() + `<div class="panel p-3">
     ${Object.entries(kv).map(([k, v]) => fieldFor(sec, k, v)).join('')
       || '<p class="hint mb-0">This section is empty.</p>'}</div>`;
   paintSaveBar();
+}
+/* Keys nothing reads any more. The screen has always *said* they were ignored and
+   left it there, which is half an answer: a key left behind by a removed feature
+   looks like it is configuring something, and a real library carries a handful (a
+   border `thresh` from the deleted auto-detector, a grade `normalize` from the
+   deleted white-balance). The server names them, so this and `config prune` cannot
+   disagree about which ones go. */
+function stalePanel(){
+  const stale = state.cfg.stale || [];
+  if(!stale.length) return '';
+  return `<div class="panel p-3 mb-3">
+    <div class="d-flex gap-2 align-items-start flex-wrap">
+      <div>
+        <div class="eyebrow mb-1">${stale.length} ignored key${stale.length === 1 ? '' : 's'}</div>
+        <p class="hint mb-1">Nothing reads ${stale.length === 1 ? 'this' : 'these'} any more —
+          left behind by a feature that was removed. Sitting in the file
+          ${stale.length === 1 ? 'it looks' : 'they look'} like
+          ${stale.length === 1 ? 'a setting' : 'settings'}, so ${stale.length === 1 ? 'it does' : 'they do'} more harm than good.</p>
+        <div class="mono hint">${stale.map(esc).join(' · ')}</div>
+      </div>
+      <button class="btn btn-sm btn-outline-primary ms-auto flex-shrink-0"
+        onclick="pruneConfig()">Remove ${stale.length === 1 ? 'it' : 'them'}</button>
+    </div>
+  </div>`;
+}
+async function pruneConfig(){
+  const stale = state.cfg.stale || [];
+  if(!await ask(`Delete ${stale.length} ignored key(s) from proxdex.toml?`, 'Remove')) return;
+  if(!await act('/api/config/prune', {}, 'Removed the ignored keys')) return;
+  state.cfg = null;                    // re-read: the file just changed
+  settingsUi.dirty.clear();
+  renderSettings();
 }
 /* One row per setting: what it is, what it does, what it defaults to, and the
    raw key it writes — plus the control, typed from the value and from the
@@ -4579,6 +4850,7 @@ function showLibPath(root){
 /* Start from whatever URL we were opened at (deep link, reload, bookmark). The
    route is re-read after /api/meta lands, because a step name in the path can
    only be validated against the pipeline the server declares. */
+syncBarHeight();   // before the first paint: everything sticky pins to it
 refresh().then(() => {
   Object.assign(state, routeFromUrl());
   history.replaceState(routeState(), '', currentUrl());

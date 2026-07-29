@@ -350,6 +350,139 @@ def availability(cfg: Config) -> Availability:
     return resolve(cfg).probe(cfg)
 
 
+#: millimetres per inch, so a dpi target becomes a pixel count
+_MM_PER_INCH = 25.4
+
+#: how far under the minimum still counts as clearing it. One pixel of rounding, no
+#: more — this exists so a card computing to 999.6 dpi is not sent up a whole rung.
+_SLACK = 0.995
+
+
+def effective(scale: UpscaylScale, *, double: bool) -> int:
+    """How much bigger the output really is. "Double Upscayl" runs the model a
+    second time over its own output, so the factor is *squared* rather than
+    doubled: 2× twice is 4×, and 4× twice is 16×."""
+    return scale.value**2 if double else scale.value
+
+
+def target_px(card_w_mm: float, dpi: int) -> int:
+    """The master's wanted width in pixels: ``dpi`` across the card."""
+    return max(1, round(card_w_mm / _MM_PER_INCH * dpi))
+
+
+@dataclass(frozen=True, slots=True)
+class Plan:
+    """Which factor this card gets, and what it lands on.
+
+    Carried as a value rather than returned as a bare enum because the *result* is
+    the interesting part and every surface reports it: undershooting the target is
+    a fact about the source that nobody can fix by trying harder, and it has to be
+    said out loud rather than discovered on paper.
+    """
+
+    scale: UpscaylScale
+    double: bool
+    #: the source width the factor was chosen for
+    src_px: int
+    #: the width it will come out at
+    out_px: int
+    #: pixels wanted; 0 when no minimum was set and the configured factor stands
+    want_px: int
+    #: the card the pixels are spread across, which is what makes them a resolution
+    card_w_mm: float
+
+    @property
+    def dpi(self) -> int:
+        """The resolution the master lands at, across the card it was planned for."""
+        if not self.card_w_mm:
+            return 0
+        return round(self.out_px / self.card_w_mm * _MM_PER_INCH)
+
+    @property
+    def short(self) -> bool:
+        """Did even the largest factor fail to clear the minimum?
+
+        The only case that can, since the minimum is otherwise always met. It means
+        the source has too few pixels for the size you print at, which no setting
+        fixes — so it is reported rather than discovered on paper.
+        """
+        return bool(self.want_px) and self.out_px < self.want_px * _SLACK
+
+    @property
+    def label(self) -> str:
+        """One phrase for the CLI's per-card line and the UI's readout."""
+        tag = f"×{self.scale.value}{' ×2' if self.double else ''}"
+        if not self.want_px:
+            return tag
+        return f"{tag} → {self.out_px}px, {self.dpi}dpi" + (
+            " — under the minimum, the source has no more detail" if self.short else ""
+        )
+
+
+def plan(
+    src_px: int,
+    card_w_mm: float,
+    cfg: Config,
+    *,
+    scale: UpscaylScale | None = None,
+    double: bool | None = None,
+) -> Plan:
+    """Which factor to enlarge a ``src_px``-wide source by.
+
+    **The factor is the wrong thing to hold still.** Sources arrive anywhere from 400 to
+    745px wide, so one fixed factor scatters the masters it makes — measured on a real
+    library, identical settings produced 592 dpi on one card and 1011 on another, with
+    nothing on screen to say so. So what is configured is a **minimum resolution**
+    (:attr:`~proxdex.config.Config.upscayl_min_dpi`) and the factor is arithmetic: the
+    *smallest* one that clears it, so a small scan is enlarged harder than a large one
+    and nothing is enlarged further than it needs to be.
+
+    **Clearing the minimum wins over landing near it, and `sheet_dpi` is why.** The page
+    is rendered at :attr:`~proxdex.config.Config.sheet_dpi` — 1400 by default, which is
+    3472px across a 63mm card — so a master below that is resampled *up* at print time
+    by a plain filter, which is exactly the work the neural upscaler was run to avoid.
+    Overshooting costs disk and a little time; undershooting costs resolution on paper
+    that nothing downstream can put back.
+
+    That does mean a step: the doubled ladder is 1, 4, 9, 16, so a source a few percent
+    under can jump a long way (a 600px master goes to 5400px rather than 2400px to clear
+    1000 dpi). Taken deliberately — the 2400px version would have been upsampled 1.45x
+    by the sheet renderer anyway. An explicit ``scale`` is honoured as-is, and
+    ``min_dpi = 0`` turns the whole thing off in favour of the configured factor.
+    """
+    use_double = cfg.upscayl_double if double is None else double
+    want = target_px(card_w_mm, cfg.upscayl_min_dpi)
+    fixed = cfg.upscayl_scale if scale is None else scale
+    if scale is not None or cfg.upscayl_min_dpi <= 0:
+        return Plan(
+            scale=fixed,
+            double=use_double,
+            src_px=src_px,
+            out_px=src_px * effective(fixed, double=use_double),
+            want_px=0,
+            card_w_mm=card_w_mm,
+        )
+
+    # the smallest factor that clears the minimum; the largest if none does
+    ladder = sorted(UpscaylScale, key=lambda s: effective(s, double=use_double))
+    chosen = next(
+        (
+            s
+            for s in ladder
+            if src_px * effective(s, double=use_double) >= want * _SLACK
+        ),
+        ladder[-1],
+    )
+    return Plan(
+        scale=chosen,
+        double=use_double,
+        src_px=src_px,
+        out_px=src_px * effective(chosen, double=use_double),
+        want_px=want,
+        card_w_mm=card_w_mm,
+    )
+
+
 def run(
     src: Path,
     dst: Path,

@@ -385,8 +385,8 @@ class Resolution:
         """Nothing to warn about: a spec exists, no dangling id, no undecidable rule.
 
         Deliberately **not** a judgement about the spec's numbers. A spec is four
-        numbers and a note (see :mod:`proxdex.frames`); whether they are good is a
-        question about a physical card that no field on this object can answer, and
+        numbers (see :mod:`proxdex.frames`); whether they are good is a question
+        about a physical card that no field on this object can answer, and
         the earlier version that graded them said "trusted" about readings that
         inherited a scan's crop.
         """
@@ -816,25 +816,30 @@ def spec(
     name: str,
     game: GameId | None,
     mm: tuple[float, float, float, float],
-    note: str = "",
-    ref_mm: tuple[float, float] = (63.0, 88.0),
+    *,
+    oversized: bool = False,
 ) -> FrameGuide:
-    """A spec from per-edge millimetres. **One constructor, no grades.**
+    """A spec from per-edge millimetres of the card it describes.
 
-    There used to be three of these — ``measured``, ``scanned``, ``estimated`` —
-    and the middle one was the mistake: it graded a border read off the
-    publisher's scan as trustworthy, when a scan's crop shifts every such reading
-    by the same unknown amount. The four numbers are the four numbers however they
-    were arrived at; ``note`` is where you say which card, which calipers, or that
-    you typed it.
+    **One constructor, no grades.** There used to be three — ``measured``,
+    ``scanned``, ``estimated`` — and the middle one was the mistake: it graded a
+    border read off the publisher's scan as trustworthy, when a scan's crop shifts
+    every such reading by the same unknown amount. The four numbers are the four
+    numbers however they were arrived at, and nothing here ranks them.
+
+    ``oversized`` says the millimetres are of an 89×127mm planar, scheme or Vanguard
+    card rather than the standard one — which changes the *fractions* stored, since a
+    3mm border is a smaller fraction of a bigger card.
     """
+    card_w, card_h = (
+        (frames.OVERSIZED_W_MM, frames.OVERSIZED_H_MM) if oversized else frames.CARD_MM
+    )
     return FrameGuide(
         id=frames.clean_id(spec_id),
         name=name.strip() or spec_id,
         game=game,
-        inset=frames.mm_to_inset(*mm, w=ref_mm[0], h=ref_mm[1]),
-        note=note.strip(),
-        ref_mm=ref_mm,
+        inset=frames.mm_to_inset(*mm, w=card_w, h=card_h),
+        oversized=oversized,
     )
 
 

@@ -62,8 +62,8 @@ def bordered_card(
 ) -> Arr:
     """A card-shaped array: a flat frame of one colour, a flat art panel inside.
 
-    ``inset`` is [top, right, bottom, left] as fractions of the image — exactly
-    what :func:`proxdex.borders.detect_inset` reports back.
+    ``inset`` is [top, right, bottom, left] as fractions of the image — the same
+    shape the align marks and ``border --inner-*`` take.
     """
     top, right, bottom, left = inset
     arr = np.zeros((h, w, 3), dtype=np.uint8)

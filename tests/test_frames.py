@@ -15,6 +15,7 @@ Both must be reported rather than rounded down to a plausible default.
 
 from __future__ import annotations
 
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -44,9 +45,7 @@ def add(root: Path, spec_id: str, game: GameId = POKEMON) -> None:
     """A library spec whose numbers are distinguishable from every shipped one."""
     specs.save(
         root,
-        specs.spec(
-            spec_id, spec_id.title(), game, (4.0, 4.0, 4.0, 4.0), "for the test"
-        ),
+        specs.spec(spec_id, spec_id.title(), game, (4.0, 4.0, 4.0, 4.0)),
     )
 
 
@@ -66,7 +65,7 @@ class TestRegistry:
         spec = specs.load(library.root).get("pokemon-swsh")
         assert spec is not None
         assert not frames.is_shipped(spec.id)
-        # 4mm of a 63×88 card, back out of the fractions it was stored as
+        # 4mm of a real card, back out of the fractions it was stored as
         assert [round(v, 2) for v in spec.mm()] == [4.0, 4.0, 4.0, 4.0]
 
     def test_a_stored_spec_may_correct_a_shipped_one(self, library: Library) -> None:
@@ -74,13 +73,7 @@ class TestRegistry:
         the MTG specs it is the *expected* path, since what ships is provisional."""
         specs.save(
             library.root,
-            specs.spec(
-                GuideId.MTG_1993.value,
-                "",
-                MTG,
-                (2.5, 2.5, 2.5, 2.5),
-                "calipers on a real card",
-            ),
+            specs.spec(GuideId.MTG_1993.value, "", MTG, (2.5, 2.5, 2.5, 2.5)),
         )
         spec = specs.load(library.root).get(GuideId.MTG_1993)
         assert spec is not None
@@ -88,15 +81,20 @@ class TestRegistry:
         # the file gave no name, so the shipped one is kept rather than showing an id
         assert spec.name == frames.SHIPPED[GuideId.MTG_1993.value].name
 
-    def test_a_measurement_records_the_card_it_was_taken_from(self) -> None:
-        """A real card is 63.5×88.9mm, not the 63×88 proxdex trims to, so the same
-        2.4mm border is a *different fraction* depending on what was measured.
-        Getting this wrong is a 0.8% error in every border, on every card."""
-        real = specs.spec("x", "", MTG, (2.4, 2.4, 2.4, 2.4), "", (63.5, 88.9))
-        nominal = specs.spec("x", "", MTG, (2.4, 2.4, 2.4, 2.4))
-        assert real.inset[1] < nominal.inset[1]
-        # and it reads back as the millimetres that went in, of that card
-        assert [round(v, 3) for v in real.mm()] == [2.4, 2.4, 2.4, 2.4]
+    def test_millimetres_are_of_the_real_card_not_the_trim(self) -> None:
+        """One card size for both games, and it is the **card** rather than the trim.
+
+        A Magic card and a Pokémon card are the same 2.5×3.5in stock, so there is no
+        per-spec reference size to record — but which size it is still matters: proxdex
+        *trims* to 63×88, and taking a caliper reading against that instead of the real
+        63.5×88.9 is a 0.8% error in every border, on every card. So the constant is
+        the card, and a measurement round-trips through it exactly.
+        """
+        assert frames.CARD_MM == (63.5, 88.9)
+        made = specs.spec("x", "", MTG, (2.4, 2.4, 2.4, 2.4))
+        assert [round(v, 3) for v in made.mm()] == [2.4, 2.4, 2.4, 2.4]
+        # against the trim it would read wider than it is — the error being avoided
+        assert made.mm(63.0, 88.0)[1] < 2.4
 
     def test_borderless_is_reserved(self, library: Library) -> None:
         """Code *returns* this id for a frameless printing, so it has to exist and
@@ -119,17 +117,43 @@ class TestRegistry:
         assert reg.broken == ("junk.json",)
         assert "junk" not in reg.specs
 
-    def test_a_spec_is_its_numbers_and_a_note_and_nothing_else(self) -> None:
+    def test_a_spec_is_its_numbers_and_nothing_else(self) -> None:
         """There is deliberately no confidence level. Three of them existed once,
         and the middle one — "read off the publisher's scans" — graded a reading
         that inherits the scan's crop as trustworthy. A crop that trims 0.3mm inside
         the cut edge shrinks every border read from it by 0.3mm, and no sample size
         and no agreement between cards detects that, because it is systematic. So
-        the prose says what happened and no field claims to rank it."""
-        made = specs.spec("mtg-x", "", MTG, (3, 3, 3, 3), " calipers on mir-1 ")
-        assert made.note == "calipers on mir-1"
-        assert not hasattr(made, "confidence")
-        assert not hasattr(made, "origin")
+        nothing on a spec ranks its numbers, and nothing on it explains them either:
+        where a shipped number came from is prose in the repository, a card per row in
+        `docs/measuring-frames.md`, which no screen can render as a verdict.
+
+        `oversized` is the one flag that stays, and it is a different kind of thing: not
+        a claim about the numbers but about **which card they are fractions of**, of
+        which proxdex knows exactly two. It replaced a field holding an arbitrary
+        millimetre pair, which was only ever answering this same question.
+        """
+        made = specs.spec("mtg-x", "", MTG, (3, 3, 3, 3))
+        assert {f.name for f in fields(made)} == {
+            "id",
+            "name",
+            "game",
+            "inset",
+            "oversized",
+        }
+        for gone in ("confidence", "origin", "note", "measured", "ref_mm"):
+            assert not hasattr(made, gone), gone
+
+    def test_an_oversized_spec_stores_a_different_fraction(self) -> None:
+        """The same millimetres on a bigger card are a smaller fraction — which is the
+        whole reason the flag exists, and it round-trips through a stored file."""
+        big = specs.spec("mtg-big", "", MTG, (3.0, 3.0, 3.0, 3.0), oversized=True)
+        small = specs.spec("mtg-small", "", MTG, (3.0, 3.0, 3.0, 3.0))
+        assert big.inset[1] < small.inset[1]
+        assert big.oversized
+        # and each reads back as the millimetres that went in, of its own card
+        assert [round(v, 2) for v in big.mm()] == [3.0, 3.0, 3.0, 3.0]
+        assert [round(v, 2) for v in small.mm()] == [3.0, 3.0, 3.0, 3.0]
+        assert frames.from_json(big.json()).oversized
 
 
 class TestRules:
@@ -305,16 +329,15 @@ class TestResolve:
     def test_mtg_reads_the_printings_frame_not_the_set(self, library: Library) -> None:
         """A set code cannot answer which border a card has: a modern set holds
         retro-frame cards beside modern ones (`dmr-354` is frame 1997 inside a frame
-        2015 set). So the baseline reads the *printing's* frame — and with only the
-        1993 spec measured, a 1993 card in a 2023 set resolves while its modern
-        neighbour does not."""
+        2015 set). So the baseline reads the *printing's* frame, and two cards of one
+        set get two different specs — which is the whole reason this is not keyed on
+        the set id. Confirmed on real cards: `sld-1664` is a 1997-frame Sol Ring in a
+        Secret Lair and measures 40/36px, against `msc-211`'s 30/30."""
         reg = specs.load(library.root)
-        old = specs.resolve(reg, "dmr-1", "dmr", MTG, traits={"frame": "1993"})
+        old = specs.resolve(reg, "dmr-1", "dmr", MTG, traits={"frame": "1997"})
         modern = specs.resolve(reg, "dmr-2", "dmr", MTG, traits={"frame": "2015"})
-        assert old.spec is not None
-        assert (old.spec.id, old.via) == (GuideId.MTG_1993.value, Via.ERA)
-        assert modern.spec is None
-        assert modern.via is Via.NONE
+        assert (spec_of(old), old.via) == (GuideId.MTG_1997.value, Via.ERA)
+        assert (spec_of(modern), modern.via) == (GuideId.MTG_M15.value, Via.ERA)
 
     def test_every_frame_scryfall_documents_is_covered(self) -> None:
         """Scryfall documents exactly five `frame` values, and this is the list.
@@ -323,49 +346,127 @@ class TestResolve:
         of it silently taking the fallback, which is a different border and no
         warning. The five are quoted from Scryfall's own docs:
         1993 (Alpha), 1997 (Mirage), 2003 (8th Edition), 2015 (Magic 2015), future.
+
+        All five answer, and `1993` does so from its **band 2** entry — the ordinary
+        border shared by 18 of its sets — with Alpha/Beta and Unlimited/Revised keyed by
+        set on top of it (see `TestTheNineteenNinetyThreeSplit`). A sixth generation
+        would resolve to nothing rather than take a stand-in, and this says so.
         """
         documented = {"1993", "1997", "2003", "2015", "future"}
+        # the enum *is* the list, so a sixth value cannot arrive without an edit here
+        assert {g.value for g in frames.Generation} == documented
         reg = specs.load(Path("/nonexistent"))
-        measured, unmeasured = set[str](), set[str]()
-        for generation in documented:
-            found = specs.resolve(
-                reg, "x-1", "x", MTG, traits={frames.FRAME_TRAIT: generation}
-            )
-            (measured if found.have else unmeasured).add(generation)
-        # exactly one has been measured, and the other four resolve to nothing rather
-        # than to a stand-in. Absence here is the design, not an omission.
-        assert measured == {"1993"}
-        assert unmeasured == documented - {"1993"}
-        assert set(frames.FRAME_GENERATIONS[MTG]) <= documented
+        for g in documented:
+            found = specs.resolve(reg, "x-1", "x", MTG, traits={frames.FRAME_TRAIT: g})
+            assert found.have, g
+        # every generation is claimed by a generation entry
+        covered = {g for e in frames.BASELINE[MTG] for g in e.frames}
+        assert covered == set(frames.Generation)
+
+    def test_a_generation_nobody_documents_is_not_an_answer(self) -> None:
+        """The trait is written out of untyped provider JSON, so reading it is a
+        coercion at the boundary: a value outside the closed set is **no answer**
+        rather than a traceback in the middle of a card walk, and rather than a
+        stringly-typed comparison falling through to a plausible spec."""
+        assert frames.parse_generation("2015") is frames.Generation.F2015
+        assert frames.parse_generation(" 2015 ") is frames.Generation.F2015
+        for junk in ("2016", "", None, "retro", [], 0):
+            assert frames.parse_generation(junk) is None, junk
+        reg = specs.load(Path("/nonexistent"))
+        found = specs.resolve(reg, "x-1", "x", MTG, traits={"frame": "2016"})
+        assert found.via is Via.NONE
+        assert found.spec is None
+
+    def test_future_shares_the_2003_spec_because_it_measured_the_same(self) -> None:
+        """Two generations, one spec — and that is a *measurement*, not an assumption:
+        `c13-259` (2003) and `mb2-233` (future) both read 35px on every edge. It is
+        recorded as an alias rather than a duplicated spec so there is one number to
+        correct, and splitting them later is one new entry."""
+        reg = specs.load(Path("/nonexistent"))
+        pair = [
+            specs.resolve(reg, "x-1", "x", MTG, traits={frames.FRAME_TRAIT: gen})
+            for gen in ("2003", "future")
+        ]
+        assert {spec_of(f) for f in pair} == {GuideId.MTG_2003.value}
+
+    def test_a_generations_spec_is_the_number_that_was_measured(self) -> None:
+        """Each MTG spec is stored as the exact pixel fractions of the image it was
+        read off, so it must read back as the millimetres in the log — a spec quietly
+        rounded through millimetres is a spec nobody can check against the card."""
+        expected = {  # spec id -> (top mm, sides mm) of a 63.5x88.9mm card
+            GuideId.MTG_1993.value: (2.74, 2.47),
+            GuideId.MTG_1993_ALPHA.value: (2.74, 1.96),
+            GuideId.MTG_1993_UNLIMITED.value: (3.63, 2.98),
+            GuideId.MTG_1997.value: (3.42, 3.07),
+            GuideId.MTG_2003.value: (2.99, 2.98),
+            GuideId.MTG_M15.value: (2.56, 2.56),
+            GuideId.MTG_YELLOW_BAND.value: (3.76, 4.27),
+        }
+        for spec_id, (top, sides) in expected.items():
+            got = frames.SHIPPED[spec_id].mm(63.5, 88.9)
+            assert (round(got[0], 2), round(got[1], 2)) == (top, sides), spec_id
+            # top and bottom, and left and right, are one number each by design: the
+            # cutting error is cancelled rather than recorded
+            assert round(got[0], 4) == round(got[2], 4), spec_id
+            assert round(got[1], 4) == round(got[3], 4), spec_id
 
     def test_every_generation_that_maps_names_a_spec_that_exists(self) -> None:
         """A mapping to an id nothing defines would resolve to the id and then fail
         at the fit, which is a worse failure than resolving to nothing."""
-        ids = set(frames.FRAME_GENERATIONS[MTG].values())
+        ids = {e.spec for game in frames.BASELINE.values() for e in game}
         assert ids
         assert all(i in frames.SHIPPED for i in ids)
 
-    def test_every_shipped_spec_says_where_its_numbers_came_from(self) -> None:
-        """The note is the only account a spec has of how much to trust it, now that
-        there is no confidence grade — so a shipped spec without one would be four
-        numbers from nowhere."""
-        for spec in frames.SHIPPED.values():
-            assert spec.note.strip(), spec.id
+    def test_a_baseline_entry_says_which_fact_about_a_card_decides(self) -> None:
+        """One table, two typed keys, and an entry uses exactly one of them.
+
+        Which key a *game* needs is not fixed, and that is the point of unifying the
+        two tables that used to be here: Pokémon's yellow border ran for a list of
+        **sets**, MTG's changed with the printing's **frame** — and then MTG turned out
+        to need sets *as well*, because the 1993 frame is three geometries. An entry
+        with neither key would claim nothing; one with both would answer two questions
+        with one number.
+        """
+        for game, entries in frames.BASELINE.items():
+            assert entries, game
+            for entry in entries:
+                assert bool(entry.sets) != bool(entry.frames), (game, entry.spec)
+        assert all(e.sets and not e.frames for e in frames.BASELINE[POKEMON])
+        # MTG uses both kinds, which is exactly why they are one table
+        mtg = frames.BASELINE[MTG]
+        assert any(e.sets for e in mtg)
+        assert any(e.frames for e in mtg)
+
+    def test_a_set_era_answers_before_a_frame_generation_does(self) -> None:
+        """`baseline` runs two passes, sets first — so which kind of key wins is a
+        property of the function and not of the order somebody listed the table in.
+        `lea` reports `frame: 1993` *and* has a set entry, so it is the case that proves
+        the order: it must come back Alpha's own band and not the generation's ordinary
+        one, which is a full millimetre wider on the sides.
+        """
+        assert frames.baseline("lea", MTG, {frames.FRAME_TRAIT: "1993"}) == (
+            GuideId.MTG_1993_ALPHA
+        )
+        # and a set with no entry of its own falls through to the generation
+        assert frames.baseline("ice", MTG, {frames.FRAME_TRAIT: "1993"}) == (
+            GuideId.MTG_1993
+        )
 
     def test_a_border_colour_rule_catches_a_decorative_band(
         self, library: Library
     ) -> None:
         """Colour is not geometry — white, silver and gold measure at their
-        generation's width — but a *band* is: Aetherdrift's yellow full-art box
-        toppers measure 4.70mm against an ordinary 2.45. Too niche to ship, exactly
-        the right size for a rule."""
+        generation's width — but a *band* is: Aetherdrift's yellow box toppers measure
+        4.26mm on the sides against an ordinary 2.56. proxdex now ships that one
+        (`sources.mtg_frame` reads it off the printing), so what this pins is the
+        mechanism: a rule on a border colour beats the generation baseline for the
+        cards it catches and leaves every other card of the set alone.
+        """
         specs.save(
             library.root,
-            specs.spec("mtg-yellow-band", "Yellow band", MTG, (4.2, 4.7, 4.2, 4.7)),
+            specs.spec("mtg-band-local", "A band", MTG, (4.2, 4.7, 4.2, 4.7)),
         )
-        specs.assign(
-            library.root, "mtg-yellow-band", MTG, "dft", Match.BORDER, "yellow"
-        )
+        specs.assign(library.root, "mtg-band-local", MTG, "dft", Match.BORDER, "yellow")
         reg = specs.load(library.root)
         topper = specs.resolve(
             reg, "dft-511", "dft", MTG, traits={"frame": "2015", "border": "yellow"}
@@ -373,11 +474,10 @@ class TestResolve:
         plain = specs.resolve(
             reg, "dft-1", "dft", MTG, traits={"frame": "2015", "border": "black"}
         )
-        assert topper.spec is not None
-        assert (topper.spec.id, topper.via) == ("mtg-yellow-band", Via.RULE)
-        # and its ordinary neighbour resolves to nothing, because the M15 frame has
-        # not been measured — a rule adds an answer, it does not invent a baseline
-        assert plain.spec is None
+        assert (spec_of(topper), topper.via) == ("mtg-band-local", Via.RULE)
+        # its ordinary neighbour keeps the generation's own spec: a rule adds an answer
+        # for the cards it names, it does not displace the baseline for the rest
+        assert (spec_of(plain), plain.via) == (GuideId.MTG_M15.value, Via.ERA)
 
     def test_an_mtg_card_with_no_recorded_frame_resolves_to_nothing(
         self, library: Library
@@ -794,15 +894,26 @@ class TestWhatThePrintingSettles:
             == GuideId.BORDERLESS.value
         )
 
-    def test_extended_art_and_the_yellow_band_await_a_measurement(self) -> None:
+    def test_a_yellow_border_is_a_band_and_the_printing_settles_it(self) -> None:
+        """The one case where `border_color` decides the *geometry*: all 79 yellow
+        printings are Aetherdrift box-toppers, 1.7mm wider on the sides than the
+        generation they sit in. Measured on `dft-501`."""
+        assert (
+            sources.mtg_frame({"border_color": "yellow", "frame_effects": ["inverted"]})
+            == GuideId.MTG_YELLOW_BAND.value
+        )
+
+    def test_extended_art_keeps_its_generations_border(self) -> None:
+        """A correction, and the reason it is pinned: the scan survey reported extended
+        art's sides at 0 — "the art runs off the card" — and that was the old
+        auto-detector failing on dark art. Measured over 240 rows of `cmr-700`, the
+        black border is
+        27-28px on both sides against a plain card's 29-30. Same border, so no spec of
+        its own, so nothing here may start returning one."""
         assert (
             sources.mtg_frame(
                 {"border_color": "black", "frame_effects": ["extendedart"]}
             )
-            is None
-        )
-        assert (
-            sources.mtg_frame({"border_color": "yellow", "frame_effects": ["inverted"]})
             is None
         )
 
@@ -832,7 +943,228 @@ class TestWhatThePrintingSettles:
             assert got is None, effect
 
     def test_a_colour_that_is_not_a_geometry_is_left_alone(self) -> None:
-        """White, gold and silver all measure at their generation's width. Yellow is
-        the single exception, and it is a decorative *band*, not a border colour."""
+        """White, gold and silver all measure at their generation's width — white on
+        `8ed-274` at the same 35px as the black `c13-259`, which is the cleanest
+        demonstration there is that colour is not geometry. Yellow is the single
+        exception, and it is a decorative *band* rather than a border colour."""
         for colour in ("white", "gold", "silver", "black"):
             assert sources.mtg_frame({"border_color": colour}) is None
+
+
+class TestTheNineteenNinetyThreeSplit:
+    """One frame generation, three geometries, 1mm apart — and keyed by set.
+
+    Scryfall calls Alpha, Unlimited and 4th Edition all `frame: 1993`, and the design
+    really is the same; the *printings* are not. Measured off **Lightning Bolt**, the
+    one card printed in all five of those sets, so the art is identical and nothing but
+    the border can differ:
+
+        Alpha `lea-161`, Beta `leb-162`          32px t/b, 23px sides
+        Unlimited `2ed-162`, Revised `3ed-162`   42.5px, 35px
+        4th Edition `4ed-208`                    33px, 30px
+
+    Sol Ring agrees exactly wherever both exist, an independent run-length scan
+    reproduces the white-bordered trio to the pixel, and a withdrawn colour survey had
+    landed on the same three groupings. This is pinned because it is the largest spread
+    in the project and because it is *invisible*: a card fitted to a neighbour's number
+    looks perfect until two of them are cut and laid side by side.
+    """
+
+    def test_the_three_printings_get_three_different_specs(self) -> None:
+        reg = specs.load(Path("/nonexistent"))
+        got = {
+            s: spec_of(
+                specs.resolve(
+                    reg, f"{s}-1", s, MTG, traits={frames.FRAME_TRAIT: "1993"}
+                )
+            )
+            for s in (
+                "lea",
+                "leb",
+                "ced",
+                "cei",
+                "2ed",
+                "3ed",
+                "4ed",
+                "ice",
+                "arn",
+                "4bb",
+            )
+        }
+        assert got == {
+            # band 1 — Alpha, Beta, and the Beta-derived Collectors' Editions
+            "lea": GuideId.MTG_1993_ALPHA.value,
+            "leb": GuideId.MTG_1993_ALPHA.value,
+            "ced": GuideId.MTG_1993_ALPHA.value,
+            "cei": GuideId.MTG_1993_ALPHA.value,
+            # band 3 — the widest border of the decade
+            "2ed": GuideId.MTG_1993_UNLIMITED.value,
+            "3ed": GuideId.MTG_1993_UNLIMITED.value,
+            # band 2 — the ordinary border, reached through the *generation*
+            "4ed": GuideId.MTG_1993.value,
+            "ice": GuideId.MTG_1993.value,
+            "arn": GuideId.MTG_1993.value,
+            # and the one printing that measured as another frame entirely
+            "4bb": GuideId.MTG_1997.value,
+        }
+
+    def test_the_gap_between_them_is_real_and_large(self) -> None:
+        """A full millimetre on the sides between Alpha and Revised. If a refactor ever
+        collapses these back into one spec, this is the assertion that fails."""
+        sides = {
+            i: round(frames.SHIPPED[i].mm()[1], 2)
+            for i in (
+                GuideId.MTG_1993_ALPHA.value,
+                GuideId.MTG_1993.value,
+                GuideId.MTG_1993_UNLIMITED.value,
+            )
+        }
+        assert sides == {
+            "mtg-1993-alpha": 1.96,
+            "mtg-1993": 2.47,
+            "mtg-1993-unlimited": 2.98,
+        }
+        assert len(set(sides.values())) == 3
+        assert max(sides.values()) - min(sides.values()) > 1.0
+
+    def test_colour_is_still_not_geometry(self) -> None:
+        """Revised and 4th Edition are **both white-bordered 1993-frame cards** and they
+        differ by 5px on the sides; `fbb` and `4bb` are both black-bordered Belgian
+        printings and differ by 9px, in opposite directions. So there is no colour rule
+        and no "foreign" rule to write, and `mtg_frame` must go on refusing to read
+        geometry out of `border_color`."""
+        white = (GuideId.MTG_1993_UNLIMITED.value, GuideId.MTG_1993.value)
+        assert frames.SHIPPED[white[0]].inset != frames.SHIPPED[white[1]].inset
+        assert sources.mtg_frame({"border_color": "white", "frame": "1993"}) is None
+
+    def test_the_ordinary_band_is_a_measurement_not_a_fallback(self) -> None:
+        """Band 2 answers for every 1993 set that is not a named exception, and it does
+        so because **18 of them were read and landed inside 0.43mm of each other** — not
+        because something had to be picked. Briefly, with only Alpha and Revised read,
+        these resolved to nothing; a generation-wide number would then have been a coin
+        flip across a 1mm spread. Eighteen readings is what changed that.
+        """
+        reg = specs.load(Path("/nonexistent"))
+        for ordinary in ("ice", "arn", "atq", "leg", "chr", "hml", "all", "fem", "drk"):
+            found = specs.resolve(
+                reg,
+                f"{ordinary}-1",
+                ordinary,
+                MTG,
+                traits={frames.FRAME_TRAIT: "1993"},
+            )
+            assert found.via is Via.ERA, ordinary
+            assert spec_of(found) == GuideId.MTG_1993.value, ordinary
+
+    def test_a_1993_card_with_no_traits_still_resolves_by_set(self) -> None:
+        """The band-1 and band-3 entries are keyed on the *set id*, which a library
+        filed years ago always has — so those answer even when nothing was recorded
+        about the printing. Only band 2 needs the generation trait."""
+        reg = specs.load(Path("/nonexistent"))
+        assert spec_of(specs.resolve(reg, "lea-1", "lea", MTG)) == (
+            GuideId.MTG_1993_ALPHA.value
+        )
+        assert spec_of(specs.resolve(reg, "2ed-1", "2ed", MTG)) == (
+            GuideId.MTG_1993_UNLIMITED.value
+        )
+
+
+class TestOversized:
+    """An oversized card needs its own spec **even when its border is the same width**.
+
+    An Archenemy scheme measures 2.98 / 3.00mm — physically identical to an ordinary
+    2003-frame card's 2.99 / 2.98. But a spec is a *fraction*, and the card is 89×127mm,
+    so the same millimetres are a different fraction entirely. Resolving a scheme to
+    `mtg-2003` (which is what its frame generation did before these existed) asks for
+    4.27 / 4.18mm on a card whose border is 2.98 / 3.00 — 1.2mm too wide on every edge,
+    and it looks right on screen because the overlay is drawn in fractions too.
+    """
+
+    def test_the_layout_settles_it_not_the_generation(self) -> None:
+        assert sources.mtg_frame({"layout": "scheme"}) == GuideId.MTG_OVERSIZED.value
+        assert sources.mtg_frame({"layout": "vanguard"}) == GuideId.MTG_VANGUARD.value
+        # a vanguard reports frame 1993, which would otherwise hand it Alpha's 1.96mm
+        assert (
+            sources.mtg_frame({"layout": "vanguard", "frame": "1993"})
+            == GuideId.MTG_VANGUARD.value
+        )
+
+    def test_the_same_millimetres_are_a_different_fraction(self) -> None:
+        """The whole reason these exist, stated as numbers: equal in mm on their own
+        card, unequal as fractions — so one spec cannot serve both sizes."""
+        scheme = frames.SHIPPED[GuideId.MTG_OVERSIZED.value]
+        ordinary = frames.SHIPPED[GuideId.MTG_2003.value]
+        assert scheme.inset != ordinary.inset
+        # each reports the card it is actually about, and on those cards they agree to
+        # 0.02mm — the same physical border, which is what makes the fraction the story
+        assert scheme.oversized
+        assert not ordinary.oversized
+        assert abs(scheme.mm()[1] - ordinary.mm()[1]) < 0.02
+        # and asking `mtg-2003` for an oversized card is where the 1.2mm comes from
+        assert ordinary.mm(*scheme.card_mm)[1] - scheme.mm()[1] > 1.0
+        # and using the wrong spec asks for well over a millimetre too much
+
+    def test_vanguard_is_its_own_size_and_its_own_border(self) -> None:
+        """Read at 1060x1510 where planes and schemes are 1040x1490, and genuinely
+        thicker: 5.30 / 4.03mm, nearly twice an ordinary card's."""
+        vanguard = frames.SHIPPED[GuideId.MTG_VANGUARD.value]
+        assert vanguard.oversized
+        top, side, *_ = vanguard.mm()
+        assert (round(top, 2), round(side, 2)) == (5.30, 4.03)
+        # and it is nearly twice an ordinary card's, so it cannot share a spec
+        assert side > frames.SHIPPED[GuideId.MTG_M15.value].mm()[1] * 1.5
+
+    def test_a_plane_shares_the_number_measured_off_the_same_stock(self) -> None:
+        """A plane could not be read — art to the edges, uneven border — so it takes the
+        scheme's number rather than being called borderless.
+
+        That is the safe direction and it is not a guess about geometry: same product
+        line, same 89×127mm stock, same era, and the scheme measured 2.98/3.00mm, which
+        is the *same physical border* an ordinary 2003-frame card carries. Calling a
+        bordered card borderless throws its fit away and looks perfect, which is the one
+        error this project treats as unacceptable.
+        """
+        assert sources.mtg_frame({"layout": "planar"}) == GuideId.MTG_OVERSIZED.value
+        assert sources.mtg_frame({"layout": "planar", "frame": "2003"}) == (
+            GuideId.MTG_OVERSIZED.value
+        )
+        # phenomena share the planar layout, so they are covered by the same entry
+        assert sources.mtg_frame({"layout": "planar", "frame": "2015"}) == (
+            GuideId.MTG_OVERSIZED.value
+        )
+
+
+class TestTokensNeedNoSpec:
+    """Measured, and they match their generation exactly — so nothing was added.
+
+    A token's layout is bespoke (no mana cost, larger art), so "same stock, same die"
+    was not enough to assume it. Read by hand: `tmsh-3` (M15 token) and `tdft-13`
+    (emblem) are 30px on every edge, which is `mtg-m15` to the pixel; `p03-6` and
+    `pcsp-1` (2003-frame tokens) are 35px, which is `mtg-2003`. A double-faced
+    punchcard token has no border at all and its layout already says so.
+    """
+
+    def test_a_token_takes_its_generations_spec(self) -> None:
+        reg = specs.load(Path("/nonexistent"))
+        pairs = (
+            ("2015", GuideId.MTG_M15.value),
+            ("2003", GuideId.MTG_2003.value),
+        )
+        for gen, want in pairs:
+            found = specs.resolve(
+                reg, "t-1", "t", MTG, traits={frames.FRAME_TRAIT: gen}
+            )
+            assert spec_of(found) == want, gen
+
+    def test_the_measured_token_numbers_are_the_generations_numbers(self) -> None:
+        """`tmsh-3` read 30px at 744x1040 and `mtg-m15` *is* 30/744 — so a token spec
+        would have been a duplicate of a number already here."""
+        m15 = frames.SHIPPED[GuideId.MTG_M15.value]
+        assert m15.inset == (30 / 1040, 30 / 744, 30 / 1040, 30 / 744)
+        c2003 = frames.SHIPPED[GuideId.MTG_2003.value]
+        assert c2003.inset == (35 / 1040, 35 / 745, 35 / 1040, 35 / 745)
+
+    def test_no_shipped_spec_is_about_tokens(self) -> None:
+        """The result of the measurement, stated so a future reader does not re-open
+        it: there is deliberately no token spec, because there is nothing to add."""
+        assert not [i for i in frames.SHIPPED if "token" in i or "emblem" in i]

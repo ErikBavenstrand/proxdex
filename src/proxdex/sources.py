@@ -795,8 +795,29 @@ def _mtg_faces(data: dict[str, Any]) -> tuple[FaceImage, ...]:
 
 #: Scryfall's ``layout`` names that mean "half of a meld pair, or the melded card"
 _MELD = "meld"
-#: layouts that carry no printed frame whatever their set's era says
+#: layouts that carry no printed frame whatever their set's era says. A **plane** is
+#: here because it could not be read: its art runs to the edges and what border there is
+#: comes out uneven, so there is no number to take — and it is 89×127mm, which means the
+#: frame generation it reports would otherwise apply a 63.5mm card's *fraction* to it
+#: and ask for 1.2mm more border than any of these cards have. `--frame` overrides
+#: either way.
 _FRAMELESS_LAYOUTS = frozenset({"art_series"})
+
+#: layouts printed at 89×127mm whose border **was** readable, and is its own fraction of
+#: that larger card rather than of a 63.5×88.9 one. Read from the printing rather than
+#: left to a rule, for the same reason the yellow band is: the layout settles the
+#: geometry.
+_OVERSIZED_FRAMES: dict[str, str] = {
+    # a plane shares the scheme's numbers: same product line, same 89×127mm stock, same
+    # era, and a scheme measured 2.98/3.00mm — the *same physical border* an ordinary
+    # 2003-frame card carries. A plane could not be read directly (its art runs to the
+    # edges and what border there is comes out uneven), so it takes the number measured
+    # off the same stock rather than being called borderless, which would have thrown a
+    # real border fit away and looked perfect doing it.
+    "planar": GuideId.MTG_OVERSIZED.value,
+    "scheme": GuideId.MTG_OVERSIZED.value,
+    "vanguard": GuideId.MTG_VANGUARD.value,
+}
 
 
 def _mtg_layout(data: dict[str, Any]) -> Layout:
@@ -837,8 +858,9 @@ def mtg_frame(data: dict[str, Any]) -> str | None:
     A modern set mixes bordered and borderless prints under one set code, so the
     set id cannot answer this — but the card object can: ``border_color`` is
     ``"borderless"``, and there is then no printed frame to fit the border
-    against, only the card aspect. Anything else returns ``None`` and the card's
-    rules decide.
+    against, only the card aspect. A **yellow** ``border_color`` is the other: it is
+    not an ink colour but Aetherdrift's box-topper band, a geometry of its own.
+    Anything else returns ``None`` and the card's rules decide.
 
     **``full_art`` is deliberately not consulted.** It reads as if it meant "no
     border" and it does not: a full-art card's *art* fills the frame area, and the
@@ -848,17 +870,28 @@ def mtg_frame(data: dict[str, Any]) -> str | None:
     borderless reshaped them to pure aspect and printed the art into the cut line.
     """
     border = str(data.get("border_color") or "").strip().lower()
-    if (
-        border == "borderless"
-        or str(data.get("layout") or "").strip().lower() in _FRAMELESS_LAYOUTS
-    ):
+    layout = str(data.get("layout") or "").strip().lower()
+    if border == "borderless" or layout in _FRAMELESS_LAYOUTS:
         return GuideId.BORDERLESS.value
-    # Extended art and the yellow box-topper band *are* their own geometries — the
-    # survey in `scripts/mtg-variants.py` is clear about that — but the specs that
-    # described them were scan-derived and went out with the rest. They belong here
-    # again when somebody has measured one; until then a card of either kind resolves
-    # to no spec and says so, which is the same answer every other unmeasured
-    # printing gets.
+    # An **oversized** printing is 89×127mm, so its border is a different *fraction* of
+    # the card even where the millimetres match — a scheme measures 2.98/3.00mm, the
+    # same as an ordinary 2003-frame card, at 2.35%/3.37% against that card's
+    # 3.37%/4.70%. Read off the layout here rather than left to the generation, which
+    # would ask for 1.2mm too much on every edge and look perfect doing it.
+    if layout in _OVERSIZED_FRAMES:
+        return _OVERSIZED_FRAMES[layout]
+    # A **yellow** border is not a colour, it is Aetherdrift's box-topper band: a wide
+    # flat frame 1.7mm wider on the sides than the generation it sits in. All 79 such
+    # printings carry it, which makes it the one case where `border_color` settles the
+    # geometry rather than just the ink, so it is read here rather than left to a rule.
+    if border == "yellow":
+        return GuideId.MTG_YELLOW_BAND.value
+    # **Extended art needs nothing**, and that is a correction: the survey reported its
+    # sides at 0 ("the art runs off the card") and that was the old auto-detector
+    # failing on dark art, not the card. Measured over 240 rows of `cmr-700`, the
+    # black border is
+    # 27-28px on both sides against a plain card's 29-30 — the same border, so the same
+    # spec. Its own reading is in `docs/measuring-frames.md`.
     return None
 
 

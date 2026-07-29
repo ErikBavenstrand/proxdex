@@ -4,7 +4,7 @@ Compact backlog. `- [ ]` = to do, `- [x]` = done. Keep each item to one terse li
 
 ## Border step
 
-- [x] Auto detection reworked: per-line reference (gradient/holo/silver frames), scan starts past the cut edge, densest-cluster answer
+- [x] Border auto-detection **removed entirely** — `borders.detect_inset`, `--auto`, `/api/detect`, the bulk Border action and test_borders.py are gone. It over-read a dark frame's black border, read past a decorated frame's keylines and found a border on a full-bleed card; four plausible numbers presented as a measurement look finished
 - [x] No stage image keeps an alpha channel — import/upscale/border flatten like fetch does
 - [x] A `doctor` verb: report (and offer to repair) stored images a newer proxdex would have written differently
 - [x] Auto-detect where the border actually is (any colour) and pre-place the align lines from it — per-edge support, never silent
@@ -20,21 +20,39 @@ Compact backlog. `- [ ]` = to do, `- [x]` = done. Keep each item to one terse li
 - [x] Coverage report deleted; `frames check` + a Warnings tab report four real faults instead (unreadable/missing/undecided/unknown)
 - [x] One spec per Scryfall frame generation, `mtg-future` no longer aliased to `mtg-2003`; MTG fallback is `mtg-m15` (2/3 of prints)
 - [x] Surveyed all 114 (frame × border × effects) combinations: 31 measure at their generation's border (no spec needed), `extendedart` and the yellow band do not
-- [x] `mtg-extended-art` (sides 0) and `mtg-yellow-band` ship; both answered from the printing like `borderless`
 - [x] `Match.EFFECT` + game-wide rules (empty set) so a treatment can be assigned at all; `frame:future` re-aliased to `mtg-2003` (surveys within 0.05mm)
-- [ ] **Waiting on calipers**: measure the 5 MTG cards in `docs/measuring-frames.md`, then `frames set` each — shipped numbers are provisional
 - [x] All scan-derived MTG specs withdrawn; a printing with no measured spec resolves to nothing (`Via.NONE`) and `border` refuses it instead of falling back
 - [x] `mtg-1993` from a pixel reading of the Beta Sol Ring scan (672x936: sides 21.5px, t/b 28.5px), stored as exact fractions of 63.5x88.9
 - [x] `pokemon-wotc` scoped to the WOTC era only — base/gym/neo, stopping where e-Card begins
-- [ ] Measure `mtg-m15`, `mtg-2003`, `mtg-1997`, `mtg-future`, and a white-bordered 1993 — see docs/measuring-frames.md
-- [ ] Re-add `mtg-extended-art` (sides 0) and `mtg-yellow-band` once measured; `sources.mtg_frame` returns only `borderless` until then
-- [ ] Pokémon past `neo4` has no spec at all — e-Card, EX, SWSH, SV all need one
-- [ ] **`detect_inset` over-reads a black border when the frame is also dark**: it wants a luminance step, so on Beta Sol Ring (dark stone artifact frame) it reads 37-41px where the border ends at 23px — ~65% too far. Judge by *colour* (the border is neutral, the frame is a coloured texture), which works on black and white borders alike. White-bordered readings are unaffected, so the shipped specs stand; every black-bordered absolute number in the survey does not
-- [ ] **Alpha/Beta need their own spec, ~1mm off `mtg-1993`**: by colour, Alpha 1.88-2.05 sides / 2.74 top and Beta 1.96 / 2.74, against Unlimited and Revised at 2.98 / 3.59. Not a crop artifact — Sol Ring's art box is at the same pixels in both scans, so they are at the same scale. 4th Edition is a third value again (2.39-2.56 sides). Waiting on calipers to confirm, incl. whether a dark keyline sits inside Beta's black border
-- [ ] **Oversized cards resolve to a 63×88 spec**: `opca-9` (89×127mm) takes `mtg-m15`, whose inset is a fraction of 63×88 — ~3.5mm applied where ~2.45mm belongs. Needs an oversized spec (`ref_mm` already supports it) picked off the card's `.oversized` marker
-- [ ] Token frames never surveyed — they resolve to `mtg-m15` by default; measure or exclude explicitly
-- [ ] `frame:1993` has ±0.39mm internal spread (Alpha/Beta/Unlimited/Revised/4ed + foreign black-border runs all differ) — that era may want per-printing pins rather than one spec
-- [ ] Measure a modern Pokémon card (SV + SWSH) and add specs — 160 sets still on `pokemon-generic`, which is the WOTC numbers reused on an unchecked assumption
+- [x] `mtg-1997` from a pixel reading of the me4 Sol Ring image (745x1040: sides 36px, t/b 41px); a colour scan of the same file agrees (top 40, sides 37-40)
+- [x] `mtg-2003` from c13-259 (35px all round), confirmed by a scan of the same file and by the white-bordered 8ed-274 at the same 35px; covers the `future` frame too, since mb2-233 measures 35px as well
+- [x] `mtg-m15` from msc-211 (30px all round, a plain untreated card); four treated cards of the generation read 28-29px, so it sits in a 0.17mm band
+- [x] `mtg-yellow-band` from dft-501 (sides 50px, t/b 44px), wired to `border_color: yellow` in `sources.mtg_frame`
+- [x] Extended art needs **no** spec — the survey's "sides = 0" was the old detector failing on dark art; cmr-700 carries 27-28px sides over 240 rows, i.e. the M15 border with a wider picture
+- [x] Border step reworked: opens on the spec's own outline over the original, then Skip or **Align the border** for draggable marks starting at the spec's numbers; Run is held shut until a fit solves, and a borderless printing needs no marks at all
+- [x] Fixed: the cyan target band never drew — it was written as percentage `border-width`, which CSS does not accept; it is an inset element now
+- [x] One accent (registration magenta) everywhere — cyan removed; overlay lines differ by dash vs solid, which survives them landing on the same pixel
+- [x] `--card-radius` measured off 15 Scryfall PNGs' alpha: 32px = 4.30%/3.08% = 2.73mm, not the nominal 3mm that bit a wedge out of every MTG corner
+- [x] Border step keeps the card radius (it moved onto `.al-work`, so the ghost can still overflow) instead of dropping to a flat 4px
+- [x] Target band vs marks: fixed `outline` painting outside its box (`outline-offset: -.5px`) and the band being drawn on the trim box, which put the whole trim-minus-image difference on the right and bottom edges
+- [x] skipped vs done vs pending are three renderings now: done = output + compare + the target outline over it (the cheapest check the fit landed), skipped = the master it stands as, solid frame, no overlay, pending = dashed + badge
+- [x] The overlay is a statement about the card and is always drawn; the draggable marks belong to the align action alone
+- [x] `afr-353`/`sld-912` keep their metadata answer — treating a borderless card as bordered is cheap, the reverse throws a border fit away and looks perfect
+- [x] Everything sticky pins to a measured `--bar` (ResizeObserver on the topbar), not a hardcoded 4.5rem that sat 66px under a wrapped bar at 560px and left a 19px gap at desktop widths
+- [x] One `.tabbar` class for a section tab strip under the topbar — opaque and sticky; the frames Specs/Rules/Warnings bar was transparent and static, and the settings/print sidebars become that strip below lg
+- [x] The stage stepper stays put while scrolling: below lg the rail is `display: contents` so the strip's containing block is the page, and the four stages share the width instead of side-scrolling
+- [x] The align layer leaked into the next step: `startAlign` awaits `/api/frame` then writes to whatever viewer is on screen, so running border injected marks over the upscale proof and hid its image (which is also why it showed the pre-border picture until you clicked away). Both async readers now check `viewerOwner` — card, side **and step** — across the await
+- [x] `align.show` survived a run, so re-opening a done border step came up on the draggable marks instead of the outline; `afterStep` puts them down
+- [x] The reuse render path ran `repaintProof` before `renderStepPanel`, so it blanked the `#alpanel` it had just filled — a done border step lost its target outline, on that path only
+- [x] Calipers dropped from the plan — they only ever answered whether every spec is uniformly a hair narrow (a *shared* crop, so it lands on every card equally and no image can detect it). Every question left is one printing *against another*, where a common crop cancels, so a pixel reading settles it. The worksheet is in `docs/measuring-frames.md`
+- [x] `mtg-1993` re-read at 745×1040 (was 672×936, a size Scryfall no longer serves) — every spec is now on the same divisor
+- [x] `mtg-1997` vs `mtg-2003` are **not** one spec, checked: the *sides* agree (3.07-3.24 vs 2.98, 1-3px) but the *tops* do not — 3.42-3.50 vs 2.99, a 0.43mm / 5-6px gap, unanimous across three cards each way. 1997 has a thicker top and bottom than its sides (40-41 vs 36); the 2003 redesign is what made all four edges equal (35/35, confirmed in black *and* white). Merging to the larger would put a 3.50mm top target on every 8th Edition-M14 card whose border is 2.99mm
+- [ ] **Pokémon past `neo4` has no spec at all** — e-Card, EX, SWSH, SV. Now the only real gap left, and answerable exactly the way the MTG ones were: one common per era, read in pixels off the provider's image, divided by that file's own width. The MTG work says to expect *bands* rather than a number per set, so a handful of cards may cover everything; `pokemon-wotc` (the one measured Pokémon spec, calipers) is the comparison target
+- [x] **The 1993 frame is three specs, settled.** Lightning Bolt in all five printings (the one card they share, so the art is identical): Alpha/Beta 23px sides, Unlimited/Revised 35px, 4th Edition 30px — a full 1mm apart, with Sol Ring agreeing exactly and a run-length scan reproducing the white trio to the pixel. Keyed by **set** (`lea`/`leb`, `2ed`/`3ed`, `4ed`), since Scryfall calls them one frame. Revised and 4th are both *white* and differ by 5px — the sharpest proof yet that colour is not geometry
+- [x] **Oversized cards have their own specs.** `mtg-scheme` (`oarc-1★`, 35px at 1040×1490 = 2.98/3.00mm of an 89×127 card) and `mtg-vanguard` (`pvan-101`, 63/48 at 1060×1510 = 5.30/4.03mm), read from the **layout** in `sources.mtg_frame`. A scheme's border is *physically identical* to a 2003-frame card's but a different **fraction**, so the old resolution asked for 1.2mm too much on every edge and looked right doing it. Planes are unreadable (art to the edges, uneven) → `borderless`
+- [x] A spec is four numbers and nothing else — `note` and `ref_mm` gone, one `frames.CARD_MM` (63.5×88.9, both games), provenance is a comment above the spec plus a row in `docs/measuring-frames.md`
+- [x] One typed baseline table (`frames.BASELINE`) replaced `ERAS` + `FRAME_GENERATIONS` — same purpose, two keys, and neither is a bare `str` now (`Generation` StrEnum, `GuideId` values)
+- [x] **Tokens need no spec, measured not assumed.** `tmsh-3` and the emblem `tdft-13` read 30px all round = `mtg-m15` to the pixel; `p03-6` and `pcsp-1` (2003-frame) read 35px = `mtg-2003`. A double-faced punchcard has no border and its layout says so. Nothing added — a token spec would be a duplicate
 - [x] Frame specs are library data: `specs.py` registry + rules (ranges/traits), per-card pin, `frames` group + UI screen, set coverage from the provider lists, `doctor` stale-spec
 - [x] Full MTG parity with Pokémon: config, card specs, fetch, backs, set ids
 - [x] Detect MTG borderless prints from Scryfall `border_color`/`full_art` — recorded in the card's `.frame`
@@ -80,6 +98,21 @@ Compact backlog. `- [ ]` = to do, `- [x]` = done. Keep each item to one terse li
 - [ ] Import wizard: bulk-set a set/id prefix over the unmatched rows, remember the last folder
 - [x] `search --open` / `sheet --open`: browser-native equivalents (`full ↗` per hit, the written PDF linked), `sheet --open/--no-open`, and the UI forces `--no-open` so the server never pops a viewer
 
+- [x] **The 1993 frame settled over 26 sets, and the 3.2% gap is closed.** Every set reporting it read by hand; they collapse into three *bands*, not 26 numbers — narrow 23/32 (`lea`/`leb`/`ced`/`cei`, and the Collectors' Editions confirm band 1 independently), ordinary 29/32 (**18 sets**, Arabian Nights → 4th Edition and the 1995-96 reprints, spanning just 0.43mm) and wide 35/42.5 (`2ed`/`3ed`). Band 2 is a *generation* entry, so nothing in the frame refuses; it absorbed the briefly-separate `mtg-1993-4ed` (30/33 against a 29/32 median — one pixel per edge is not a spec). `4bb` alone fits no band at 36/40, which is `mtg-1997`'s numbers exactly, so its set points there; its sibling `fbb` went the other way into band 2, so there is no "foreign" rule and no colour rule
+
+- [x] `mtg-1997` now rests on `sld-1664` (40/36 at 744×1040), a card that physically exists — `me4-227` was an MTGO-only render of the frame template and its 41px top was the odd one out against both real 1997-frame prints
+- [x] Planes and phenomena share `mtg-oversized` (renamed from `mtg-scheme`) rather than being called borderless — same product line, same 89×127mm stock, same era, and the scheme's 2.98/3.00mm *is* the physical border an ordinary 2003-frame card carries. Unreadable directly, but the safe direction: calling a bordered card borderless throws its fit away and looks perfect
+- [x] Showcase frames take their generation's spec, and that is right rather than merely untested: a showcase is the same die and the same printed border, only the *interior* art and frame treatment differ. The survey's 31-of-54 result already said treatments sit on their generation's border, and five treated cards read by hand confirmed it
+
+## Pipeline defaults
+
+- [x] Grade defaults to identity — a look proxdex invented for every card is the same mistake as an invented print profile
+- [x] Upscale factor derived per card from `[tools] upscayl_min_dpi` (1000, which reproduces `base3-4`'s 2508×3504 exactly), not a fixed 2×+double that scattered results from 592 to 1011 dpi. `--scale` overrides; 0 turns it off
+- [x] A **minimum**, not a target, and always cleared: `sheet_dpi` renders at 1400, so a master under it is plainly upsampled at print — the work the upscaler was run to avoid. The doubled ladder (1/4/9/16) means a 600px master jumps to 5400px, taken deliberately. Every real source width (405-744px) clears 1000 dpi. A *target* with nearest-by-ratio was tried and was worse: every target from 1050-1450 gave byte-identical output, so the setting looked precise and was not
+- [x] `config prune` removes keys nothing reads, with their comments — the real library carried 7 from the deleted auto-detector and the deleted grade white-balance, and both surfaces called them ignored without offering to remove them
+- [x] **Decided:** the factor ladder stays coarse. Deriving `double` as well as `scale` would give 1/2/3/4/9/16 instead of 1/4/9/16, but `double` is a *quality* knob ("sharper on small sources"), so it stays the user's choice — and `--scale`/`--no-double` are there per run. The cost is a step: a 600px master goes to 5400px to clear 1000 dpi
+- [x] **Decided, not fixable mechanically:** a real library's `[print]` still carries prose about the deleted `none|paper|foil` presets, sitting above *live* keys. `config prune` removes dead keys and the comments belonging to them; a stale comment beside a key that still exists is indistinguishable from a good one, so it is a hand edit or nothing
+
 ## Colour: grade, print profiles, calibration
 
 - [x] Stretch-to-spec on by default (`[border] stretch`), CLI + UI
@@ -124,5 +157,5 @@ Compact backlog. `- [ ]` = to do, `- [x]` = done. Keep each item to one terse li
 - [x] Settings sections beginning `_` (backs, frames, calibration) were reset to the first TOML table on click
 - [x] Batch manifests written via tomlkit — a quote or backslash in a note broke the hand-rolled TOML
 - [x] Card page rebuilt itself on every step focus, and the library grid on every keystroke — the image flicker
-- [x] Automated suite for the three things eyes can't recheck: the faces model, `detect_inset`, `solveFit`/`solve_fit` parity (the UI's JS run in node) — in the CI and release gates
+- [x] Automated suite for the things eyes can't recheck: the faces model, `solveFit`/`solve_fit` parity (the UI's JS run in node) — in the CI and release gates
 - [x] Oversized cards imposed at their own trim, on their own pages, by default in CLI and UI

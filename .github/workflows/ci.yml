@@ -44,6 +44,11 @@ jobs:
       # files that could not be deleted, an fd never closed, install paths spelled
       # for one OS. It needs no network: the card folder is created first, so
       # `import --id` resolves it locally instead of looking the id up.
+      #
+      # The border marks are passed explicitly because **nothing measures the border
+      # for you**: `border --auto` was removed along with the detector behind it, so
+      # a fit needs to be told where the border is. These are the fixture's own
+      # geometry — 40px sides and 48px top of a 600x825 card.
       - name: A library end to end
         shell: bash
         run: |
@@ -60,7 +65,7 @@ jobs:
           "
           uv run proxdex --root lib import card.png --id base1-4 --stage original --dry-run
           uv run proxdex --root lib import card.png --id base1-4 --stage original
-          uv run proxdex --root lib border --auto base1-4
+          uv run proxdex --root lib border base1-4 --inner-top 0.058 --inner-right 0.067 --inner-bottom 0.057 --inner-left 0.067
           uv run proxdex --root lib skip upscale base1-4
           uv run proxdex --root lib skip grade base1-4
           # --no-open or the runner tries to launch a PDF viewer
@@ -110,7 +115,7 @@ jobs:
           im.save('card.png')
           "
           "$bin/proxdex" --root lib import card.png --id base1-4 --stage original
-          "$bin/proxdex" --root lib border --auto base1-4
+          "$bin/proxdex" --root lib border base1-4 --inner-top 0.058 --inner-right 0.067 --inner-bottom 0.057 --inner-left 0.067
           "$bin/proxdex" --root lib skip upscale base1-4
           "$bin/proxdex" --root lib skip grade base1-4
           "$bin/proxdex" --root lib sheet ci --no-open   # <- the command that broke

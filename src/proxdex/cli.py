@@ -1038,6 +1038,10 @@ def where(ctx: click.Context, clear_cache: bool) -> None:
         if not cfg.upscayl_bin:
             for exe, _ in upscale_mod.installs():
                 console.print(f"          [dim]looked in {escape(str(exe))}[/]")
+    # a profile name in the config outlives the profile, and until this was said
+    # here the only thing that noticed was `sheet`, at the end of a run
+    for gone in profiles.dangling(lib.root, cfg):
+        err.print(f"[yellow]⚠[/] {escape(gone.message)} [dim]{gone.hint}[/]")
     if clear_cache:
         console.print(f"[green]✓[/] cleared {net.clear_cache()} cached response(s)")
     for host in net.health():
@@ -3500,13 +3504,17 @@ def profile_list(ctx: click.Context) -> None:
     """Every profile in this library, plus the identity."""
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
+    # what `[print] profile` actually names, which is `none` when it is unset —
+    # so the marker is present in every case *except* the one worth naming, and
+    # the legend below can be honest about which of those you are looking at
+    active = profiles.named(lib.root, cfg.print_profile)
     table = Table(box=None, pad_edge=False, header_style="bold")
     for col in ("", "Profile", "Corrects", "Rounds", "Last print off by", "Notes"):
         table.add_column(col)
     for prof in profiles.listing(lib.root):
         residual = prof.residual
         table.add_row(
-            "→" if prof.name == cfg.print_profile else "",
+            "→" if prof.name == active else "",
             f"[bold]{prof.name}[/]" if prof.stored else f"[dim]{prof.name}[/]",
             prof.how if prof.stored else "[dim]nothing (identity)[/]",
             _round_count(prof),
@@ -3516,10 +3524,21 @@ def profile_list(ctx: click.Context) -> None:
             _one_line(prof.notes),
         )
     console.print(table)
-    console.print(
-        f"[dim]→ is the active profile (\\[print] profile). '{profiles.NONE}' is "
-        "the identity — it corrects nothing, and is not a file.[/]"
-    )
+    # the legend only describes a marker that is on the page. No marker means the
+    # configured name is not in this list, and *that* is the sentence worth
+    # printing — a legend for an absent arrow was the one case it had to explain
+    if active is not None:
+        console.print(
+            f"[dim]→ is the active profile (\\[print] profile). '{profiles.NONE}' "
+            "is the identity — it corrects nothing, and is not a file.[/]"
+        )
+    else:
+        console.print(
+            f"[dim]'{profiles.NONE}' is the identity — it corrects nothing, and is "
+            "not a file.[/]"
+        )
+    for gone in profiles.dangling(lib.root, cfg):
+        err.print(f"[yellow]⚠[/] {escape(gone.message)}\n  [dim]{gone.hint}[/]")
 
 
 @profile_cmd.command("show")

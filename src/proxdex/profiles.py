@@ -33,6 +33,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -539,6 +540,94 @@ def resolve(root: Path, name: str) -> Profile:
     raise ProxdexError(
         f"no print profile named '{name}' — `proxdex profile list`, or "
         f"`proxdex profile new {name}`"
+    )
+
+
+def named(root: Path, name: str) -> str | None:
+    """What ``name`` refers to, as :func:`listing` spells it — or None if nothing
+    in this library answers to it.
+
+    An empty name means ``none``, because that is what :func:`active` resolves it
+    to. A name that is not a legal profile name at all is None rather than an
+    error: this is asked in order to *report*, and a `[print] profile` somebody
+    typed by hand can be anything.
+    """
+    try:
+        want = slug(name or NONE)
+    except ProxdexError:
+        return None
+    return want if want == NONE or exists(root, want) else None
+
+
+class PrintSetting(StrEnum):
+    """The two ``[print]`` keys that name a profile."""
+
+    PROFILE = "profile"
+    BACK_PROFILE = "back_profile"
+
+    @property
+    def label(self) -> str:
+        return f"[print] {self.value}"
+
+    @property
+    def prints(self) -> str:
+        return "fronts" if self is PrintSetting.PROFILE else "backs"
+
+
+@dataclass(frozen=True, slots=True)
+class Dangling:
+    """A ``[print]`` setting naming a profile that is not there."""
+
+    setting: PrintSetting
+    name: str
+
+    @property
+    def message(self) -> str:
+        return (
+            f"{self.setting.label} names '{self.name}', which is not a profile in "
+            f"this library — every sheet run refuses until it is changed"
+        )
+
+    @property
+    def hint(self) -> str:
+        # deliberately not "`profile list`" — one of the two places this is
+        # printed *is* that list, and it has just shown you the names
+        return (
+            f"`proxdex profile use <name>`, or `proxdex profile new {self.name}` "
+            f"if that is the medium you meant"
+        )
+
+    def json(self) -> dict[str, Any]:
+        return {
+            "setting": self.setting.value,
+            "name": self.name,
+            "prints": self.setting.prints,
+            "message": self.message,
+            "hint": self.hint,
+        }
+
+
+def dangling(root: Path, cfg: Config) -> tuple[Dangling, ...]:
+    """Every ``[print]`` profile setting that names nothing.
+
+    A profile name in ``proxdex.toml`` outlives the profile: the real library
+    carried ``[print] profile = "foil"`` from the deleted built-in presets, so
+    every `sheet` run died with *no print profile named 'foil'* and nothing before
+    that moment said so — not `where`, not `profile list`, which is the one place
+    an absent marker was already the symptom. So it is asked here, once, by
+    everything that draws a profile: it is the same broken reference `frames
+    check` reports as :data:`specs.Fault.MISSING`.
+
+    Only a *set* key can dangle. Unset means "the identity" for the fronts and
+    "the same medium as the fronts" for the backs, and both are answers.
+    """
+    return tuple(
+        Dangling(setting=setting, name=value)
+        for setting, value in (
+            (PrintSetting.PROFILE, cfg.print_profile),
+            (PrintSetting.BACK_PROFILE, cfg.print_back_profile),
+        )
+        if value and named(root, value) is None
     )
 
 

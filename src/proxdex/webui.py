@@ -1232,6 +1232,16 @@ def create_app(lib: Library) -> FastAPI:
         return {
             "active": cfg.print_profile,
             "active_back": cfg.print_back_profile,
+            # what those two names actually resolve to in this library, so the
+            # screen marks the right row (or no row, and says why below) rather
+            # than string-comparing a name that may not be here at all
+            "active_name": profiles.named(lib.root, cfg.print_profile),
+            "active_back_name": profiles.named(lib.root, cfg.print_back_profile)
+            if cfg.print_back_profile
+            else None,
+            # the same broken reference `frames check` reports, on the same terms:
+            # `profile list` says it in the terminal, this says it here
+            "dangling": [d.json() for d in profiles.dangling(lib.root, cfg)],
             "identity": profiles.NONE,
             "recipe_keys": list(media.RECIPE_KEYS),
             "recipe_range": [media.RECIPE_LOW, media.RECIPE_HIGH],

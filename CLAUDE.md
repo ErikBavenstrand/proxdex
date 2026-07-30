@@ -90,6 +90,10 @@ until it reaches paper or a pasted link:
   file `Config.load` still agrees with. It rewrites the one file a person typed by
   hand, and each way it can go wrong (a live setting silently reverted, a file left
   unparseable, prose left describing a deleted feature) surfaces much later.
+- `tests/test_profiles.py` — `profiles.named`/`dangling`, for the same reason as the
+  import plan: one answer, four consumers (`where`, `profile list`'s marker *and* its
+  legend, `/api/profiles`), and a failure invisible until the end of a print run —
+  a `[print] profile` naming a profile that is gone.
 - `tests/test_deps.py` — that every non-stdlib import is a *declared* dependency,
   or is guarded by a `try/except ModuleNotFoundError` that says how to install it.
   It reads `pyproject.toml` rather than trying the import, because in the
@@ -1163,6 +1167,24 @@ be edited or calibrated. A new profile starts at identity too. Numbers proxdex
 invented for a printer it has never seen are a guess wearing a label — "foil needs
 saturation 1.38" described exactly one setup — and shipping them as a "starting
 point" invites people to print through a correction nobody measured.
+
+**A profile name in the config outlives the profile, so a dangling one is reported
+rather than raised.** `[print] profile = "foil"` survived the deletion of the
+built-in presets in a real library, and the only thing that noticed was `sheet` — at
+the end of a run, with `no print profile named 'foil'`. It is the same broken
+reference `frames check` reports as `Fault.MISSING`, so it is answered the same way:
+`profiles.dangling(root, cfg)` is one pure function over the config and the
+profiles directory, and `proxdex where`, `profile list` and `/api/profiles` (the
+print screen's banner) all print it. Both keys, since `back_profile` raises just as
+late; an **unset** key never dangles, because unset means the identity for the
+fronts and "the same medium as the fronts" for the backs, and both are answers.
+`profiles.named` is the other half — what a configured name resolves to *here*,
+slug-matched, `none` when unset, `None` when nothing answers to it (including a
+string that is not a legal profile name at all, since this is asked in order to
+report). That is what places `profile list`'s `→` and the UI's `active` chip, so no
+marker happens for exactly one reason, and **the legend only describes a marker
+that is on the page**: without it the table explained an arrow that was absent
+precisely when the absence was the thing worth naming.
 
 **A profile is defined one of two ways, and `Profile.how` says which:**
 `measured` (calibration rounds), `by hand` (a non-neutral `media.Recipe`), or

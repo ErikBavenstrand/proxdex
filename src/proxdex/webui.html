@@ -4409,13 +4409,20 @@ async function renderPrint(){
   const list = state.profileList;
   const names = list.profiles.map(p => p.name);
   if(!state.profile || !names.includes(state.profile))
-    state.profile = list.active && names.includes(list.active) ? list.active : names[0];
+    state.profile = list.active_name || names[0];
   $('#main').innerHTML = `
     <div class="d-flex align-items-baseline gap-2 mb-3 flex-wrap">
       <div><div class="eyebrow">Colour</div><h5 class="mb-0">Print profiles</h5></div>
       <span class="hint ms-auto mb-0">One per medium you print on. A sheet is
         corrected by the active profile — the stored cards stay neutral.</span>
     </div>
+    ${(list.dangling || []).map(d => `
+      <div class="panel p-3 mb-3">
+        <div class="eyebrow mb-1">Nothing corrects the ${esc(d.prints)}</div>
+        <div style="color:var(--hold)">${esc(d.message)}</div>
+        <p class="hint mb-0 mt-1">Pick one below and Use it for sheets, or make the
+          medium it meant.</p>
+      </div>`).join('')}
     <div class="setgrid">
       <div class="secnav" id="profnav">${list.profiles.map(p => `
         <button class="${p.name === state.profile ? 'on' : ''}" onclick="pickProfile('${esc(p.name)}')">
@@ -4456,7 +4463,10 @@ async function paintProfile(){
     catch(e){ host.innerHTML = `<p class="hint">${esc(String(e))}</p>`; return; }
   }
   const p = state.profileDetail;
-  const active = state.profileList.active === p.name;
+  // what `[print] profile` resolves to here, not the raw name — unset means the
+  // identity, and a name that is not in this library marks no row at all (the
+  // banner above says so, rather than every row quietly reading "not active")
+  const active = state.profileList.active_name === p.name;
   const res = p.residual;
   host.innerHTML = `
     <div class="panel p-3 mb-3">

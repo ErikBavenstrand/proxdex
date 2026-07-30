@@ -2682,6 +2682,7 @@ def border(
             raise FileError(f"{name}: no original yet (fetch it first)")
         with Image.open(src) as im:
             w, h = im.width, im.height
+        trim = _trim_mm(card, cfg)
         marks = cast("tuple[float, float, float, float]", inner) if use_inner else None
         # one call decides the spec, and it reports which of the seven ways it got
         # there: an override, this card's pin, its printing, a rule, the set's
@@ -2711,7 +2712,10 @@ def border(
             guide = chosen.spec  # refused above if nothing describes this printing
             _warn_spec(card, chosen)
             inner_t = marks
-            plan = bleed.fit_plan(w, h, guide, inner_t, cfg, stretch=do_stretch)
+            # the size *this* card prints at, not the library's — an oversized
+            # printing is reshaped to 88.9×127mm, or `sheet` crops it into a cell
+            # it was never fitted to
+            plan = bleed.fit_plan(w, h, guide, inner_t, trim, stretch=do_stretch)
             tw, th = round(plan.trim_w), round(plan.trim_h)
             bd = plan.borders
             tag = f"{guide.name}{', stretch' if do_stretch else ''}"
@@ -2726,7 +2730,7 @@ def border(
             if dry_run:
                 console.print(f"[cyan]{name}[/]: {note}")
                 return
-            bleed.fit(src, dst, guide, inner_t, cfg, stretch=do_stretch)
+            bleed.fit(src, dst, guide, inner_t, trim, stretch=do_stretch)
             # what it was fitted to, beside the file: `doctor` compares it against
             # what the rules say today, because a spec that has since been
             # corrected leaves a master that is wrong and looks fine
@@ -2739,7 +2743,7 @@ def border(
             if dry_run:
                 console.print(f"[cyan]{name}[/]: {note}")
                 return
-            bleed.grow(src, dst, cfg, **grow_mm)
+            bleed.grow(src, dst, trim, **grow_mm)
         _flatten_filed(dst)
         card.clear_skip(Stage.BORDERED, f)
         _cascade(card, Stage.BORDERED, f)
@@ -2980,7 +2984,7 @@ class _Repro:
         src = scratch.file(".png", self.tmpdir)
         dst = scratch.file(".png", self.tmpdir)
         im.save(src)
-        bleed.cut_bleed(src, dst, cfg, bp)
+        bleed.cut_bleed(src, dst, trim, bp)
         return Image.open(dst).convert("RGB")
 
 

@@ -22,7 +22,10 @@ is noise, and a repair nobody measured is worse than the defect:
     by the same call, since a file with nothing to composite is converted.
 
 ``aspect``
-    A *bordered* master that is not the configured trim's aspect. The border step
+    A *bordered* master that is not the aspect of the trim **this card** prints at
+    (``sheet.trim_mm``, so an oversized master is right at 88.9×127mm and would be
+    a finding at every other size — the same call ``border`` fits against).
+    The border step
     produces exactly that aspect by construction (cardbleed reshapes to it), so a
     file that misses it was placed by hand or written by something else — and
     `sheet` will silently ``cover``-crop it, losing border on two edges. **Not**
@@ -66,7 +69,7 @@ from typing import TYPE_CHECKING
 
 from PIL import Image, UnidentifiedImageError
 
-from proxdex import scratch, sources, specs
+from proxdex import scratch, sheet, sources, specs
 from proxdex.library import PIN_MARKER, Stage
 from proxdex.steps import STAGES
 
@@ -76,6 +79,7 @@ if TYPE_CHECKING:
 
     from proxdex.config import Config
     from proxdex.library import Card
+    from proxdex.sheet import Trim
     from proxdex.specs import Registry
 
 #: the one stage whose aspect proxdex dictates. Everything after it inherits that
@@ -361,25 +365,29 @@ def _examine(
         out.append(found(Ailment.ALPHA, f"mode {mode}"))
     elif mode != "RGB":
         out.append(found(Ailment.MODE, f"mode {mode}"))
-    slip = _aspect_slip(size, cfg)
-    if stage is _FITTED and slip > _ASPECT_SLACK_PX:
+    # measured against the size *this* card prints at: an oversized master is
+    # correct at 88.9×127mm and would be a finding at every other size
+    trim = sheet.trim_mm(card, cfg)
+    if stage is _FITTED and _aspect_slip(size, trim) > _ASPECT_SLACK_PX:
         w, h = size
-        want = round(w * cfg.card_h_mm / cfg.card_w_mm)
+        trim_w, trim_h = trim
+        want = round(w * trim_h / trim_w)
         out.append(
             found(
                 Ailment.ASPECT,
-                f"{w}×{h}px — {cfg.card_w_mm:g}×{cfg.card_h_mm:g}mm wants {w}×{want}",
+                f"{w}×{h}px — {trim_w:g}×{trim_h:g}mm wants {w}×{want}",
             )
         )
     return out
 
 
-def _aspect_slip(size: tuple[int, int], cfg: Config) -> float:
+def _aspect_slip(size: tuple[int, int], trim: Trim) -> float:
     """How many pixels of height separate this image from the trim's aspect."""
     w, h = size
-    if w <= 0 or h <= 0 or cfg.card_w_mm <= 0:
+    trim_w, trim_h = trim
+    if w <= 0 or h <= 0 or trim_w <= 0:
         return 0.0
-    return abs(h - w * cfg.card_h_mm / cfg.card_w_mm)
+    return abs(h - w * trim_h / trim_w)
 
 
 def _oneline(exc: Exception) -> str:

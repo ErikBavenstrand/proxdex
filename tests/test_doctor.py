@@ -21,7 +21,8 @@ from conftest import bordered_card, save
 from proxdex import doctor
 from proxdex.config import Config
 from proxdex.doctor import Ailment
-from proxdex.library import Card, Library, Stage
+from proxdex.games import OVERSIZED_H_MM, OVERSIZED_W_MM
+from proxdex.library import OVERSIZED_MARKER, Card, Library, Stage
 
 BORDER = (140, 170, 180)
 #: what the two providers actually send — nowhere near the 63:88 trim, which is
@@ -142,6 +143,44 @@ class TestAspect:
         for stage in (Stage.ORIGINAL, Stage.UPSCALED, Stage.EDITED):
             save(bordered_card(w=SOURCE_W, h=SOURCE_H), card.stage_path(stage))
         assert not one(card, cfg)
+
+
+class TestAnOversizedCardIsMeasuredAtItsOwnSize:
+    """A planar, scheme or Vanguard card prints at 88.9×127mm, so *that* is the
+    aspect its bordered master is right at. Measuring it against the library's
+    63.5×88.9 gets both answers backwards: it reports every correctly-fitted
+    oversized master as a defect and passes the ones `sheet` will crop 0.91mm off
+    each side of. `doctor` asks `sheet.trim_mm`, the same call `border` makes.
+    """
+
+    @staticmethod
+    def _mark(card: Card) -> None:
+        (card.dir / OVERSIZED_MARKER).touch()
+
+    def test_its_own_aspect_passes(self, card: Card, cfg: Config) -> None:
+        self._mark(card)
+        want = round(1040 * OVERSIZED_H_MM / OVERSIZED_W_MM)
+        save(bordered_card(w=1040, h=want), card.stage_path(Stage.BORDERED))
+        assert not one(card, cfg)
+
+    def test_the_ordinary_trim_is_a_finding(self, card: Card, cfg: Config) -> None:
+        """The shape the bug produced: fitted to 63.5:88.9 and stored as if done."""
+        self._mark(card)
+        w = 1040
+        h = round(w * cfg.card_h_mm / cfg.card_w_mm)
+        save(bordered_card(w=w, h=h), card.stage_path(Stage.BORDERED))
+        found = one(card, cfg)
+        assert [f.ailment for f in found] == [Ailment.ASPECT]
+        # and it names the size this card really prints at, not the library's
+        assert f"{OVERSIZED_W_MM:g}×{OVERSIZED_H_MM:g}mm" in found[0].detail
+        assert f"{w}×{round(w * OVERSIZED_H_MM / OVERSIZED_W_MM)}" in found[0].detail
+
+    def test_an_ordinary_card_is_unaffected(self, card: Card, cfg: Config) -> None:
+        """The oversized trim is only ever consulted for an oversized card — the
+        marker is what says so, and without it nothing about this changes."""
+        want = round(1040 * OVERSIZED_H_MM / OVERSIZED_W_MM)
+        save(bordered_card(w=1040, h=want), card.stage_path(Stage.BORDERED))
+        assert [f.ailment for f in one(card, cfg)] == [Ailment.ASPECT]
 
 
 class TestRepair:

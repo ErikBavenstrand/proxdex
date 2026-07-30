@@ -219,7 +219,10 @@ fetch and written into the card's own `.layout` / `.oversized` / `.frame` marker
 so nothing downstream needs another API call. `_kind_note` says out loud when a
 printing is not an ordinary one-sided 63×88 card.
 
-**Every card is imposed at its own size** (`cli._trim_mm` → `sheet.Cell.trim`).
+**Every card is imposed — and fitted, and examined — at its own size**
+(`sheet.trim_mm`, aliased `cli._trim_mm`; also `bleed.fit`, `doctor`'s aspect check
+and `/api/frame`, so nothing downstream reshapes a card to a size it will not be
+printed at).
 `sheet.py` groups cells by trim and gives each group its own pages and its own
 `Geo` (`sheet.grid_for`: the configured `cols`/`rows` at the configured trim, as
 many as the page holds at any other), so an oversized card is never shrunk into a
@@ -371,10 +374,12 @@ at every filing point does nothing for the files already on disk, so `proxdex do
 walks every stored stage image and reports each one that is not what proxdex would
 write today. Four findings, declared once as `CHECKS` — `alpha`, `mode` (both
 repaired in place by the same `sources.flatten` every filing point calls),
-`unreadable`, and `aspect`: a **bordered** master that is not the configured trim's
-aspect, which `sheet` would `cover`-crop, losing border off two edges silently.
-Only the bordered stage is measured for aspect — every later stage inherits it, and
-reporting one cause three times is not a better report. Each check owns its own
+`unreadable`, and `aspect`: a **bordered** master that is not the aspect of the trim
+*this card* prints at (`sheet.trim_mm`, so an oversized master is right at 88.9×127
+and would be a finding at every other size), which `sheet` would `cover`-crop,
+losing border off two edges silently. Only the bordered stage is measured for
+aspect — every later stage inherits it, and reporting one cause three times is not
+a better report. Each check owns its own
 label, *why* and hint, so the CLI's terminal output and the settings screen's
 **stored images** panel (`/api/doctor`, `/api/doctor/fix`) explain a defect with the
 same sentence. Two things it must keep doing: examining reads **headers only** and
@@ -772,12 +777,24 @@ spec is visible immediately, with nothing restarted.
 
 **cardbleed integration (`bleed.py`, `frames.py`).** proxdex reshaping runs
 **in-process** over `cardbleed.bleed_card` (no subprocess). proxdex owns the
-*inputs* — the era's target border widths (`frames.FrameGuide.inset`) and where
-the border currently sits (align marks / `--inner-*`) — and cardbleed does the
-fit (`cardbleed.geometry.solve_fit`): reshape to exactly 63:88 with correct
-borders, optional `stretch` to hit them precisely. Never store card sizes/border
-% in cardbleed — they're proxdex config. The border master is exactly 63:88 by
-construction, so **`sheet` must never stretch** (default `fit = cover`).
+*inputs* — the era's target border widths (`frames.FrameGuide.inset`), where
+the border currently sits (align marks / `--inner-*`) and **the size this card
+prints at** — and cardbleed does the fit (`cardbleed.geometry.solve_fit`):
+reshape to exactly the trim aspect with correct borders, optional `stretch` to
+hit them precisely. Never store card sizes/border % in cardbleed — they're
+proxdex's. The border master is exactly the trim aspect by construction, so
+**`sheet` must never stretch** (default `fit = cover`).
+
+**The trim is a `Trim` argument, not `cfg.card_w_mm`, because it is per card.**
+Every entry point (`fit`, `fit_plan`, `grow`, `cut_bleed`) takes it and the caller
+passes `sheet.trim_mm(card, cfg)` — the same call `sheet` groups pages by and
+`upscale` derives its factor from. Reading the config pair here reshaped an
+oversized printing to 63.5:88.9, and `sheet` — which *does* impose it at 88.9×127
+— then `cover`-cropped 0.91mm off each side to make it fit its own cell: a
+2.15mm side border where `mtg-oversized` asks for 2.99, invisible on screen
+because the overlay is drawn in fractions too. `doctor`'s aspect check and
+`/api/frame` (the align ghost, whose `solveFit` mirrors `solve_fit` against
+whatever size it is handed) ask the same function, so all four agree per card.
 
 **Sheet / production (`sheet.py`, `sheet` command).** Cut bleed and medium
 colour-correction are **not baked into the card** — they're added at `sheet`

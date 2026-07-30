@@ -845,12 +845,18 @@ def create_app(lib: Library) -> FastAPI:
         reg = specs.load(lib.root)
         found = _resolution(reg, card)
         guide = found.spec
+        # the size *this* card prints at, so the align ghost draws the trim
+        # `border` will really produce — an oversized printing is 88.9×127mm, and
+        # the JS `solveFit` mirrors cardbleed against whatever it is handed here
+        trim_w, trim_h = sheet_mod.trim_mm(card, cfg)
         return {
             "w": w,
             "h": h,
-            "card_aspect": round(cfg.card_w_mm / cfg.card_h_mm, 3),
-            "card_w_mm": cfg.card_w_mm,
-            "card_h_mm": cfg.card_h_mm,
+            # the two millimetres, and no aspect beside them: `solveFit` divides
+            # them itself and is held to cardbleed within 1e-12, so a rounded
+            # third copy of the same fact could only ever be the wrong one
+            "card_w_mm": trim_w,
+            "card_h_mm": trim_h,
             "game": card.game.value,
             "game_name": games.get(card.game).name,
             # frame-size guide: inner border inset [top,right,bottom,left], plus

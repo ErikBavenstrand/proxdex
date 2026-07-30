@@ -23,7 +23,12 @@ import pytest
 from proxdex.bleed import fit_plan
 from proxdex.config import Config
 from proxdex.frames import FrameGuide, GuideId
-from proxdex.games import CARD_H_MM, CARD_W_MM
+from proxdex.games import (
+    CARD_H_MM,
+    CARD_W_MM,
+    OVERSIZED_H_MM,
+    OVERSIZED_W_MM,
+)
 
 WEBUI = Path(__file__).resolve().parents[1] / "src" / "proxdex" / "webui.html"
 EDGES = ("top", "right", "bottom", "left")
@@ -110,9 +115,11 @@ def run_js(
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed — the UI half of the parity check")
-    # the card size comes from the *config*, the same value the Python half is given.
-    # Hardcoding it here once meant the two halves were handed different cards the
-    # moment the trim changed, and the parity test failed on its own harness.
+    # the card size is passed in — the same trim the Python half is given. Hardcoding
+    # it here once meant the two halves were handed different cards the moment the
+    # trim changed, and the parity test failed on its own harness. It is a parameter
+    # rather than the config because it is per card: an oversized printing is fitted
+    # to 88.9×127mm, and `/api/frame` hands the page that size for those cards.
     payload = [
         {
             "m": {"w": c.w, "h": c.h, "card_w_mm": card[0], "card_h_mm": card[1]},
@@ -145,22 +152,28 @@ def cfg() -> Config:
 
 
 @pytest.fixture(scope="module")
+def trim(cfg: Config) -> tuple[float, float]:
+    """What an ordinary card prints at — `sheet.trim_mm` for anything not oversized."""
+    return (cfg.card_w_mm, cfg.card_h_mm)
+
+
+@pytest.fixture(scope="module")
 def js_results(
-    tmp_path_factory: pytest.TempPathFactory, cfg: Config
+    tmp_path_factory: pytest.TempPathFactory, trim: tuple[float, float]
 ) -> list[dict[str, object]]:
     """Every case solved once, in node — the subprocess is the slow part."""
-    out = run_js(CASES, tmp_path_factory.mktemp("js"), (cfg.card_w_mm, cfg.card_h_mm))
+    out = run_js(CASES, tmp_path_factory.mktemp("js"), trim)
     assert all(r is not None for r in out), "solveFit refused a case it should solve"
     return [r for r in out if r is not None]
 
 
 @pytest.mark.parametrize("index", range(len(CASES)), ids=[c.name for c in CASES])
 def test_the_ui_and_cardbleed_agree(
-    index: int, js_results: list[dict[str, object]], cfg: Config
+    index: int, js_results: list[dict[str, object]], trim: tuple[float, float]
 ) -> None:
     case, js = CASES[index], js_results[index]
     plan = fit_plan(
-        case.w, case.h, guide_of(case.guide), case.marks, cfg, stretch=case.stretch
+        case.w, case.h, guide_of(case.guide), case.marks, trim, stretch=case.stretch
     )
 
     assert js["tw"] == round(plan.trim_w)
@@ -175,21 +188,21 @@ def test_the_ui_and_cardbleed_agree(
     assert tuple(js["cropped"]) == plan.cropped  # pyright: ignore[reportArgumentType]
 
 
-def test_stretch_hits_the_target_exactly(cfg: Config) -> None:
+def test_stretch_hits_the_target_exactly(trim: tuple[float, float]) -> None:
     """What stretch is *for*: the resulting borders are the guide, not near it."""
     plan = fit_plan(
         745,
         1040,
         guide_of(MTG),
         (0.045, 0.052, 0.045, 0.052),
-        cfg,
+        trim,
         stretch=True,
     )
     got = tuple(plan.borders[e] for e in EDGES)
     assert got == pytest.approx(MTG, abs=1e-9)
 
 
-def test_the_trim_is_the_card_aspect(cfg: Config) -> None:
+def test_the_trim_is_the_card_aspect(trim: tuple[float, float]) -> None:
     """The border master is exactly the card's aspect by construction — which is why
     `sheet` must never stretch. Read from the config rather than written out, so the
     property is pinned and not one particular trim."""
@@ -199,27 +212,54 @@ def test_the_trim_is_the_card_aspect(cfg: Config) -> None:
             case.h,
             guide_of(case.guide),
             case.marks,
-            cfg,
+            trim,
             stretch=case.stretch,
         )
-        assert plan.trim_w / plan.trim_h == pytest.approx(
-            cfg.card_w_mm / cfg.card_h_mm, rel=1e-12
-        )
+        assert plan.trim_w / plan.trim_h == pytest.approx(trim[0] / trim[1], rel=1e-12)
+
+
+def test_an_oversized_card_is_fitted_to_its_own_size(tmp_path: Path) -> None:
+    """Both halves take the trim they are handed, so a planar card is reshaped to
+    88.9×127mm and not to the library's 63.5×88.9.
+
+    This is the one that was wrong: `bleed` read the size out of `Config`, so an
+    oversized master came out 63.5:88.9 and `sheet` — which does group it by its own
+    trim — then `cover`-cropped 1.0% off each side to fit it into an 88.9×127 cell.
+    The border landed at 2.07/2.12mm where `mtg-oversized` asks for 2.98/2.99, and
+    nothing on screen said so, because the overlay is drawn in fractions too.
+    """
+    over = (OVERSIZED_W_MM, OVERSIZED_H_MM)
+    guide = guide_of(
+        (35 / 1490, 35 / 1040, 35 / 1490, 35 / 1040)  # mtg-oversized, as shipped
+    )
+    case = Case("oarc scan", 1040, 1490, SQUARE, guide.inset, stretch=True)
+    plan = fit_plan(case.w, case.h, guide, case.marks, over, stretch=case.stretch)
+    assert plan.trim_w / plan.trim_h == pytest.approx(over[0] / over[1], rel=1e-12)
+    # and the borders it aims at are the spec's, in millimetres of *this* card
+    got = tuple(plan.borders[e] for e in EDGES)
+    assert got == pytest.approx(guide.inset, abs=1e-9)
+    assert got[0] * over[1] == pytest.approx(2.98, abs=0.01)
+    assert got[1] * over[0] == pytest.approx(2.99, abs=0.01)
+
+    (js,) = run_js((case,), tmp_path, over)
+    assert js is not None
+    assert js["tw"] == round(plan.trim_w)
+    assert js["th"] == round(plan.trim_h)
 
 
 def test_marks_that_leave_no_inner_frame_are_refused(
-    cfg: Config, tmp_path: Path
+    trim: tuple[float, float], tmp_path: Path
 ) -> None:
     """Both halves say no rather than inventing a fit: the UI returns null (and
     the panel says the marks leave no inner frame), Python raises."""
     impossible = Case("impossible", 745, 1040, (0.6, 0.1, 0.6, 0.1), MTG)
-    assert run_js((impossible,), tmp_path, (cfg.card_w_mm, cfg.card_h_mm)) == [None]
+    assert run_js((impossible,), tmp_path, trim) == [None]
     with pytest.raises(Exception, match="no inner frame"):
         fit_plan(
             impossible.w,
             impossible.h,
             guide_of(impossible.guide),
             impossible.marks,
-            cfg,
+            trim,
             stretch=False,
         )

@@ -49,7 +49,11 @@ log below is.
 
 | spec | source | top mm | sides mm | top % | sides % | covers |
 |---|---|---|---|---|---|---|
-| `pokemon-wotc` | calipers | 3.45 | 3.15 | 3.920 | 5.000 | `base1`–`base6`, `gym1`–`gym2`, `neo1`–`neo4` |
+| `pokemon-wotc` | calipers | 3.45 | 3.15 | 3.920 | 5.000 | `base1`–`base6`, `gym1`–`gym2`, `neo1`–`neo4`, and `basep` **inherited** (see below) |
+| `pokemon-ecard` | 2 cards, hand px | 3.12 | 3.24 | 3.509 | 5.100 | `ecard1`–`ecard3` — **asymmetric**; bottom 6.76mm, left 7.16mm (see below) |
+| `pokemon-ecard-deep-top` | 1 card, hand px | 9.10 | 2.61 | 10.238 | 4.116 | `ecard1`–`ecard3`, a **second** frame — same dot code (bottom 6.76mm, left 7.16mm shared), top 6mm deeper; top/right derived to hold the reading's sums |
+| `pokemon-ecard-ex` | 2 cards, hand px | 3.26 | 2.33 / 2.76 | 3.666 | 3.675 / 4.340 | `ex1`–`ex4`, `np` — the dot code moves to the **bottom alone** (6.01mm); sides not collapsed |
+| `pokemon-ex-plain` | 1 card, hand px | 2.66 | 2.64 | 2.991 | 4.152 | `ex1`–`ex4`, `np` too, on the cards printed with **no dot code** — square border, the thinnest Pokémon spec |
 | `mtg-1993` | 18 sets, median px | 2.74 | 2.47 | 3.077 | 3.893 | frame `1993` — Arabian Nights to 4th Edition and the 1995-96 reprints |
 | `mtg-1993-alpha` | `lea-161`/`leb-162`, px | 2.74 | 1.96 | 3.077 | 3.087 | sets `lea`, `leb`, `ced`, `cei` |
 | `mtg-1993-unlimited` | `2ed-162`/`3ed-162`, px | 3.63 | 2.98 | 4.087 | 4.698 | sets `2ed`, `3ed` |
@@ -62,7 +66,26 @@ log below is.
 | `borderless` | definition | 0.00 | 0.00 | 0.000 | 0.000 | `border_color: borderless`, art series, `layout: planar` |
 
 Top and bottom are one number, and left and right are another: the cutting error is
-cancelled rather than recorded (step 5 below). Percentages are the stored form (the inset
+cancelled rather than recorded (step 5 below). **The e-Reader specs are the exceptions, and
+they are real ones** — Expedition, Aquapolis and Skyridge carry the Nintendo e-Reader
+dot-code strip down the *left* edge and along the *bottom*, so those two edges are about
+twice the other two and collapsing opposite edges would split the difference on all four.
+Its four numbers are top 3.509%, right 5.100%, bottom 7.608%, left 11.269%; the table above
+shows the two ordinary edges, which land within a few tenths of a millimetre of WOTC's
+border — the same operation, the same border, plus a strip.
+
+`pokemon-ecard-ex` is the other, and it is asymmetric a **different way**: across `ex1`–`ex4`
+and `np` the strip runs along the bottom *only* (6.01mm against a 3.26mm top), so three edges
+are ordinary. Its left and right are not collapsed either, which is the one place this log
+keeps a side difference: both cards read left wider than right by the *same* 0.67pp, and a
+difference that reproduces in one direction across a 1.64× scale gap is not a cutting error.
+
+`pokemon-ex-plain` is the counterpart to it and needs no exception at all: those same sets
+printed cards with **no dot code**, and those have a square 23px border with nothing to be
+asymmetric about. Opposite edges are collapsed there the ordinary way — one number per axis,
+because one number per axis was read.
+
+Percentages are the stored form (the inset
 as a fraction of the card); millimetres are those percentages of **63.5×88.9mm** — the
 2.5×3.5in poker size both games print at, which is *also* what proxdex trims to, so the
 millimetres here are the ones that come off the printer. The exceptions are the two
@@ -79,8 +102,50 @@ help from the set id as well, because it is three bands a millimetre apart — b
 `future` shares `mtg-2003` because a card of it *measured* the same, not because it was
 assumed to.
 
-What still resolves to nothing: **Pokémon from `ecard1` onward**, which is now the only real
-gap left, and any MTG card whose `.traits` were never recorded (a re-fetch settles that).
+What still resolves to nothing: **Pokémon from Diamond & Pearl onward** (2007-05 and
+everything after — DP, HeartGold, Black & White, XY, Sun & Moon, Sword & Shield, Scarlet &
+Violet), which is now the only real gap left, and any MTG card whose `.traits` were never
+recorded (a re-fetch settles that). The e-Card series closed with the readings at the top of
+the log below; the whole ex series answers, though only its first five sets were read (see
+below).
+
+**`basep` is the one id in the table that was not separately read.** The baseline used to key
+Pokémon on set-id *prefixes*, and `"base"` claimed the Wizards Black Star Promos along with
+`base1`–`base6`. Set keys are exact now, which forced the question, and it stays on
+`pokemon-wotc`: it is the same operation and the same yellow border, and dropping it would
+stop a card that borders today. Recorded here as **inherited** rather than measured, because
+the alternative is letting an accident pass for a reading. One card of it with calipers would
+settle it either way.
+
+The **first five sets of that gap are answered**, and it took two specs, because those sets
+printed two borders. `pokemon-ecard-ex` carries the e-Reader dot code along the bottom and
+`pokemon-ex-plain` is the plain square border of the cards printed without one; both cover
+`ex1` Ruby & Sapphire, `ex2` Sandstorm, `ex3` Dragon, `ex4` Team Magma vs Team Aqua and `np`
+— 2003-07 to 2004-03, the run over which the dot code appears and then stops.
+
+Nothing in the metadata says which of the two a given card is, so both resolve as candidates
+and a person picks per card — the same shape as the two e-Card frames. `pokemon-ecard-ex` is
+what a fit uses with nothing chosen, on weight of evidence (two cards read against one) and
+**not** as a claim about which is commoner; nobody counted.
+
+**The rest of the ex series takes `pokemon-ex-plain`, and it is inherited rather than read.**
+The strip stops after `ex4`, so from `ex5` Hidden Legends (2005-06) to `ex16` Power Keepers
+(2007-05) — and the four Trainer Kits `tk1a`/`tk1b`/`tk2a`/`tk2b`, which are those printings
+boxed differently — there is one shape and nothing to pick between: the plain square border,
+so `pokemon-ex-plain` is those sixteen sets' *only* candidate. That is the difference from
+the five sets above, where two borders genuinely coexist.
+
+The number is still one card of `np` (554×769, 23px all round). Sixteen set ids now rest on
+it, none of them separately read, which is the same standing as `basep` above and is recorded
+the same way: **inherited, not measured.** The grounds are the same too — same era, same
+operation, the same border with the strip left off — and so is the caveat, that it is a
+decision and not a reading. One card of `ex10` or so would confirm it or split it, and it is
+worth doing precisely because a single 554px file is now carrying an era.
+
+The keys are **exact ids** rather than a prefix, which is what makes the claim reviewable:
+`("ex1",)` would have swept all sixteen in silently, and enumerating them is how a later
+reader can see exactly what was decided and where the measurement stops. Diamond & Pearl
+(2007-05) onward is untouched by this and still resolves to nothing.
 
 ## The measurement log
 
@@ -96,8 +161,79 @@ look at the same image — a dark-run or band-colour scan over 200–240 lines p
 once to see whether it agreed — kept because a row that was corroborated is worth knowing
 about. Where the two differ, the hand reading is what ships.
 
+The two **e-Card** rows are checked differently, and for a reason worth writing down. Their
+corroboration is *each other*: two cards, read by hand, on images whose widths differ by a
+factor of 2.2, agreeing per edge to 0.014pp (left), 0.112 (right), 0.227 (bottom) and 0.262
+(top). The left edge was **re-read** after a first pass had it at 42/92px, and the revision
+is itself evidence: it tightened the agreement between the two cards from 0.020pp to
+0.014pp, and drawn over a finished master the new line lands on the inner edge of the flat
+yellow band where the old one sat ~7px past it, inside the frame. That is a stronger statement than a scan of either would be, because a crop shifts
+the two opposite edges *against* each other — so a lopsided crop cannot produce the same
+lopsided reading twice at two different scales, while a real asymmetric frame does exactly
+that. A run-length scan **was** run, over ten other e-Card scans, and is deliberately not
+recorded as a check: it read the left edge anywhere from 19px to 61px (3.2% to 10.2%) and
+the top from 2.06% to 11.64%, because an e-Card's art runs into the strip and much of it is
+yellow. That is the deleted auto-detector's third failure mode — a border found where the
+picture is dark, or missed where the picture matches it — reproduced once more, and it is
+the argument for hand reading rather than against these numbers.
+
+**A third e-Card reading found a second frame in the same sets**, 468×650: left 52px, right
+20px, top 67px, bottom 49px. Left and bottom land on `pokemon-ecard` to 0.158pp and 0.070pp
+(0.10mm and 0.06mm) — the dot-code strip is in the same place — and the **top is 6.04mm
+deeper**, which is the finding. So `pokemon-ecard-deep-top` **shares** left and bottom with
+the existing spec rather than restating them a tenth of a millimetre off, and its top and
+right are re-derived to hold this reading's *sums* (17.846% vertically, 15.385%
+horizontally) instead of its individual edges: top = 17.846 − 7.608 = 10.238%,
+right = 15.385 − 11.269 = 4.116%. Deriving from the sums is the same argument the asymmetry
+above rests on — a crop shifts two opposite edges against each other, so a pair's sum
+survives a crop that neither edge alone does — and it makes the substitution lossless, since
+the design's own height and width as a fraction of the card are exactly what was measured.
+`right` was **not** replaced by the existing 5.100%: that is 0.827pp (0.53mm) away, seven
+times the agreement the first two cards reached on that edge, and holding the horizontal sum
+would then have forced `left` to 10.28%, contradicting the edge that did agree. Which
+printing the deeper top belongs to is **not recorded**, because it was not read — both specs
+resolve as candidates on every e-Card set and a person picks per card.
+
+**The ex era moved the strip, and that is a shape rather than a renumbering.** Two cards of
+`np` (Nintendo Black Star Promos, 40 cards, 2003-10-01), read by hand at 747×1040 and
+455×642, put the e-Reader dot code along the **bottom alone**: bottom 6.01mm against a
+3.26mm top, 2.76mm left and 2.33mm right. So `pokemon-ecard-ex` is a fourth Pokémon spec
+rather than a variant of the e-Card ones — fitting an `np` card to `pokemon-ecard` would ask
+for 7.16mm of left border where the card has 2.76, which is 4.4mm of picture cropped away
+and invisible on screen, since the overlay is drawn in fractions too.
+
+Its corroboration is the same kind the e-Card rows have — the two cards are each other's
+check, agreeing per edge to **0.17pp or better** across a 1.64× scale gap (top 3.750/3.583,
+right 3.614/3.736, bottom 6.827/6.698, left 4.284/4.396) — plus the independently stated
+totals, which land exactly on three of four: 59px of 747 and 37px of 455 across, 110px of
+1040 down. The fourth is a 1px slip in the reading (card 2's vertical total given as 65
+where its own 23 + 43 is 66, worth 0.156pp / 0.14mm), so the **edges** are what is stored,
+being what was read off the picture. Each stored number is the per-edge average of the two.
+
+**Left and right are kept apart here**, which no other row does: both cards read left wider
+than right by the *same* 0.67pp. Collapsing opposite edges is how a cutting error cancels,
+and a difference reproducing in one direction at two scales is not a cutting error. Nothing
+is recorded about *why* the strip moved, or about which later ex sets share this geometry —
+neither was read.
+
+**And the same set holds a card with no strip at all**, 554×769 with **23px on every edge**.
+That is `pokemon-ex-plain`, the plainest spec in the file and the thinnest Pokémon one:
+2.64mm sides, 2.66mm top and bottom, nearer `mtg-m15` than WOTC's 3.45/3.15. The mm figures
+being equal is a separate fact from the pixels being equal and worth stating — 2.991% and
+4.152% are different fractions, and they only land on one width once each is taken of the
+axis it belongs to. The 0.02mm between them is this file's aspect sitting 0.85% wide of the
+card's (554/769 = 0.7204 against 0.7143), which is what a genuinely square border read off
+this image looks like. Opposite edges are collapsed the ordinary way, since one number per
+axis is what was read; the fractions are of its own file, not rounded through a millimetre.
+
 | card | frame · border · effects | read | image px | top/bot px | sides px | mm t/sides | check | spec |
 |---|---|---|---|---|---|---|---|---|
+| `np`, card 3 | ex era · yellow · **no dot code** | **hand** | 554 × 769 | **23 / 23** | **23 / 23** | 2.66 / 2.64 | square in mm as well as px — the 0.02mm is this file's aspect being 0.85% wide of the card's | **`pokemon-ex-plain`** |
+| `np`, card 2 | ex era · yellow · dot code **bottom only** | **hand** | 455 × 642 | **23 / 43** | **20 / 17** | 3.18 / 2.79 · 2.37 (t/l·r) | agrees with card 1 to **0.12–0.17pp** per edge; stated totals 37 across ✓, 65 down (edges sum 66) | **`pokemon-ecard-ex`** |
+| `np`, card 1 | ex era · yellow · dot code **bottom only** | **hand** | 747 × 1040 | **39 / 71** | **32 / 27** | 3.33 / 2.72 · 2.30 (t/l·r) | stated totals 59 across ✓, 110 down ✓ | **`pokemon-ecard-ex`** |
+| e-Card, card 3 | e-Card · yellow · dot code · **deep top** | **hand** | 468 × 650 | **67 / 49** | **52 / 20** | 9.10 / 2.61 (t/r) | left & bottom agree with cards 1-2 to **0.16pp / 0.07pp**; top **+6.04mm** | **`pokemon-ecard-deep-top`** |
+| e-Card, card 2 | e-Card · yellow · dot code | **hand** | 737 × 1036 | **35 / 80** | **83 / 38** | 3.12 / 3.24 (t/r) | see note | **`pokemon-ecard`** |
+| e-Card, card 1 | e-Card · yellow · dot code | **hand** | 337 × 467 | **17 / 35** | **38 / 17** | 3.12 / 3.24 (t/r) | agrees with card 2 to **0.01–0.27pp** per edge | **`pokemon-ecard`** |
 | [Sol Ring `c13-259`](https://scryfall.com/card/c13/259/sol-ring) | `2003` · black · – | pixel | 745 × 1040 | **35** | **35** | 2.99 / 2.98 | scan reads 35 all round | **`mtg-2003`** |
 | [Sol Ring `msc-211`](https://scryfall.com/card/msc/211/sol-ring) | `2015` · black · – | pixel | 744 × 1040 | **30** | **30** | 2.56 / 2.56 | scan reads top 30 at every percentile | **`mtg-m15`** |
 | [Bleachbone Verge `dft-501`](https://scryfall.com/card/dft/501/bleachbone-verge) | `2015` · **yellow** · inverted | pixel | 744 × 1040 | **44** | **50** | 3.76 / 4.27 | band colour reaches 44 / 50 at every percentile | **`mtg-yellow-band`** |
@@ -418,15 +554,21 @@ spec would have been a duplicate. Real game tokens are almost entirely `frame:20
 prints against 298 for 2003); the 1993 and 1997 "tokens" are World Championship blank and
 bio cards, not game pieces.
 
-And Pokémon, which is now the biggest gap by a distance — everything past `neo4` resolves
-to nothing:
+And Pokémon, which is now the biggest gap by a distance — past `neo4` only the three e-Card
+sets and `np` resolve:
 
 | spec to create | buy any common from | covers |
 |---|---|---|
-| `pokemon-ecard` | an e-Card set (`ecard1`–`ecard3`) | 2002–2003 |
-| `pokemon-ex` | an EX-era set | 2003–2007 |
+| `pokemon-ex` | an EX-era set other than `np` | 2003–2007 |
+| `pokemon-dp` | a Diamond & Pearl / HGSS set | 2007–2011 |
 | `pokemon-swsh` | a Sword & Shield set | 2020–2022 |
 | `pokemon-sv` | a Scarlet & Violet set | current |
+
+The ex-era row is the narrowest of these now: `pokemon-ecard-ex` and `pokemon-ex-plain`
+describe `np` between them, and the strip ran on into the series, so one card of `ex1` or
+`pop1` would say whether that
+geometry extends or whether the era holds a second one — which is the cheapest reading left
+on this list.
 
 Two exclusions that matter, because measuring the wrong card gives a wrong answer that
 looks fine: **not oversized** (a Planechase or Vanguard card is 89×127mm, so its

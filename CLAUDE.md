@@ -79,6 +79,14 @@ until it reaches paper or a pasted link:
   laid side by side. It pins the order all seven `Via`s are tried in, that a number
   range never crosses a `TG` prefix, and the two questions it must refuse to guess
   at — a trait rule with no traits, and a pin whose spec was removed.
+- `tests/test_coverage.py` — `inventory.assess`, because **the number is the whole
+  report**: "21 of 174 sets covered" decides whether there is an afternoon of measuring
+  left, and nothing on screen can contradict it. It pins the thing the deleted coverage
+  report got wrong (each game asked the question its own border followed) and the count
+  that follows — MTG is *5 of 5 frame generations*, never the 12 of 12 the first version
+  reported by adding its four set exceptions in with its generations. Plus what may not
+  pass for coverage: a numbers rule that claims part of a set, a rule pointing at a spec
+  that is gone, and the `ex4`/`ex5` boundary a prefix key would have over-claimed.
 - `tests/test_upscale.py` — that a missing upscaler disables *running* the step
   and nothing else (the stage, the skip and an already-upscaled image all
   survive), that the probe answers instead of raising, and **which factor a card
@@ -94,6 +102,28 @@ until it reaches paper or a pasted link:
   import plan: one answer, four consumers (`where`, `profile list`'s marker *and* its
   legend, `/api/profiles`), and a failure invisible until the end of a print run —
   a `[print] profile` naming a profile that is gone.
+- `tests/test_browse.py` — `browse.gather`/`Query`/`Page` and the two provider query
+  spellings, for the import-plan reason (one pure function, several consumers) plus one
+  of its own: **a paging window that is off by one silently loses or repeats a card.**
+  Ten pages of thumbnails say nothing about it. It pins Scryfall's fixed 175-card pages
+  being cut into display pages (`sources.mtg_page_span`), that `set.releaseDate:[a TO b]`
+  is *not* how a year is filtered (it is a real 400; a prefix wildcard is), and that a
+  colour filter is **ORed** — Scryfall's bare `c:wu` means a card that is both, which for
+  two colours is a handful of cards and reads as a broken filter.
+- `tests/test_art.py` — the provider-art cache, and **not for its speed**: it is a
+  fetcher that takes a URL, so the host check is the only thing between "shrink a set
+  logo" and "GET anything you like from a process on your machine" (a lookalike host
+  and the allowed host as a *path segment* are both pinned); a logo's alpha must
+  survive the re-encode or every set tile gets a grey box behind it, which no test
+  that only measured bytes would catch; and the cache is keyed by URL **and** size, so
+  the wrong size for the right picture — invisible, since CSS scales either — cannot
+  be served.
+- `tests/test_progress.py` — that a running command's count reaches *another process*,
+  which is where every failure mode is invisible. A sink silently on would litter a
+  terminal user's directory; silently off would leave the UI with the spinner this
+  replaced; and **an unknown total stays unknown** (`fraction` is `None`, never a
+  guess), which is the same rule as every other number here. The reader is total,
+  because it reads a file something else is mid-write on.
 - `tests/test_deps.py` — that every non-stdlib import is a *declared* dependency,
   or is guarded by a `try/except ModuleNotFoundError` that says how to install it.
   It reads `pyproject.toml` rather than trying the import, because in the
@@ -287,6 +317,200 @@ it produces).
 after it *on that side* — they went stale (`Card.invalidate_downstream`, reported
 by `cli._cascade`). Skip markers are kept (they're intent, not derived pixels).
 
+**Finding a card is two questions, and `browse.py` is the second one.** proxdex could
+always *search* — a name, and the API's answer — which is useless when what you know is
+the set, which is most of the time. So there is a **set index**: `Expansion` (id, name,
+group, counts, release date, logo and symbol), `Group`, and one request per game for the
+lot, cached a day.
+
+**The scrydex API is not what this reads, and it does not need to be.** Its endpoints
+(`/cards`, `/expansions`, `/sealed`, `/listings`, `/price-history`) are gated behind
+`X-Api-Key` + `X-Team-ID`, and its expansion *pages* are a rendered site — scraping one
+would be a fourth data path that breaks silently on a redesign and reports a plausible
+wrong number until somebody notices, which is the deleted border detector's exact failure
+mode. Every fact those pages show is already documented JSON on the two APIs proxdex
+already talks to: pokemontcg.io `/v2/sets` carries `series` — which **is** the grouping
+scrydex's Pokémon page shows — plus `printedTotal`/`total`, `releaseDate` and
+`images.logo`/`images.symbol`; Scryfall `/sets` carries `set_type` — which **is** the
+grouping its Magic page shows — plus `card_count`, `released_at` and `icon_svg_uri`. The
+set art is therefore the provider's own URL out of the same response, never one guessed
+from an id pattern: a guessed URL 404s as a *blank tile* rather than as an error.
+(scrydex's set art is reachable unauthenticated at
+`images.scrydex.com/pokemon/<set>-logo/logo`, and `Config.scrydex_url` does use that host
+for the card scans themselves — but for set art it would be the same picture behind a
+guess.)
+
+**The two groupings are not the same kind of fact**, which is the whole of `Grouping`. A
+Pokémon series is an **era**: it has a date, Sword & Shield really does come after XY, so
+the groups sort by date with the newest first. An MTG `set_type` is a **kind of product**:
+a Commander deck is not "later" than a core set, so those follow a curated order and a
+date would reshuffle them meaninglessly every release. An unlisted `set_type` sorts last
+and keeps a titled version of its own name — Scryfall adds one every few years, and hiding
+a whole kind of product is worse than showing it in the wrong place.
+
+**Browse and search are one query, and that is why there is one of everything.**
+`browse.Query` carries the text *and* every filter *and* the page; browsing a set is a
+Query with a set and no text. So `/api/search` answers both, `search` and `browse` are the
+same CLI call with the set arriving as a flag or an argument, and the UI's two screens
+share `state.find`, one filter bar, one result grid and one pager. Same argument as
+`imports.plan` and `sheet.plan`. A query that narrows *nothing* returns an empty page
+rather than the first screenful of every card ever printed.
+
+**A typed name is *one* wildcarded term, never one term per word (`sources._pokemon_query`).**
+A space separates *terms* in pokemontcg.io's syntax, so one term per word turned `Moo Moo`
+into `name:*Moo* name:*Moo*` — two identical substring tests that any name holding "moo"
+once satisfies, making it exactly equivalent to searching `Moo`. It answered with
+Amoonguss, Bloodmoon Ursaluna and Roaring Moon and buried the card asked for under
+everything printed since. `name:*Moo*Moo*` returns the five that exist. Joining is also
+what copes with Pokémon's unreliable separator: the card is **Moo-Moo Milk** in Neo and
+**Moomoo Milk** in HeartGold, so neither `name:"Moo Moo"` nor `name:"Moo Moo Milk"` matches
+anything at all (both measured at 0), while a wildcard where the user typed a space matches
+a space, a hyphen, a dot or nothing — `mr mime` finds *Mr. Mime* (35), `char zard` finds
+*Charizard* (108). **Scryfall is deliberately left per-word**, and that is measured rather than assumed: the
+phrase form is *more* precise where it works (`name:"Serra Angel"` is 1 hit against the
+per-word 2) but `name:"kiki jiki"` returns **0** where `name:"Kiki" name:"Jiki"` finds
+Kiki-Jiki — it breaks on exactly the hyphens the Pokémon join exists to cope with. Its own
+flaw is real and unavoidable: repeated words collapse there too (`Moo Moo` is `Moo`, 138
+cards), and no Scryfall spelling fixes that without the hyphen regression. So the two
+providers' spellings differ because the providers do — the same reason `sources._MTG_THUMB_KEYS` is a
+key list and Pokémon's thumb is a URL template.
+
+**Every filter is pushed to the provider, because a local sieve cannot count.** The old
+`search` fetched a hundred rows and filtered them in Python, which could only ever report
+"100 results" for a set of 553 — and page 2 re-fetched the same hundred and filtered it
+again. Both APIs filter and count server-side, so both are asked to: `Page.total` is the
+provider's own count of everything that matched, which is what lets a screen say "60 of
+553" and offer a last page. It is **-1** when a provider will not say, so a caller can
+tell "none" from "unknown" instead of reading a confident 0.
+
+**Scryfall pages at a fixed 175 and will not be talked down**, so a display page of 60
+straddles a boundary two times in three and `sources.mtg_page_span` decides which of its
+pages the window covers (at most two for a 60-card page, three at the 250 maximum, all
+cached). Verified end to end: four pages of 60 over `dft` return 240 rows, 240 of them
+unique. pokemontcg.io takes any page size up to 250 and reports `totalCount`, so that side
+is one request. **A page past the end is a nearly-right link, not an empty answer** — the
+CLI names the last real page and the UI silently retries at it, because a blank grid
+saying "nothing matched" over 92 cards that did is a lie about the query.
+
+**The filter vocabulary is the provider's, served not spelled.** `browse.facets` reads
+pokemontcg.io's `/v2/rarities`, `/v2/supertypes`, `/v2/types` and `/v2/subtypes` — that
+question, already answered — and Scryfall's `/catalog/card-types`, with MTG's rarities and
+colours as enums here because Scryfall publishes no catalog of them. `/api/facets` serves
+it per game and the UI builds its dropdowns from that, exactly as the step panels come
+from `/api/meta`. **A facet whose catalog request failed is dropped**, because an empty
+dropdown reads as "this game has no rarities" rather than "that request failed" — and
+these are asked in order to *draw a control*, long before anyone has searched, so the
+reader is total like `upscale.availability`.
+
+**Picking cards is state, not DOM, and that was a bug worth naming.** The selection was
+read straight out of the grid (`#results input:checked`), so **turning the page threw it
+away without saying so** — you would tick eight cards across three pages and add the last
+two. It is `state.pick`, a Map id → row, so it survives paging, filtering, switching
+between Browse and Search, and (via `sessionStorage`) a reload, which is the property
+every other screen here already has. It holds the *row* rather than just the id so the
+tray can show you the thumbnails: a count alone does not tell you whether the eight you
+picked are the eight you meant.
+
+**A result tile is a *cell*, not a picture with things loose beneath it.** The meta text
+sat between the image and the Add button and wrapped to two, three or four lines
+depending on the card — so every button in a row landed at a different height and read as
+floating between two cards rather than belonging to one. Three things fix it together:
+every meta line is truncated to exactly one (the full text is on the tile's `title`), the
+cell is a flex column whose meta area takes up the slack, and the grid stretches the row.
+The **hover lights the whole cell**, which is what says those three things are one card,
+and the picture's border takes the same two states the contact sheet's tiles use — so a
+picked card looks picked the same way everywhere in the app. The whole tile is the pick
+target, with `pickHit` ignoring any click that came from a control inside it.
+
+**The contact-sheet tile is a *docket*, and it took two collisions and a redesign to get
+there.** It was the screen that "looked weird": tiles of different heights in one row, and
+a card's id and pin chip printed *outside* the tile's own box. Two of the three causes were
+the `.setgrid` bug again (see the conventions), found by the duplicate-selector sweep:
+
+- **`.slot` was defined twice** — the contact-sheet tile, and the calibration screen's
+  slot map. The later rule wins, so **every library tile was being forced to the slot
+  map's `aspect-ratio: 1200/1350` with `justify-content: center`**, which made the tile
+  *shorter than its own contents*: that is what put text outside the box, and centring is
+  what made each tile in a row a different height. The slot map is now `.calslot`.
+- **`.sheetgrid` was defined twice** — the contact sheet's density grid and the sheet
+  builder's two-column page. The builder's is now `.sheetpage`. Milder (the density rules
+  are two classes, so they still won `grid-template-columns`) but it took over the contact
+  sheet's row gap, and `$('.sheetgrid')` in `filterInPlace` matched whichever came first.
+- **The third cause was real fragility, not a collision**: the meta was two free-flowing
+  chip rows, so `pin: pokemon-ex-plain` — the widest string on the screen by a factor of
+  three — ran **113px past the tile** at `sm` density.
+
+What replaced it is a shape that cannot do any of that: **two docket lines of fixed
+height, each a flex row where exactly one child may grow and truncate** (`.dline > .grow`,
+`min-width: 0` on both, `white-space: nowrap`). Nothing wraps, so no tile can differ in
+height from the one beside it, and nothing can leave the box. Measured 0px of row spread
+and 0 overflowing elements across three densities and four viewport widths down to 420px.
+Four decisions in it:
+
+- **A card needs a *seat*, and that is the one thing the two games really differ on.** An
+  MTG card's border is black on a `#0c0c10` page, so at the hairline `--rule` it had no
+  visible edge at all — a grid of Commander Legends read as art floating on the ground
+  while the Pokémon sets read as cards. Both tiles now ring the picture in `--rule-2`, the
+  token whose documented job is "a rule that has to be seen": darker than Pokémon's
+  yellow, lighter than MTG's black, one ring for both.
+- **What the *printing* is goes on the picture's foot, not in the docket** (`.slot .flags`,
+  `kindFlags`): two-sided, oversized, borderless, pinned. Several can apply at once, so
+  down there a fourth is clipped by the card's own edge instead of making the tile taller.
+  A pin says `pin`, not `pin: pokemon-ex-plain` — *which* spec is a card-page question, and
+  the name was what overflowed. `kindChips` still spells them in full on the card page,
+  where there is room and a `flex-wrap` to hold them.
+- **The game chip is shown only when the library holds more than one game.** Fifteen
+  identical `POKEMON` chips were the least surprising fact winning the row the card's own
+  id has to fit in. It is worth ink when it varies.
+- **Inside a set, the set is not news — and it was the fact getting the room.** Every tile
+  of a set view read `Commander Legends · 2020 · 7…`: two values identical on all sixty
+  tiles, with the collector number, the one thing that tells this printing from the next,
+  truncated off the end. `hitsHtml` now leads with the number inside a set and with the set
+  across a search — three lines either way, since a tile that changed height with the query
+  would ripple through a grid that is finally level.
+
+**The crop marks belong to the card, not to the tile.** `.marks::after` draws at
+`inset: -7px` around whatever carries the class, and that was the whole `.slot` — so the
+brackets framed the picture *and* the two lines of text under it, which is not something a
+press marks the corners of. They sit on the picture wrapper now, inside the tile's own
+padding, which is what makes that padding load-bearing.
+
+**And a 13px checkbox is not a selection.** It sat in the corner of the art, invisible on
+a busy Charizard and uncountable over sixty tiles. A picked card now takes the accent on
+its own frame, lifts, and carries a badge big enough to read — with the same badge slot in
+green meaning "already filed", so the eye reads the *colour* rather than hunting for two
+different marks.
+
+**Two ways to add, because they are two intentions.** `+ Add` under one card fetches it
+now (and becomes `✓ In your library` when it lands); the tray's one button fetches
+everything picked. The tray **groups by the row's own game** and makes one call per game:
+`/api/fetch` takes a single game for all its ids — correctly, since that is the CLI's
+shape — and the basket outliving the screen means it can hold a Pokémon card picked in
+Search while you browse Magic sets, so the *screen's* game would have sent Scryfall a
+pokemontcg id.
+
+**Both `have` and the owned counts are derived from `state.cards`, never from the
+response.** The server answers them when it draws a page, and that answer is stale the
+moment you add something: adding three cards left every set tile and the "n of m in
+library" line showing the old number until something re-fetched the whole set list.
+`state.cards` is refreshed by every mutation, so counting it client-side is both correct
+and free — the same call `haveCard` makes for the tick on a hit.
+
+**Whether you already hold a card is answered locally, per row.** `have` on every search
+hit and an `owned` count on every set tile, straight off the card folders — free, and the
+reason the index is worth re-opening. `browse.owned` takes *ids* rather than cards, so
+this module never imports `library`, the same call `specs.audit` makes.
+
+**Paging the library is not the same problem, and is done by slicing.** `ls --per-page`
+and the contact sheet page what is already read: a library is local, so every card is in
+hand the moment the first one is, asking a server for a window would be slower *and* could
+disagree with itself between two pages, and server-side paging would break the instant
+filter (`filterInPlace`). It is a rendering concern, so it is rendered — and `ls` defaults
+to no paging at all, because a listing of your own cards should print in full unless you
+ask otherwise. `ls --json` therefore keeps serving the bare list `/api/cards` mirrors, and
+only wraps it in a page envelope when paging was actually asked for: a shape that changes
+with a flag is one every reader has to branch on.
+
 **Sources (`sources.py`).** One provider per game behind `lookup` / `search` /
 `download`, all returning `CardMeta`/`SearchResult` that carry their own
 `faces: tuple[FaceImage, ...]` (front first, `.image_url` = face 0) — so nothing
@@ -307,6 +531,65 @@ total — a missing/null/wrong-shaped field becomes an empty fact, and empty fac
 and groups are dropped — because the JSON is untyped and the two APIs agree on
 almost no key.
 
+**The image host cannot validate a card id, which is why the metadata API is asked
+first.** A Pokémon card's picture needs *nothing* from pokemontcg.io — the URL is
+`Config.scrydex_url.format(id=...)`, derivable from the id alone — so it looks as though a
+metadata outage should never cost a download. It has to, and the reason is that
+`images.scrydex.com` answers **HTTP 200 for an id it does not have**, serving a
+byte-identical grey placeholder (verified: `base1-999` and `zzzz-1` return the same file).
+The status code therefore cannot tell a hit from a miss, and a mistyped id would file a
+grey rectangle that `border`, `upscale`, `grade` and `sheet` all process without
+complaint — discovered on paper. The lookup is what proves the id exists.
+
+The placeholder is still worth *detecting*, and `sources.is_placeholder` does: it is
+**640×892 in palette mode**, where every real scan is 600×825 RGB (the older sets) or
+~734×1024 RGBA (the modern ones). `download` refuses it rather than filing it. Both
+conditions are required deliberately — a real card must never be refused, so the check
+going out of date costs a placeholder filed as it would have been anyway, not a good card
+rejected. Coverage is good in practice (30 real ids across ten sets, 1999-2026, all real),
+so this is insurance rather than a routine path. Pinned by `tests/test_browse.py`.
+
+**How hard to try depends on what giving up costs (`net.PATIENT_ATTEMPTS`).** Drawing a
+screen and fetching a card are different errands: a facet dropdown that arrives late is
+worth less than the four seconds it would spend waiting, while a card lost out of a batch
+of fifty costs a re-run and a hunt for which one. So `net.get` takes an `attempts=`, the
+default (4) stays for reads that draw a screen, and the *work* reads — a card's metadata
+and its image — ask for **7**. At the measured 500 rate that takes the loss from roughly
+one card in sixteen to about one in a thousand, for a worst case of 23.5s spent only when
+a host really is down (and `get` still serves a stale cache entry before it raises, so the
+wait buys an answer whenever there has ever been one).
+
+**Metadata a caller already has is not asked for again (`sources.known_meta`).** The row
+somebody clicked in Search or Browse was described by the provider a moment earlier — name,
+set, rarity, subtypes — and `fetch` was asking for all of it a second time, which is
+precisely the request that fails on a bad afternoon. `fetch --name/--set-name/--rarity/
+--subtypes` files the card from what is already known, `FetchBody.known` carries it from
+the browser, and `/api/fetch` spends one CLI call per described card while the batch keeps
+its single call. **Pokémon only, and not an oversight**: a Magic card's image URL is a uuid
+path only Scryfall's answer carries, so an MTG card genuinely cannot be filed without
+asking — the CLI refuses `--name` for it rather than pretending.
+
+It is safe *because* of the placeholder check. Skipping the lookup skips the proof that the
+id exists, so the honesty of the whole path rests on `download` refusing a grey card. The
+supplied fields are bounded, untrusted text that becomes a folder name; nothing a client
+sends can fake a picture, because the image URL is derived by the server from the id.
+
+**A card folder with no picture in it is a card as far as everything else is concerned.**
+`_acquire` used to create the folder, write `.game`/`.layout`, then fail on the download and
+leave it — so `ls` counted a card that could never become ready, the contact sheet drew a
+tile for it and the tally read "4 of 5 originals". It now rolls back a folder **this call
+created** when nothing landed in it, and leaves an existing card alone when a re-download
+fails. Reachable from the API the moment a client may supply metadata, which is what
+surfaced it.
+
+**A failed request names what it was for, not just the host.** `net.NetworkError` reads
+`api.pokemontcg.io: HTTP 500 after 4 tries`, which surfaced in a batch as
+`SKIPPED api.pokemontcg.io` — leaving you unable to tell *which card* to try again, which
+is most of the annoyance of a flaky API. `sources._get` takes a `what=` (the card id) and
+`fetch` collects the ids that failed and prints the command that retries exactly those.
+Worth the plumbing because pokemontcg.io answers 500 often enough to lose a card out of a
+batch — measured at one in two on a bad afternoon.
+
 **HTTP (`net.py`).** Every provider request goes through `net.get`: rate-limited
 per host (Scryfall asks for it), retried with exponential backoff on 429/5xx and
 transport errors (`Retry-After` honoured), and JSON responses cached on disk
@@ -315,7 +598,207 @@ when every attempt failed, so a degraded API still lists cards. Each host's last
 behaviour is recorded in `health.json`, so `net.incidents()` (this process → the
 CLI's `⚠` line) and `net.health()` (the shared file → `/api/health` and the UI's
 topbar pill) can say *which* API is misbehaving; the UI needs the file because
-mutations run in a CLI subprocess. `proxdex where --clear-cache` empties it.
+mutations run in a CLI subprocess. `proxdex where --clear-cache` empties it —
+**via `net._CACHED`, one list of every kind of cached thing**, so a second kind (the
+art cache below) cannot be added and quietly become unclearable.
+
+**A picture host is not an API, and the interval that is manners at one is a stall at
+the other (`net.CDN_INTERVAL`).** The 100ms `MIN_INTERVAL` is what Scryfall asks for
+*its API*; nothing asks it of a static image CDN, and a browser fetching the same art
+asks for six at once. Held per host at the API's interval, one screen of set logos —
+174 of them, measured — would be **17s of pure waiting** before a byte was needed. So
+`get` takes an `interval=` and art reads pass 0; the limit on them is the pool that
+issues them, which is the honest place for it.
+
+**Browse was slow, and it was never the JSON (`art.py`).** Measured: the set index
+answers in **9ms warm** and then pulls **174 logo PNGs at ~139 KB each — 24.7 MB** into
+a slot 2.25rem tall, while one 60-card page pulls **45 MB** of full-size scans into
+tiles 190px wide, all of it again on the next visit. So provider art asked for by a
+*screen* goes through `/api/art`: fetched once, resampled to the size it is drawn at,
+kept in `net.cache_dir()`, served immutable. End to end that is **4.17 MB → 215 KB**
+for the first screenful of logos, **45.1 MB → 2.10 MB** for a card page, and **0 bytes
+and 0ms** on the second visit. Four things about it are deliberate:
+
+- **The host is checked against a list** (`art.hosts`, the providers' four plus this
+  library's own `scrydex_url`). An open fetcher is a hole even on a machine only you
+  can reach, and the check is a full-host match — a lookalike domain and the allowed
+  host as a path segment are both refused, and both are pinned.
+- **`art.Size` is a closed set of the places proxdex draws provider art** (`logo`,
+  `symbol`, `card`), not a width in the URL. A width would be untrusted input that
+  becomes a resample and a cache file; this way the cache holds one file per picture
+  per *use*.
+- **WebP, because alpha is load-bearing here.** A set logo is transparent around its
+  wordmark, and unlike a *filed* card — which `sources.flatten` deliberately fills from
+  its own border (`tests/test_flatten.py`) — a logo on a screen must keep it or every
+  tile gets a grey box behind the set name. A format that dropped it would look
+  perfectly healthy in any test that measured only bytes.
+- **One fetch per picture, not one per asker.** `/api/expansions` and `/api/search`
+  *warm* their whole page in a pool of 6 while the browser lazily asks for what is on
+  screen, so without a per-picture lock the first screen would fetch everything visible
+  twice. `art.load` takes that lock, re-checks the disk inside it, and warming goes
+  through the same path.
+
+A vector passes through untouched: Scryfall's set symbols are ~2 KB of SVG, already
+the smallest they will be, and rasterizing them would cost sharpness to save nothing.
+The one URL that stays the provider's own is a hit's `full ↗` link, which exists
+precisely to offer the original.
+
+**And a tile asks the provider for a smaller picture in the first place, which the cache
+could not do for it.** Shrinking on arrival fixes what the *browser* pulls; the fetch
+that fills the cache still pulled 825 KB a card, so the first visit stayed the slow one.
+`SearchResult.thumb_url` (Pokémon: `[sources] scrydex_thumb_url`, `/small`, 245px and
+~30 KB) is what a tile draws — a cold 60-card page went **3.49s → 0.72s**. Three things
+about it:
+
+- **`thumb` is a separate field, not a suffix swapped where it is used.** Nothing
+  downstream may *file* a thumbnail: a 245px master would border, upscale, grade and
+  impose without a word of complaint and be wrong only on paper — the grey placeholder's
+  failure mode exactly. `image_url` is what `fetch` downloads and is untouched, and
+  `tests/test_browse.py` asserts that for both filing paths (`to_meta`, `known_meta`).
+- **It is a config *pair*.** A library repointed at a mirror has to move both, or its
+  tiles come from one host and its files from another — and `art.hosts` would allow only
+  the one `scrydex_url` names.
+- **`thumb` falls back to `image_url`** when a provider publishes no smaller size, so a
+  reader that sets nothing still draws a tile.
+- **Both games do it, and the mechanism differs because the providers do.** Pokémon's
+  image URL is derivable from the card id, so the variant is a configurable *template*
+  (`scrydex_thumb_url`). Scryfall publishes its sizes as *keys* on the card's own
+  response, so the only choice is which key to read — `sources._MTG_THUMB_KEYS`, and
+  deliberately not a setting, since there is no template to point anywhere.
+
+MTG's numbers are worth keeping, because a single card misleads. Measured over 32 cards
+across four sets: `png` (correct to *file* — Scryfall's only lossless size) is **1657 KB
+median, range 331-2206**, because an old card's scan is far heavier than a modern one's;
+`image_uris.normal` is 488×680 at **120 KB, range 78-146**. That is ~14x at the median
+and only 3x on the lightest set — but the better property is that the tile cost is now
+**flat**: a page of Alpha costs what a page of Aetherdrift costs, where before it was
+102 MB against 23. `normal` rather than `small` (146×204) because 146px is softer than
+the ~190px tile it fills, and 488px is sharper than Pokémon's 245px.
+
+**Waiting has a shape, and only where something really knows it (`progress.py`).**
+Every batch verb already counted its items — `cli._each` does, and rich draws a bar —
+and **none of it reached the browser**, for two good reasons: rich turns its live
+display off when stdout is not a terminal, and the UI reads that stdout as the
+command's log. So a browser got one full-screen spinner whether it was filing one card
+(a second) or imposing a 4-page duplex sheet (47s, measured).
+
+The channel is a file, named by `$PROXDEX_PROGRESS`, and the sink is a **no-op when
+that is unset** — so a terminal user's output is byte-for-byte what it was, and
+nothing is parsed out of human text that a wording change would break. `webui.run_cli`
+is the one place a mutation happens, so it is the one place a job is registered
+(`_Watched`, a context manager because a command that raises must still leave the list
+empty); `/api/progress` reads the file while that call is still blocking, which works
+because FastAPI answers sync handlers on a threadpool.
+
+- **There is no job id, deliberately.** This is a single-user console on localhost and
+  every mutation happens behind one overlay, so "what is running" is a question about
+  the *server*. It also means a second tab sees the upscale you started in the first,
+  which beats a spinner that knows nothing.
+- **Two reporters, because two things know a total.** `_each` reports items (a card id
+  per note); `sheet._pages_to_pdf` reports pages — and it, rather than `_iter_pages`,
+  because both halves of that wait live there. Reported from the generator the bar
+  filled to the last page and then **fell back to a spinner** for the img2pdf embed;
+  now the last step is `writing the PDF` at 4 of 4. That total comes from
+  `sheet.pages_for`, which `plan` also calls, so the count promised by `--dry-run` and
+  the one the imposition walks cannot drift.
+- **An unknown total stays unknown** (`progress.UNKNOWN`, `fraction is None`). One card
+  through Upscayl is one item and the model reports nothing of its own, so there is no
+  fraction to be had. The UI shows a sweep, an elapsed clock and — once you have run
+  that command twice — `~41s typical`, the **median of your own last runs** held in that
+  browser and labelled as an estimate. It is never turned into a bar position: a
+  fraction nobody measured, sitting at 90%, is the same lie as a border nobody measured.
+- **A count of one is not a position** (`progress.Report.positional`, pinned). A single
+  card is a *real* count whose fraction is a real 0.0, and the bar over it could only
+  read 0% and then be gone — which is exactly what upscaling or grading one card looked
+  like: an empty bar beside a running clock, reported as a broken bar and fairly so. Two
+  steps is the least that can show movement, so at one item a reader falls back to what
+  it does for an unknown total. The rule lives on `Report` because both readers need the
+  same one; the CLI's rich bar already draws nothing below three items.
+- **An item names itself, and `cli._each` has no default for it.** `name` was `str(item)`,
+  which for the three verbs whose items are `Card`s put the whole dataclass —
+  `Card(id='ecard3-141', dir=PosixPath('/Users/…` — in the panel as the progress note,
+  and the same thing in `_last_failed`, where a bare id is what a retry needs. Every
+  caller knows what its items are called and nothing in `_each` can guess, so the
+  parameter is **required**: a forgotten one is a type error, not a long line in a
+  browser.
+- **Two kinds of estimate, and each says which it is.** `Report.remaining` is measured —
+  the command's *own* elapsed time over the items it has really finished, so `~14s left`
+  is a rate this run achieved. It refuses to be a guess in four places: before the first
+  item (a division by zero wearing a forecast's clothes), at a total of one, with no
+  clock, and **once the count is complete** — `sheet` reports its last page and *then*
+  embeds the PDF, and `0s left` beside a full bar for the length of that embed is the
+  spinner-that-knows-nothing with more confidence. It is timed from when the *counting*
+  began (`Report.started`), not from process launch: a CLI subprocess spends a second or
+  two importing before it knows what it is counting, and measured here that was 5.2s of
+  a 15s run charged to the first page. Where nothing counts, the *remembered* estimate
+  above applies instead — and only runs it would be shown for are recorded, so one card
+  through Upscayl and forty of them never pool into a median describing neither. Well
+  past that median the panel says `longer than usual`, which is the difference between a
+  slow step and a stopped one.
+- **Three kinds of wait get three different things.** A *read* (a set list, a page of
+  hits, the facets) gets a 2px sweep at the top of the window, because a modal spinner
+  for a 9ms answer is in the way — which is why reads used to show nothing at all. A
+  *job with a count* gets the real bar. A *job without one* gets the sweep and the
+  estimate above.
+- **One indicator at a time, and the nearer one wins.** There were three that could
+  overlap, and every overlap made the reader work out which bar was about the thing they
+  clicked. Now: a read with a strip of its own suppresses the top sweep (`paintTopload`
+  is the one place it is toggled, off `_reads > 0 && !_rd.at`); a mutation's sweep is
+  the *pre-panel* acknowledgement only and is **handed over** when the panel appears
+  (`holdSweep`), rather than staying lit underneath it; and the top sweep survives as
+  the fallback for a read with nowhere of its own to show — the facets, a card's data
+  sheet, the boot reads — because deleting it puts those back to no indication at all.
+  Measured over 67 samples across a page turn and two overlapping adds: never two at
+  once. Two bugs fell out of it, both of which *looked* like a second indicator:
+  - **The sweep leaked on permanently.** `showBusy` incremented `_reads`
+    unconditionally while `hideBusy` decremented only `if(_busy)`, so two overlapping
+    mutations added two and took one away — and the 2px bar stayed lit for the rest of
+    the session with nothing running, indistinguishable from a real one. `holdSweep` is
+    idempotent, so no ordering of clicks can leak it.
+  - **The sweep sat under the busy panel** for the whole of every counted job, which is
+    the same wait drawn twice.
+- **A read that *replaces* what you are looking at needs more than the top sweep, and
+  paging is what proved it.** Turning the page left the previous page's 60 cards on
+  screen and printed `Searching…` **below** them — off the bottom of the window on any
+  real page — so the only word about it was where nobody was looking and the cards in
+  front of you were the wrong page's. Clicking Next twice read as doing nothing. So
+  `beginRead(host, key)` clears the container and puts the wait *there*: **ghost cells in
+  the grid's own layout** (`ghostGrid`), a `.bzbar.sweep`, an elapsed clock and this
+  browser's median for the same kind of read. Four things about it:
+  - **A ghost is a `.hit` with the words taken out** — the real tile's own `.hitshot`,
+    `.hitmeta` and `.addbtn` boxes, each empty line taking its height from an `\a0`. So
+    the height matches **by construction**: the first version was a plate and two bars at
+    297px against a real tile's 359, and the grid grew by a fifth when the cards landed,
+    which is the jump ghosts exist to prevent. Measured at exactly 0px of movement now.
+  - **How many is answered honestly or not at all.** Paging inside a query the server has
+    already counted knows the number — a last page of 18 draws 18 — and that is the case
+    this was built for. A first search knows nothing and draws one screenful
+    (`GHOSTS_UNKNOWN`), because three hits behind sixty ghosts is a shape nobody promised.
+  - **The bar is indeterminate on purpose.** One HTTP request has no countable parts, so
+    a bar creeping to 90% of a provider round-trip is the invention this whole layer
+    refuses. The clock is measured and the median says it is a median.
+  - **A superseded read is not recorded** (`endRead(ok)`). `runFind` drops an answer a
+    later query overtook, and timing that half-read would drag the median below anything
+    the provider ever did.
+- **A count split into one-item calls has no position in it** (`webui._Counted`).
+  `/api/fetch` spends one CLI call per *described* card, so a tray of four Pokémon cards
+  was four jobs of one item each — and one item is not `positional`, so every one of them
+  fell back to the sweep with a note flickering between four ids, for work that knew
+  exactly how many cards it was filing. The count belongs to the **request**, which is
+  the thing that knows the total, so that is where it is kept: `_Counted` writes through
+  the same `progress.Sink` a command uses (the browser cannot tell, and need not, whether
+  a count came from a subprocess or from the server), and the inner calls run
+  `run_cli(..., watch=False)` — no job, and **no `$PROXDEX_PROGRESS` in the child**,
+  because two jobs for one wait is what put the uncounted one on screen. Measured: `0 of
+  4` → `1 of 4` at 25% with `~1.0s left`. A request with nothing described is untouched —
+  the batch is one call and `cli._each` counts it, as it always did.
+- **And a wait too short to be one gets no panel at all.** Skipping a step, flipping a
+  card or setting a config key is over in ~20ms, and an overlay that appears and
+  vanishes reads as a glitch rather than as progress. The panel is held back for
+  `GRACE_MS` (320) while the top sweep — which is not in the way — acknowledges the
+  click synchronously. The note is one line, truncated with the full text on its own
+  `title`, because the panel is a fixed size and a wrapping note pushed the clock
+  around underneath the bar.
 
 **Upscaling is behind a backend, and Upscayl cannot ever be a dependency
 (`upscale.py`).** Upscayl is an Electron app whose engine is a native Vulkan
@@ -473,6 +956,149 @@ trim-minus-image difference landed on the *right and bottom* edges, so the two l
 agreed on two edges and disagreed on the other two. `drawBand()` always uses the image —
 the trim is the ghost's job, and the band's job is to be comparable with the marks.
 
+**Where a border is *widened*, the added area is invented — and the border step is
+therefore two steps.** cardbleed synthesizes the new border, and how it does that is a
+judgement about one picture: a fill that continues a texture is right on a flat border and
+wrong on one carrying printed marks.
+
+- **Step one is the reading.** Place the marks on the card's own border edge and Run,
+  with cardbleed's defaults. That reading is the expensive part and proxdex will not guess
+  at it, so it is **recorded** (`.marks-bordered[_f2]`) and never has to be taken again.
+  `border` with no `--inner-*` re-uses it, which is what makes `border --force --tune
+  mode=smart` a whole workflow rather than a re-alignment.
+- **Step two is the fill**, and it exists only once step one is done: the panel offers
+  cardbleed's thirteen settings and changing one **re-borders the card there and then**.
+  What you are looking at *is* the output. There is deliberately no preview — that was
+  built first and removed: a preview is a picture of a fit you have not made, so it has to
+  be invalidated when the marks move, explained as not-the-real-thing, and kept in step
+  with both. Re-running the actual verb has none of those problems and invalidates the
+  later stages correctly, because it is the same call any other run makes.
+
+Four things make it honest rather than a wall of sliders:
+
+- **Everything closed is an enum** (`bleed.KnobId`, `FillMode`, `Halo`, `EdgeFill`), and
+  everything numeric is a `Range` with `holds()`. A knob is a closed set **or** a range,
+  never both and never neither — pinned — so `_coerce` has no third path where a value
+  slips through unchecked. A choice knob's values come *from* its enum rather than being
+  restated beside it, and `Tuning` is keyed by `KnobId`, so nothing downstream can hold a
+  setting proxdex never validated.
+- **proxdex validates every knob, because cardbleed does not.** Measured: it accepts
+  `jittter=0.1`, `mode="nonsense"` and `jitter="lots"` without a word and carries on with
+  its defaults. `tests/test_bleed_tuning.py` also holds the declaration against
+  `cardbleed.Params` itself — a renamed field fails the suite instead of becoming an
+  ignored override — and defaults are *read* from `Params`, never restated. **proxdex
+  substitutes no baseline of its own**: `mode=smart` was briefly made the default and
+  taken back out, because a second set of numbers here is one more thing to keep in step
+  with a library that already ships considered ones, and it silently re-borders every
+  card with no marker differently from the day it was filed.
+- **A fill setting only matters where something is added, and the panel says so when it
+  is not.** With a card's marks on its spec, `solve_fit` returns extensions of ~1e-13px —
+  nothing is invented, the whole change is the stretch to the trim aspect — and all three
+  `mode` values give a **byte-identical** file. `bleed.extends` (half a pixel, because
+  that noise is not zero) is the predicate; the CLI warns and the panel points at the
+  stretch instead. Nearly shipped the other way: three modes were compared by eye on a
+  scaled screenshot and *read* as different. On a perfectly **flat** border they make no
+  difference either, which is why a synthetic flat card is the wrong thing to test a fill
+  with — grain is what they disagree about.
+- **A tuning is a decision, so it is kept**: `.tune-bordered[_f2]`, `key=value` per line,
+  like `.pin` and unlike the derived `.fit`. Only the non-defaults are stored, so the
+  record reads `mode=smart` rather than restating thirteen. `--no-tune` returns to the
+  defaults, and an absent `--tune` means "keep what the card has" — which is why the API
+  sends `{}` for one and omits the field for the other.
+
+**The align sidebar is a label, not a lesson.** It carried four editable `%` fields and
+three explanatory paragraphs, which together were most of its height — above the card you
+are trying to look at, restated on every visit. The fields are **gone**: nobody types a
+border inset, it is *read off the picture* by dragging, which is the whole argument for the
+marks over a detector — and the number under the pointer is on the loupe while you drag and
+in the readout below when you stop. The prose is one line per state. Every step option's
+`help` moved from a printed paragraph to the row's `title` (`cursor: help`), the affordance
+the fill knobs already used; `steps.py` stays the single declaration, and the CLI's
+`--help` prints the same sentence at length where there is room for it. What is left is the
+spec label (or its chooser, below) and a Pin. Measured on a done border step: **605px →
+505px**, and the align section itself from eleven rows to four.
+
+**A choice between borders looks like a choice, and before it did not.** The two-candidate
+case was a via chip beside a mono spec id, then a row of same-weight outline buttons for the
+others — which showed neither which one was in force (only the chip's *presence* said so,
+two elements away) nor what it was **called**, because the buttons carried the names and the
+selected spec carried only its id. So it is a **radio group** (`.fspick`/`.fsopt`), one row
+per applicable spec, and five things about it are deliberate:
+
+- **The row is the label**, so the hit area is the whole row rather than a 3rem button in a
+  row of them, and arrow keys move between them because these are real radios.
+- **Each row carries its four border widths**, which is what is actually being chosen
+  between: "e-Card" against "e-Card, deep top" says nothing about how they differ, while
+  `3.12 / 3.24 / 6.76 / 7.16` against `9.10 / 2.61 / 6.76 / 7.16` says it at a glance.
+  That is why `specs.Candidate.json` serves `mm` — and why it is **not** added to
+  `FrameGuide.json`, which is also the on-disk format for `frames/<id>.json`, where a
+  derived width beside the fractions it comes from is one a hand edit silently contradicts.
+  Opposite edges collapse to one number when equal (`2.56 / 2.56` is one fact) and never
+  when they differ, since an asymmetric spec's *shape* is the whole reason for two rows.
+- **The selected row takes the accent on its own frame** — the same two states `.hit` and the
+  contact-sheet tiles use, so a chosen thing looks chosen the same way everywhere.
+- **The rows are sorted by id, not winner-first.** `resolve` returns the spec in force plus
+  the others, so rendering in that order moved whichever row you clicked to the top the
+  instant you clicked it: a radio group rearranging under the pointer, with the thing you
+  just chose no longer where you chose it. The set of rows does not depend on the choice, so
+  neither does their order.
+- **One spec gets no selection styling at all** (`.fsone`): an accented frame on the only row
+  spends the "this one, not that one" signal where there is no other one. It is a label —
+  name, widths, how it was reached, Pin — and the name is the thing the old bar left out.
+
+The via chip is on the row in the single case and in the **footer** in the chooser, because
+there it is the same value on every row (they were all reached) and as a per-row badge it
+competed with the names for a narrow row while distinguishing nothing.
+
+**A printing nobody has measured must still be alignable, and for a while it was not.** The
+CLI has always had the escape hatch — `border --frame <spec>` fits against any spec for the
+run — and the UI's equivalent is the step's own Frame setting. Four separate faults meant it
+could not be reached, all of them on the cards where it is the *only* way through
+(everything Pokémon past the e-Reader era):
+
+- **`renderAlignPanel` read `g.frameless` on a null guide and threw**, which took the whole
+  panel with it: no explanation *and* no `Align the border` button, so the card looked
+  un-alignable when the fix was one dropdown away. `computeExtend` would have thrown the
+  same way inside `solveFit`. Both now treat "no spec yet" as the state it is.
+- **`whyThisSpec` returned an empty string when nothing resolved**, so the one card that
+  needed explaining got silence. It now prints `Resolution.note` — the same sentence the CLI
+  prints — and names the control that fixes it.
+- **A step setting lived only in the DOM.** Every control rendered from `o.default`, so any
+  re-render reset it — invisible for settings read only when Run is pressed, and fatal for
+  the Frame, which the align layer reads: choosing a spec and then clicking `Align the
+  border` (a re-render) reverted to Automatic and the card went straight back to "no spec".
+  `stepMem` holds the panel's values, keyed by **card, side and step** and dropped whole when
+  that key changes — a per-run override leaking onto the next card is the one thing worse
+  than forgetting it.
+- **`onSetting` returned early with the layer down**, so on a *done* border step — where the
+  target outline is drawn over the master and re-running with another spec is the whole
+  reason to be there — choosing a Frame changed nothing on screen.
+
+Two smaller things fall out of it. The panel reports **what the fit will use**, so a chosen
+Frame is what it names (`chosen for this run`, with `Keep` to pin it) rather than the spec
+the rules resolved and the run is about to ignore. And an **untouched** rectangle follows a
+change of spec, because the marks *start* on the target: seeded at the 8% fallback with no
+spec, they otherwise stayed there and reported "shaves the over-target" on all four edges
+the moment a real spec was picked. `align.seeded` is what makes that safe — dragging moves
+`blue` and not `seeded`, so a rectangle somebody has read off the picture is never moved.
+
+**The panel's position is part of the design, and so is the order it is painted in.** It
+sits under the step's own settings and *above* the align section: on a done border step
+tuning is the job you came back for, while re-placing the marks is the step-one thing you
+rarely return to. Below the align panel it was 795px down a 1000px viewport — scroll to
+reach it, scroll back to see the card. And because `renderStepPanel` emits an **empty**
+`#alpanel`, anything that restates it must re-render the align panel afterwards, which is
+why there is one `paintBorderPanel()` rather than two calls at each site — the same
+ordering trap that once blanked a done border step's target outline, from the other side.
+
+**Rebuilding from a step is no longer confirmed.** `okCascade` asked before throwing away
+a done upscale, and the dialog was in the way of the very thing it protected: tuning a
+border means re-running it over and over. The cascade is still *reported* (`cli._cascade`,
+and the rail shows it), which is the honest version — you are told what happened rather
+than asked to predict it, and nothing is unrecoverable because every stage after the
+original is derived. Deleting a card or a profile still asks, because those remove files
+nothing can rebuild.
+
 **Frame specs (`frames.py`) are geometry; `specs.py` decides which one a card
 gets.** A `FrameGuide` is **four numbers plus one flag** — id, name, game, inset, and
 `oversized`. It carries no note and no reference size: where a shipped spec's numbers came
@@ -500,7 +1126,8 @@ the oversized one, and that is a **boolean** (`FrameGuide.oversized`), not a siz
 entirely was a step too far, caught by `frames show mtg-vanguard` reporting 3.71/2.88mm "of
 a 63.5×88.9mm card", a width of a card that spec does not describe.
 
-Seven specs ship (`frames.SHIPPED`), so a fresh library borders a Base Set card with
+A short measured set ships (`frames.SHIPPED` — one per geometry somebody has read, and
+the count grows a card at a time), so a fresh library borders a Base Set card with
 nothing configured; a library adds its own as `<root>/frames/<id>.json`, mirroring
 `profiles/`. **A spec id is therefore an open set, not a `StrEnum`** — the same
 call `profiles` makes, for the same reason: a user can measure a new era tonight.
@@ -543,6 +1170,39 @@ value as **false** rather than taking the generic trait path's `None`
 ("undecidable"). Left as `None` it put a warning on four cards in five the moment a
 game-wide treatment rule existed. Same reading `full_art` has always had; only
 `traits is None` — nothing recorded for the card at all — is undecidable.
+
+**One set can hold more than one border, and proxdex offers the choice rather than
+making it (`specs.Candidate`, `Resolution.alternatives`).** Pokémon's e-Card sets are the
+case: the same set printed Pokémon cards and Trainer/Energy cards whose frames differ, and
+nothing in the metadata says which in terms anybody has measured — `supertype` exists on
+pokemontcg.io and would be the hook, but a rule pointing at a number nobody read is worse
+than no rule. So `resolve` **does not stop at the winner**: it collects every applicable
+spec in one walk, uses the most specific exactly as before, and offers the rest. Picking
+one writes the card's `.pin`, which is what a decision about a card already is, and the
+offer is **symmetric** — the spec you moved off is then the alternative, so it is a choice
+and not a one-way door.
+
+Deliberately unlike `border --frame`, which forces *any* spec, matched or not: a candidate
+is one the rules really reach. Five things about it:
+
+- **One walk, not two.** A separate "what else applies" pass would be a second
+  implementation of the question every fitting surface asks, free to disagree — the same
+  argument as `imports.plan` and `sheet.plan`.
+- **`missing` and `undecided` still stop at the winner**, which is what the
+  early-returning version reported: a pinned card is not warned about a trait rule
+  further down that the pin settled. Pinned by two tests, because that is what the change
+  could quietly have broken.
+- **A second whole-set rule is no longer deleted.** `assign` used to remove the previous
+  one because it "could never be reached, and a rule that can never fire is worse than no
+  rule". It can be reached now — by being picked — so both stand. What is still refused is
+  a rule saying exactly what the file already says.
+- **Deduped by spec id**: the same four numbers arrived at two ways is one choice, named
+  by the way with the most precedence.
+- **It is a state, not a fault.** `frames check` does not report it: every fault there is
+  a broken reference or an unanswerable question, and this is a question with two good
+  answers. `border` says it on every run (a border fitted to the wrong one of two looks
+  perfect on screen), the `frames` table carries an **Or** column, and the align panel
+  lists the alternatives as buttons that pin.
 
 **`specs.resolve` returns a `Resolution`, not a spec: which one, and *why*.**
 `Via` names all seven ways — `override` (`border --frame`, this run) → `pin` (the
@@ -641,11 +1301,97 @@ legendary-crown, token, emblem) sit in a 0.17mm band and are deliberately **one*
 the five `2003` readings at 35/35 (black, white, `future`, two tokens).
 
 **Only measured specs ship, and they arrive one card at a time.** `pokemon-wotc`
-(calipers, and it covers *only* `base1-6`/`gym1-2`/`neo1-4` — it stops where the e-Card
-series begins), `borderless`, and one spec per MTG geometry somebody has read by hand:
+(calipers, covering `base1-6`/`gym1-2`/`neo1-4`), the three e-Reader specs (below),
+`borderless`,
+and one spec per MTG geometry somebody has read by hand:
 the three 1993 bands above, `mtg-1997` (`sld-1664` — a card that physically exists, where `me4-227` was an MTGO-only *render* of the frame template reading 1px wider), `mtg-2003` (`c13-259`, and it
 covers the `future` frame too because `mb2-233` measured the same), `mtg-m15` (`msc-211`),
 `mtg-yellow-band` (`dft-501`), and the two oversized ones below.
+
+**The e-Reader specs are the ones whose *shape* is the finding**, and there are two shapes.
+Expedition, Aquapolis and Skyridge (`ecard1`/`ecard2`/`ecard3`, 2002-03) carry
+the Nintendo e-Reader dot-code strip **down the left edge and along the bottom**, so
+`pokemon-ecard` is top 3.509% / right 5.100% / bottom 7.608% / left 11.269% — 3.12 / 3.24 /
+6.76 / 7.16mm. Every other spec deliberately collapses opposite edges, which is how a
+cutting error cancels; doing it here would split the difference on all four and ask ~2.5mm
+too much border on two edges and too little on the others, looking right on screen because
+the overlay is drawn in fractions too.
+
+Read by hand off **two** cards, 337×467 and 737×1036, and the reason to believe the
+asymmetry is the *card's* rather than a crop's is that it **reproduced**: the edges agree to
+0.014pp (left), 0.112 (right), 0.227 (bottom) and 0.262 (top) across a 2.2× scale
+difference. A crop shifts the two opposite edges *against* each other, so a lopsided crop
+cannot give the same lopsided reading twice at two scales, while a real asymmetric frame
+does exactly that. Corroboration from the other direction: the two ordinary edges — top
+3.12mm, right 3.24 — are `pokemon-wotc`'s 3.45/3.15 within a third of a millimetre, taken by
+a different method (calipers there, pixels here). Same operation, same border, plus a strip.
+
+A run-length scan over ten e-Card scans was tried as a check and is **deliberately not
+recorded as one**: it read the left edge from 19px to 61px (3.2% to 10.2%) and the top from
+2.06% to 11.64%, because an e-Card's art runs into the strip and much of it is yellow. That
+is the deleted detector's third failure mode reproduced once more, and it is an argument for
+hand reading rather than against these numbers.
+
+**The ex era moved the strip to the bottom alone, so that is a different shape and a fourth
+Pokémon spec.** `pokemon-ecard-ex` covers set `np` (Nintendo Black Star Promos, 40 cards,
+2003-10-01): top 3.666% / right 3.675% / bottom 6.762% / left 4.340% — 3.26 / 2.33 / 6.01 /
+2.76mm, three ordinary edges and one strip. Fitting one of those to `pokemon-ecard` would
+have asked 7.16mm of left border where the card has 2.76 — 4.4mm of picture cropped, and
+invisible on screen for the usual reason. Read off two cards (747×1040, 455×642) that agree
+per edge to **0.17pp** across a 1.64× scale gap, with the independently stated edge totals
+landing exactly on three of four (the fourth is a 1px slip in the reading, worth 0.14mm, so
+the edges are what is stored). **Left and right are deliberately not collapsed** — the one
+spec here that keeps a side difference: both cards read left wider by the *same* 0.67pp, and
+a difference reproducing in one direction at two scales is not the cutting error that
+collapsing opposite edges exists to cancel. It is keyed to **`np` alone**, though the strip
+ran on through ex: one card of `ex1` would say whether the geometry extends, and "very
+likely" is not what `BASELINE` carries.
+
+**That set also printed cards with no dot code, so it holds two frames and needs no
+exception for the second.** `pokemon-ex-plain` is one card, 554×769, **23px on every edge**:
+top 2.991% / sides 4.152% — 2.66 / 2.64mm, the plainest spec in the file and the thinnest
+Pokémon one (WOTC's yellow is 3.45/3.15; this is nearer `mtg-m15`'s 2.56). Opposite edges are
+collapsed the ordinary way, because one number per axis is what was read. Being square in
+*millimetres* is a separate fact from being square in pixels and worth stating: 2.991 and
+4.152 are different fractions and only meet once each is taken of its own axis, the 0.02mm
+between them being the file's aspect sitting 0.85% wide of the card's. Nothing in the
+metadata says whether a promo carries the strip, so both resolve as candidates and a person
+picks — the e-Card shape exactly. `pokemon-ecard-ex` is the default on **weight of evidence**
+(two cards read against one), explicitly *not* a claim about which is commoner in the set.
+
+**The dot code outlived the e-Card sets, so both ex-era shapes cover the same five sets**:
+`ex1` Ruby & Sapphire, `ex2` Sandstorm, `ex3` Dragon, `ex4` Team Magma vs Team Aqua and `np`
+— 2003-07 to 2004-03. Each printed cards with an e-Reader strip along the bottom *and* cards
+with a plain square border, which is the two-candidate situation the e-Card sets already
+have, answered the same way.
+
+**Then the strip stops, and the rest of the ex series takes `pokemon-ex-plain` alone —
+inherited, not read.** From `ex5` Hidden Legends (2005-06) to `ex16` Power Keepers (2007-05),
+plus the four Trainer Kits (`tk1a`/`tk1b`/`tk2a`/`tk2b`, the same printings boxed
+differently), there is one shape and nothing to pick between, so those sixteen sets get the
+plain border as their **only** candidate. The number is still the one `np` card (554×769, 23px
+all round): sixteen ids now rest on a reading none of them contributed to, which is exactly
+the standing `basep` has and is recorded the same way — **inherited rather than measured**, in
+`docs/measuring-frames.md`, out loud. The grounds are same era, same operation, the same
+border with the strip left off; it is a decision to let these sets border at their own era's
+number instead of refusing them, and one card of `ex10` would confirm or split it. Keys are
+**exact ids** precisely so the claim is reviewable — a prefix would have swept all sixteen in
+without a word.
+
+**A `Baseline.sets` entry is an exact id, and it used to be a prefix.** A prefix over-claims
+silently, and there is no prefix that covers `ex1` and not `ex10` — Unseen Forces through
+Power Keepers, 2005-07, seven sets of another era that a `("ex1",)` key would have claimed
+without a word. `("base",)` was already doing it to `basep`, the Wizards Black Star Promos,
+which nobody measured. Pokémon's eras are closed sets, so enumerating them costs a dozen
+strings and buys a table whose every claim is visible — including the ones that are
+deliberate. Those sixteen ex-era ids *are* claimed now, but by sixteen strings somebody wrote
+down rather than by a prefix nobody noticed, which is the difference. `basep` **stays** on
+`pokemon-wotc`, because the prefix was already claiming it and dropping it would stop a card
+that borders today — recorded as *inherited* rather than measured, said out loud in
+`docs/measuring-frames.md` rather than passing for a reading.
+
+So **Pokémon from Diamond & Pearl (2007-05) onward is the only real gap left**, and it still
+resolves to nothing and refuses to be bordered.
 
 **An oversized card needs its own spec even when its border is the same width, and that is
 the clearest thing in the whole file.** An Archenemy scheme measures 2.98/3.00mm —
@@ -683,6 +1429,25 @@ width:
    exists — see the border-step section above. Its worst case was a black border under a
    dark frame: 37-41px where the border ends at 23px, 65% too far.
 
+**The e-Card sets ship *two* frames, which is the first time `BASELINE` answers twice**
+(the Black Star Promos are the second, above).
+A third hand reading (468×650: left 52, right 20, top 67, bottom 49px) landed on
+`pokemon-ecard`'s left and bottom to 0.158pp and 0.070pp — the dot-code strip is in the same
+place — with the **top 6mm deeper**. So `pokemon-ecard-deep-top` **shares** left and bottom
+with the existing spec rather than restating them a tenth of a millimetre off, and its top
+and right are re-derived to hold the reading's **sums** (17.846% vertically, 15.385%
+horizontally) rather than its individual edges. That is the same argument the e-Card
+asymmetry rests on — a crop shifts two *opposite* edges against each other, so a pair's sum
+survives a crop that neither edge alone does — and it makes the substitution lossless: the
+design's own height and width as a fraction of the card are exactly what was measured.
+`right` was deliberately *not* replaced by the existing 5.100% (0.53mm away, seven times the
+agreement the first two cards reached on that edge, and holding the sum would then have
+forced `left` to 10.28%, contradicting the edge that did agree). **Which printing the deeper
+top belongs to is not recorded**, because it was not read — a guess at *why* would be
+provenance prose asserting more than the measurement, which is how a confidence grade grows
+back. Both resolve as candidates on every e-Card set (`frames.baselines` returns a tuple now,
+`baseline` is its first) and a person picks per card.
+
 **So a printing with no measured spec resolves to nothing** — `Via.NONE`,
 `Resolution.spec is None` — and that is a *state*, not a failure. `frames check` names
 it, `border` **refuses** the card, and `--frame` is the escape hatch. The per-game
@@ -700,7 +1465,9 @@ holding a retro-frame card resolves per card, never per set). So a `Baseline` is
 `(spec, sets, frames)` and a game fills in whichever key its border actually followed —
 pinned by `tests/test_frames.py`, which asserts each entry has exactly one. `baseline()`
 tries sets first and generations second in **two passes**, so which kind of key wins is a
-property of the function rather than of the order somebody listed the table in.
+property of the function rather than of the order somebody listed the table in. The set key
+is matched **exactly** — see the ex-era note above for the prefix that claimed seven sets of
+the wrong era.
 
 Neither key is a bare `str` any more. `Generation` is a `StrEnum` of Scryfall's five
 documented values, coerced at the boundary by `frames.parse_generation` (the trait was
@@ -766,11 +1533,51 @@ and UI cannot disagree about what counts as a problem. The provider set-list fet
 (`sources.sets`, `SetInfo`, pokemontcg.io `/v2/sets`, Scryfall `/sets`) is **gone**
 with it.
 
-What survives in `inventory.py` is `preview`: **cards read one set at a time**
+`inventory.py` holds `preview`: **cards read one set at a time**
 (`frames preview <set>`, `/api/frames/preview`), only to show which cards a rule
 catches. A rule that cannot be previewed is a rule nobody should trust, and "every
 card of every set" is minutes of API traffic to answer a question nobody asked. It
 caches in `net.cache_dir()`, never in the library.
+
+**And it holds `coverage`, which is the *other* question — what has nobody measured
+yet? — and is deliberately not the report that was deleted.** `frames coverage`, the
+frames screen's Coverage tab and `/api/frames/coverage` ask each game the question
+**its own border followed** (`frames.keyed`, derived from `BASELINE` so it cannot
+drift from the table it describes): a row per **set** for Pokémon, a row per **frame
+generation** for MTG. That asymmetry is the whole design. The deleted report graded
+MTG per set, which has no printing to read, and called 1046 sets unmeasured while
+every card in them resolved exactly; asking per set there is not a rougher answer but
+a wrong one. Five things about it:
+
+- **The headline counts one kind of thing** (`Coverage.primary`). MTG's baseline also
+  keys four sets — the three 1993 bands and `4bb` — as exceptions *to* a generation,
+  and summing those in with the generations read **"12 of 12 frame generations
+  covered" for a game that has five**: two units added into one confident total. They
+  are still rows, still listed, still gaps if nothing answers; they are just not the
+  unit. `per_printing` says out loud how many sets the report declined to judge, so
+  the silence is counted rather than passing for coverage.
+- **Only a *whole-set* answer counts** (`_answers_for_set`): the shipped baseline, or
+  a `Match.SET` rule of this library's own. A rule on a number range, a rarity or a
+  trait claims *some* cards, so counting it would report a set as answered while its
+  ordinary cards still resolve to nothing and refuse to border — a number that looks
+  finished, which is what this whole area is careful about. A rule naming a spec that
+  is gone is not coverage either; the fit falls through it, so this does too.
+- **Two answers is covered, not a fault.** The e-Card sets hold two measured frames
+  and a person picks per card — a question with two good answers, exactly as
+  `Resolution.ambiguous` is a state rather than a `Fault`.
+- **It reads the providers' set lists, not the library** (one cached request per game,
+  the same read Browse makes), because a printing nobody has measured is mostly one
+  you do not own yet — which is the point of asking. `Row.owned` carries the count you
+  *do* hold, so `owned_gaps` is the urgent number: cards already filed that `border`
+  refuses. `assess` is the pure half, so the counts are testable without a provider.
+- **The note travels with the number** (`Coverage.note`). A reader who does not know
+  MTG resolves per printing reads five rows as five sets and concludes the opposite of
+  the truth, so the reason is on the report and both surfaces print the same sentence.
+
+This is not a grade and must not become one: every row says whether a spec *exists*,
+never whether its numbers are good. That second question is about a physical card, it
+is answered in `docs/measuring-frames.md`, and the confidence levels that tried to
+answer it on screen are the thing this area deleted.
 
 **The border step's frame setting is the one `OptKind.OPEN` option.** Its values
 live in a library that is not open when `steps.click_options` runs, so `--frame` is
@@ -830,6 +1637,33 @@ scan (`IMAGE_SUFFIXES`). `OnExisting` is a **per-run** choice like every page
 setting, not a config key, and it defaults to `overwrite` because that is what
 `import` always did — the difference is that the plan now says so first.
 
+**The import finder read `/api/search` as a bare list, and a wrong shape read as "no
+results".** `/api/search` answers with a page envelope (`{total, items: [...]}`) since
+Browse and Search were unified onto one query; the wizard's *Which card is …?* panel still
+did `Array.isArray(r) ? r : []`, which is always false against an object — so it returned
+nothing for **every** query, silently, for as long as the envelope has existed. Nothing
+errored: "No matches. Try fewer words" is what a working finder says when it genuinely
+finds nothing, so the two states were indistinguishable and it hid. The fix is `r.items`,
+and the lesson is the third state: `IMP().results` is now `undefined` (nothing asked, or in
+flight), `null` (**the answer was not a shape this panel reads** — said out loud, in red),
+or an array (a real answer, possibly empty). A reader that quietly degrades to "empty" on
+an unexpected shape cannot be told from a correct one, which is the whole reason to
+distinguish them. It also asks for the 24 hits it draws rather than the default 60, which
+was warming the art of 36 cards nobody sees.
+
+**A filed row leaves the import list, because the list is what is still *to* import.**
+Left in, a successfully imported row re-planned as `replace` — the destination now exists
+and `OnExisting` defaults to overwrite — so the Import button went straight back to
+offering the same count: the same files, ready to be imported over themselves. Only rows
+that really landed are dropped; a **failed** row stays with its error visible, which is the
+point of keeping it (fix the id and run again), and blocked and skipped rows stay because
+they were never imported at all. The `Just imported` panel still names every card touched,
+so nothing about the run is lost by the rows disappearing — and it counts only the cards
+that really got a file, not everything attempted. The object URLs of dropped rows are
+revoked (each holds the file's bytes alive, and a folder of two hundred scans is not
+small), and the finder's row index is cleared rather than re-mapped onto a list that just
+changed shape.
+
 **A print run is planned before it is rendered.** `sheet.plan(cards, cfg)` takes
 (card, copies) pairs and returns a `Run` — what is in, what is not ready, and the
 `Group`s of pages per trim size — using the same grouping `impose_to_pdf` does. So
@@ -844,12 +1678,14 @@ config edit.
 
 **CLI/UI parity is two-way and load-bearing.** Anything one can do, the other
 can: the UI's contact-sheet filters are `ls --only/--sort/--game/--set` (plus
-`ls --json`, the same shape `/api/cards` serves); its data sheet is `proxdex show`;
+`ls --json`, the same shape `/api/cards` serves); its Browse screen is `proxdex sets` + `proxdex browse SET`, and its search filter bar is
+their shared flags (`--rarity/--year/--type/--supertype/--subtype/--color/--sort/--page/--per-page`);
+its data sheet is `proxdex show`;
 its settings screen is `proxdex config show|set|prune` (tomlkit, comment-preserving,
 every value through `Config.coerce`); its batch list is `proxdex batches`; its
-delete is `proxdex rm`; its frame-specs screen is the `frames` group — specs, rules and warnings, with
+delete is `proxdex rm`; its frame-specs screen is the `frames` group — specs, rules, coverage and warnings, with
 `frames preview` behind every Preview button, `frames check` behind the Warnings tab,
-and a Pin control on the align panel; its
+`frames coverage` behind the Coverage tab, and a Pin control on the align panel; its
 stored-images screen is `proxdex doctor` (the report read directly, the repair
 shelled out as `doctor --fix --yes`); its **sheet
 builder** is `sheet` with copies and per-run overrides (its live page count is
@@ -1317,6 +2153,29 @@ the best round so far) and being able to hold it out (`calibrate disable`).
   grade grows back. And do not reintroduce border **auto-detection**: measuring the border
   off the image was tried, shipped and removed, because four plausible numbers presented
   as a measurement is the same bug in a different place.
+- **A new CSS class in `webui.html` has to be checked against the file first.** It is one
+  stylesheet with no scoping, and the sheet's later rule wins: a `.setgrid` added for the
+  set index collided with the settings screen's own `.setgrid` (which is one column, so the
+  grid silently collapsed), and a `.chip` for a filter chip **restyled every chip in the
+  app** — the `printed`/`queued` tags on library tiles, the kind tags, the frames screen.
+  Both were invisible in Python and in `node --check`. Grep for the selector, and prefix a
+  screen's own classes (`expgrid`, `qchip`, `bzbar`, `calslot`, `sheetpage`) when the plain
+  word is taken — the progress bar wanted `.bar`, which `.tally` and `.cmp` already scope
+  for their own use.
+
+  **The signature to look for is a bare single-class selector defined twice *outside* any
+  media query** — two `@media` refinements of one class are the normal mobile-first
+  pattern and are fine, while two unconditional definitions are two screens fighting.
+  Extract the `<style>` block, strip comments, walk it with a brace counter and report any
+  class matching `^\.[\w-]+$` that appears in more than one top-level rule. Run it when
+  something "looks weird" in a grid; it found both of the collisions below in one pass, and
+  neither had been caught by reading the file.
+- **No backticks inside a template literal in `webui.html`** — not even in an HTML
+  comment. A `` ` `` in `<!-- the strip above `#results` -->` **ends the literal**, and
+  everything after it is parsed as code: the failure is a `SyntaxError` hundreds of lines
+  away with no hint of the comment that caused it. Nothing in Python or in a browser tab
+  catches it, which is what `node --check` on the extracted script is for — run it after
+  every edit to that file's `<script>`.
 - **Never reference a top-level object by name from an inline HTML handler.** An
   inline handler's scope chain starts at the *element*, and an `HTMLElement` has a
   legacy `align` property — so `onchange="align.show=…"` silently writes to a

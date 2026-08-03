@@ -34,10 +34,29 @@ _SESSION.headers.update({"User-Agent": _UA, "Accept": "application/json"})
 
 #: Scryfall asks for 50-100ms between requests; be a good citizen.
 MIN_INTERVAL: Final = 0.1
+#: **A picture host is not an API**, and the interval that is good manners at one is a
+#: stall at the other. Scryfall asks for 50-100ms between calls to *its API*; nothing
+#: asks that of a static image CDN, and a browser fetching the same art asks for six at
+#: once. Applied per host at :data:`MIN_INTERVAL`, one screen of set logos (174 of them,
+#: measured) would take 17s of pure waiting before a byte of it was needed. So art reads
+#: pass this instead, and the limit on them is the pool that issues them.
+CDN_INTERVAL: Final = 0.0
 #: Statuses worth another attempt: rate limit, and the 5xx family (incl. the
 #: Cloudflare-only codes these APIs sit behind).
 RETRY_STATUSES: Final = frozenset({429, 500, 502, 503, 504, 520, 521, 522, 524})
 MAX_ATTEMPTS: Final = 4
+#: **How hard to try when giving up costs real work.** Drawing a screen and fetching a
+#: card are not the same errand: a facet dropdown that arrives late is worth less than
+#: the four seconds it would spend waiting, while a card lost out of a batch of fifty
+#: costs a re-run and a hunt for which one. pokemontcg.io answers 500 often enough to
+#: matter — measured at 6 of 12 on a bad afternoon, which loses roughly one card in
+#: sixteen at four attempts and about one in a thousand at seven.
+#:
+#: So the default stays low and the *work* reads (a card's metadata, its image) ask for
+#: this instead. Seven attempts is 0.5+1+2+4+8+8 = 23.5s in the worst case, spent only
+#: when a host really is down — and `get` still serves a stale cache entry before it
+#: raises, so the wait buys an answer whenever there has ever been one.
+PATIENT_ATTEMPTS: Final = 7
 #: attempt N sleeps BACKOFF * 2**(N-1) seconds — 0.5, 1, 2 between 4 attempts.
 BACKOFF: Final = 0.5
 #: never wait longer than this on a Retry-After
@@ -112,21 +131,29 @@ def get(
     accept: str = "",
     cache: bool = False,
     ttl: float = CACHE_TTL,
+    attempts: int = MAX_ATTEMPTS,
+    interval: float = MIN_INTERVAL,
 ) -> Reply:
     """GET ``url``, rate-limited and retried; ``cache`` stores/serves the body.
 
     A non-retryable answer (including 404) is returned as-is — callers turn it
     into their own message. Raises :class:`NetworkError` only when nothing
     usable came back, cache included.
+
+    ``attempts`` is how many times to try: the default suits a read whose answer
+    draws a screen, and :data:`PATIENT_ATTEMPTS` suits one whose failure costs work.
+    ``interval`` is the politeness gap held per host — the default is what Scryfall
+    asks of its API, and :data:`CDN_INTERVAL` is for a host serving static pictures.
     """
+    attempts = max(1, attempts)
     host = _host(url)
     key = _key(url, params) if cache else None
     if key and (hit := _cache_read(key, ttl)) is not None:
         return hit
 
     detail = ""
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        _throttle(host)
+    for attempt in range(1, attempts + 1):
+        _throttle(host, interval)
         resp: requests.Response | None = None
         try:
             resp = _SESSION.get(
@@ -148,13 +175,13 @@ def get(
                     _cache_write(key, reply)
                 return reply
             detail = f"HTTP {resp.status_code}"
-        if attempt < MAX_ATTEMPTS:
+        if attempt < attempts:
             time.sleep(_backoff(attempt, resp))
 
-    _record(host, Health.DOWN, f"{detail} after {MAX_ATTEMPTS} tries")
+    _record(host, Health.DOWN, f"{detail} after {attempts} tries")
     if key and (stale := _cache_read(key, ttl=None)) is not None:
         return Reply(stale.status, stale.body, stale=True)
-    raise NetworkError(f"{host}: {detail} after {MAX_ATTEMPTS} tries")
+    raise NetworkError(f"{host}: {detail} after {attempts} tries")
 
 
 def health() -> list[HostHealth]:
@@ -199,13 +226,20 @@ def cache_dir() -> Path:
     return Path(base) / "proxdex"
 
 
+#: every kind of cached thing, so ``--clear-cache`` cannot go out of date by
+#: forgetting one. ``http`` is JSON bodies, ``art`` is provider pictures
+#: (:mod:`proxdex.art`); ``health.json`` is not a response and stays.
+_CACHED: Final = ("http/*.json", "art/*")
+
+
 def clear_cache() -> int:
     """Drop every cached response; returns how many files went."""
     gone = 0
-    for path in cache_dir().glob("http/*.json"):
-        with contextlib.suppress(OSError):
-            path.unlink()
-            gone += 1
+    for pattern in _CACHED:
+        for path in cache_dir().glob(pattern):
+            with contextlib.suppress(OSError):
+                path.unlink()
+                gone += 1
     return gone
 
 
@@ -214,8 +248,10 @@ def _host(url: str) -> str:
     return url.split("/")[2] if "//" in url else url
 
 
-def _throttle(host: str) -> None:
-    wait = MIN_INTERVAL - (time.monotonic() - _last_call.get(host, 0.0))
+def _throttle(host: str, interval: float) -> None:
+    if interval <= 0:
+        return
+    wait = interval - (time.monotonic() - _last_call.get(host, 0.0))
     if wait > 0:
         time.sleep(wait)
     _last_call[host] = time.monotonic()

@@ -119,6 +119,26 @@ FRONT_MARKER = ".front"
 #: in a way nothing on screen shows.
 FIT_MARKER = ".fit"
 
+#: the cardbleed synthesis settings a stored master was filled with, when they were
+#: not the defaults — ``.tune-bordered[_f2]``, one ``key=value`` per line.
+#:
+#: A **decision**, like ``.pin`` and unlike ``.fit``: somebody looked at a fill that had
+#: gone wrong (a repeated texture, a smeared edge), tried settings until it was
+#: right, and that answer must survive re-bordering the card — otherwise every re-run
+#: silently reverts to the fill they rejected. Absent means the defaults, which is what
+#: almost every card should have.
+TUNE_MARKER = ".tune"
+
+#: where somebody said this card's border actually sat, as the four fractions the align
+#: marks were left on — ``.marks-bordered[_f2]``.
+#:
+#: A **decision**, and the most expensive one on the card: a *reading* of a printed
+#: border that proxdex refuses to guess at. Stored so the fit can be repeated without
+#: taking it again, which is what makes tuning the fill possible at all — otherwise
+#: changing one setting would mean placing four marks again. ``.fit`` records the
+#: *target* (for ``doctor``'s stale-spec check); this records the input.
+MARKS_MARKER = ".marks"
+
 
 @dataclass(frozen=True, slots=True)
 class Fit:
@@ -366,6 +386,58 @@ class Card:
         return Fit(
             spec=lines[0].strip().lower(), inset=(nums[0], nums[1], nums[2], nums[3])
         )
+
+    # -- where somebody said the border was ------------------------------------
+    def marks_marker(self, stage: Stage, face: int = FRONT) -> Path:
+        return self.dir / f"{MARKS_MARKER}-{stage.label}{face_suffix(face)}"
+
+    def write_marks(
+        self, stage: Stage, face: int, marks: tuple[float, float, float, float]
+    ) -> None:
+        body = " ".join(f"{v:.6f}" for v in marks) + "\n"
+        self.marks_marker(stage, face).write_text(body, encoding="utf-8", newline="\n")
+
+    def marks(
+        self, stage: Stage, face: int = FRONT
+    ) -> tuple[float, float, float, float] | None:
+        """The reading the fit was made from, or ``None`` — nothing was recorded, so a
+        caller must ask for it rather than invent one."""
+        marker = self.marks_marker(stage, face)
+        if not marker.is_file():
+            return None
+        try:
+            nums = [float(v) for v in marker.read_text(encoding="utf-8").split()]
+        except (OSError, ValueError):
+            return None
+        if len(nums) != 4:  # one per edge
+            return None
+        return (nums[0], nums[1], nums[2], nums[3])
+
+    # -- how a stored master's added border was filled -------------------------
+    def tune_marker(self, stage: Stage, face: int = FRONT) -> Path:
+        return self.dir / f"{TUNE_MARKER}-{stage.label}{face_suffix(face)}"
+
+    def write_tune(self, stage: Stage, face: int, pairs: Sequence[str]) -> None:
+        """Record the non-default fill settings, or remove the record when there are
+        none — so "back to the defaults" is stored as the absence it is."""
+        marker = self.tune_marker(stage, face)
+        if not pairs:
+            marker.unlink(missing_ok=True)
+            return
+        marker.write_text("\n".join(pairs) + "\n", encoding="utf-8", newline="\n")
+
+    def tune(self, stage: Stage, face: int = FRONT) -> tuple[str, ...]:
+        """The stored ``key=value`` pairs — empty when the defaults were used.
+
+        Returned unparsed: :mod:`proxdex.bleed` owns what a knob is, and reading a
+        marker must not depend on it (a stale key names itself in the error the
+        re-run raises, rather than being dropped here in silence).
+        """
+        marker = self.tune_marker(stage, face)
+        if not marker.is_file():
+            return ()
+        lines = marker.read_text(encoding="utf-8").splitlines()
+        return tuple(line.strip() for line in lines if line.strip())
 
     # -- faces ---------------------------------------------------------------
     def write_faces(self, names: Sequence[str]) -> None:

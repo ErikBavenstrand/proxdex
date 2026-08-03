@@ -24,6 +24,7 @@ import numpy as np
 from PIL import Image
 
 from proxdex import games, net
+from proxdex.browse import Facet, Page, Query, Sort
 from proxdex.config import Config
 from proxdex.errors import FileError
 from proxdex.frames import GuideId
@@ -146,10 +147,26 @@ class SearchResult:
     oversized: bool = False
     frame: str | None = None
     traits: dict[str, str] = field(default_factory=dict)
+    #: A *smaller* scan for the tile, where the provider publishes one. Empty means
+    #: it does not, and :attr:`thumb` then falls back to the full image.
+    #:
+    #: A result row is looked at, not kept: 60 of them at 190px each. Pokémon's
+    #: ``/small`` is 245px and ~30 KB against ``/large``'s 825 KB — a 25x saving on
+    #: the fetch a browse page actually makes, which is the cost the art cache could
+    #: not remove because it is what fills the cache in the first place. Kept a
+    #: separate field rather than swapping a suffix at the point of use, so nothing
+    #: downstream can *file* a thumbnail: :attr:`image_url` is what `fetch` downloads,
+    #: and it is untouched.
+    thumb_url: str = ""
 
     @property
     def image_url(self) -> str:
         return self.faces[0].image_url if self.faces else ""
+
+    @property
+    def thumb(self) -> str:
+        """The picture to draw in a result tile — the small one where there is one."""
+        return self.thumb_url or self.image_url
 
     def to_meta(self) -> CardMeta:
         return CardMeta(
@@ -253,25 +270,51 @@ def details(cid: str, cfg: Config, game: GameId | None = None) -> CardDetail:
     raise FileError("; ".join(errors) or f"{cid}: not found")
 
 
-def search(
-    query: str,
-    cfg: Config,
-    game: GameId = games.DEFAULT,
-    *,
-    set_filter: str | None = None,
-    rarity: str | None = None,
-    year: str | None = None,
-    limit: int = 100,
-) -> list[SearchResult]:
-    """Search ``game`` by name; each query word must appear in the card name.
+def query_string(query: Query) -> str:
+    """``query`` as the search string the provider for its game understands.
 
-    ``set_filter`` is pushed into the query where the API supports it (by set
-    id/code, or a set-name substring for Pokémon); ``rarity`` and ``year`` are
-    matched on the results, identically for every game.
+    Public because it is the translation nothing else can check: pokemontcg.io and
+    Scryfall share no syntax, and a filter spelled slightly wrong does not fail — it
+    returns *plausible but different* cards. `set.releaseDate:[a TO b]` is a real 400
+    from one and `c:wu` really means "both colours" to the other, so the spellings
+    are pinned by :mod:`tests.test_browse` rather than trusted.
     """
-    provider = _pokemon_search if game is GameId.POKEMON else _mtg_search
-    found = provider(query, cfg, set_filter, limit)
-    return [r for r in found if _keep(r, rarity, year, set_filter)]
+    if query.game is GameId.POKEMON:
+        return _pokemon_query(query)
+    return _mtg_query(query)
+
+
+def provider_sort(game: GameId, sort: Sort) -> str:
+    """How ``game``'s provider spells ``sort``.
+
+    Every :class:`proxdex.browse.Sort` must have an answer for every game — a sort
+    the UI offers and the provider rejects is a 400 halfway through a browse — which
+    is a completeness claim, so it is checked rather than assumed.
+    """
+    table = _POKEMON_ORDER if game is GameId.POKEMON else _MTG_ORDER
+    return table[sort]
+
+
+def search_page(query: Query, cfg: Config) -> Page[SearchResult]:
+    """One page of the cards matching ``query``, and how many there are in all.
+
+    **Every filter is pushed to the provider**, which is the whole reason this
+    replaced a function that fetched a hundred rows and sieved them locally. A
+    local sieve cannot count: it knows how many of *its* hundred matched and
+    nothing about the rest, so a screen could only ever say "100 results" for a
+    set of 553 — and page 2 would re-fetch the same hundred and filter it again.
+    Both APIs can filter and count server-side, so both are asked to.
+
+    A query that narrows nothing returns an empty page rather than the first
+    screenful of every card ever printed (:attr:`Query.narrowed`): a search box
+    with nothing typed in it has not asked a question, and *browsing* always
+    carries at least a set.
+    """
+    if not query.narrowed:
+        return Page(items=(), page=query.page, per_page=query.per_page, total=0)
+    if query.game is GameId.POKEMON:
+        return _pokemon_page(query, cfg)
+    return _mtg_page(query, cfg)
 
 
 def set_cards(
@@ -287,6 +330,65 @@ def set_cards(
     return provider(set_id, cfg)
 
 
+#: **The image host answers 200 for a card it does not have, with a placeholder.**
+#: ``images.scrydex.com/pokemon/<id>/large`` serves a grey "no image" card for any id
+#: it does not know — verified with ``base1-999`` and ``zzzz-1``, which return the
+#: byte-identical file — so the HTTP status cannot tell a hit from a miss. That is
+#: the whole reason a Pokémon fetch resolves the id against the metadata API first,
+#: even though the image URL needs nothing but the id.
+#:
+#: It is identifiable, though: the placeholder is **640×892 in palette mode**, and no
+#: real scan is either of those — they arrive 600×825 RGB (the older sets) or
+#: ~734×1024 RGBA (the modern ones). Both conditions are required, so a real card can
+#: never be refused by this; the cost of the check being out of date one day is a
+#: placeholder filed as it would have been anyway, not a good card rejected.
+_PLACEHOLDER_SIZE = (640, 892)
+_PLACEHOLDER_MODE = "P"
+
+
+def is_placeholder(im: Image.Image) -> bool:
+    """Whether this is the image host's "no image for that id" card."""
+    return im.size == _PLACEHOLDER_SIZE and im.mode == _PLACEHOLDER_MODE
+
+
+def known_meta(
+    cid: str,
+    cfg: Config,
+    *,
+    name: str,
+    set_name: str = "",
+    rarity: str = "",
+    subtypes: str = "",
+) -> CardMeta:
+    """A Pokémon card's metadata from what a caller already read, no request at all.
+
+    **Pokémon only, and the reason is the image URL.** A Pokémon card's picture is
+    ``Config.scrydex_url.format(id=...)`` — derivable from the id — so a caller that
+    already knows the card's name and set (a search result, a browse row) has
+    everything needed to file it. Scryfall's image URLs are UUID paths that only its
+    own response carries, so an MTG card cannot be filed without asking, and this
+    refuses rather than pretending.
+
+    Safe because :func:`download` refuses the image host's placeholder. Skipping the
+    lookup means skipping the check that the id *exists*, and the host answers 200 with
+    a grey card for one that does not — so the placeholder check is what makes this path
+    honest rather than merely fast.
+    """
+    if not name.strip():
+        raise FileError(f"{cid}: cannot file a card with no name")
+    return CardMeta(
+        id=cid,
+        name=name.strip(),
+        # `<set>-<number>`, and a Pokémon collector number never contains a hyphen —
+        # so the set is everything before the last one
+        set_id=cid.rsplit("-", 1)[0],
+        set_name=set_name.strip() or cid.rsplit("-", 1)[0],
+        game=GameId.POKEMON,
+        faces=one_face(cfg.scrydex_url.format(id=cid)),
+        traits=_pokemon_traits({"rarity": rarity, "subtypes": subtypes.split(",")}),
+    )
+
+
 def download(meta: CardMeta, face: int = 0) -> Image.Image:
     """Download one face of a card's image, normalized to RGB."""
     if face >= len(meta.faces):
@@ -294,10 +396,21 @@ def download(meta: CardMeta, face: int = 0) -> Image.Image:
     url = meta.faces[face].image_url
     if not url:
         raise FileError(f"{meta.id}: this API offers no image for face {face + 1}")
-    resp = _get(url, accept="image/*", cache=False)
+    resp = _get(
+        url, accept="image/*", cache=False, what=meta.id, attempts=net.PATIENT_ATTEMPTS
+    )
     if not resp.ok:
         raise FileError(f"{meta.id}: {resp.status} for {url}")
-    return flatten(Image.open(io.BytesIO(resp.body)))
+    im = Image.open(io.BytesIO(resp.body))
+    if is_placeholder(im):
+        # refused rather than filed: a grey rectangle is indistinguishable from a
+        # card until it reaches paper, and every later stage would happily reshape,
+        # upscale and impose it
+        raise FileError(
+            f"{meta.id}: the image host has no scan for this card — it answered with "
+            f"its placeholder ({url})"
+        )
+    return flatten(im)
 
 
 def _details(cid: str, cfg: Config, game: GameId) -> CardDetail:
@@ -326,7 +439,7 @@ def _pokemon_lookup(cid: str, cfg: Config) -> CardMeta:
 
 
 def _pokemon_data(cid: str, cfg: Config) -> dict[str, Any]:
-    resp = _get(cfg.api_url.format(id=cid))
+    resp = _get(cfg.api_url.format(id=cid), what=cid, attempts=net.PATIENT_ATTEMPTS)
     if resp.status == 404:
         raise FileError(f"{cid}: not found in the Pokémon TCG API")
     if not resp.ok:
@@ -366,6 +479,7 @@ def _pokemon_set_cards(set_id: str, cfg: Config) -> list[CardBrief]:
     for page in range(1, _MAX_PAGES + 1):
         resp = _get(
             f"{_pokemon_base(cfg)}/cards",
+            what=set_id,
             params={
                 "q": f"set.id:{set_id}",
                 "page": page,
@@ -520,45 +634,123 @@ def _pokemon_links(data: dict[str, Any]) -> list[Link]:
     return links
 
 
-def _pokemon_search(
-    query: str, cfg: Config, set_filter: str | None, limit: int
-) -> list[SearchResult]:
-    parts = [f"name:*{token}*" for token in query.split() if token]
-    if set_filter:
-        if re.fullmatch(r"[a-z]+\d*", set_filter, re.IGNORECASE):
-            parts.append(f"set.id:{set_filter}")
+#: how pokemontcg.io spells each :class:`Sort`. Its ``number`` is a *string*
+#: field, so that ordering is lexicographic (11 before 2) — which is the API's
+#: answer, not something to paper over locally: a local re-sort would only reorder
+#: the page in hand and lie about the rest.
+_POKEMON_ORDER: dict[Sort, str] = {
+    Sort.RELEASED: "set.releaseDate",
+    Sort.NAME: "name",
+    Sort.NUMBER: "number",
+    Sort.RARITY: "rarity",
+}
+
+
+def _pokemon_query(query: Query) -> str:
+    """``query`` as one pokemontcg.io ``q`` string.
+
+    Values are **quoted**, not wildcarded: every one of them comes from the
+    provider's own catalog (``/v2/rarities`` and friends, via
+    :func:`proxdex.browse.facets`), so an exact match is what the user picked. The
+    card *name* is the exception — that is typed, so it is wildcarded.
+
+    **The typed words are joined into one term with wildcards between them**, not
+    emitted one term each. One term per word was a real bug and a subtle one: a space
+    separates *terms* in this API's syntax, so ``Moo Moo`` became
+    ``name:*Moo* name:*Moo*`` — two identical substring tests, which any name holding
+    "moo" once satisfies. So it was exactly equivalent to searching ``Moo``, returned
+    Amoonguss, Bloodmoon Ursaluna and Roaring Moon, and buried the card asked for
+    under everything newer. ``name:*Moo*Moo*`` returns the three cards that exist.
+
+    Joining also handles the thing that makes Pokémon names hard, which is that the
+    separator is not reliable: the card is **Moo-Moo Milk** in Neo and **Moomoo Milk**
+    in HeartGold, so neither ``name:"Moo Moo"`` nor ``name:"Moo Moo Milk"`` matches
+    anything at all (measured: both 0 results). A wildcard where the user typed a space
+    matches a space, a hyphen, a dot or nothing — which is why ``mr mime`` finds
+    *Mr. Mime* (35) and ``char zard`` finds *Charizard* (108).
+    """
+    parts: list[str] = []
+    if query.words:
+        # one term, wildcards between the words — never one term per word
+        parts.append("name:*" + "*".join(query.words) + "*")
+    if query.set_id:
+        # a set the browse screen chose is an id; a set somebody typed may be a
+        # name, and pokemontcg.io can match either
+        if re.fullmatch(r"[a-z]+[a-z0-9.]*", query.set_id, re.IGNORECASE):
+            parts.append(f"set.id:{query.set_id}")
         else:
-            parts.append(f"set.name:*{set_filter}*")
+            parts.append(f"set.name:*{query.set_id}*")
+    for facet, value in (
+        (Facet.RARITY, query.rarity),
+        (Facet.SUPERTYPE, query.supertype),
+        (Facet.SUBTYPE, query.subtype),
+    ):
+        if value:
+            parts.append(f'{_POKEMON_FIELD[facet]}:"{value}"')
+    parts += [f'types:"{t}"' for t in query.types]
+    if query.year:
+        # `set.releaseDate:[a TO b]` is a 400 from this API; the dates are
+        # `YYYY/MM/DD` strings, so a prefix wildcard is the year filter it does
+        # support — and it is exact, not a range that might drift
+        parts.append(f"set.releaseDate:{query.year}*")
+    return " ".join(parts)
+
+
+_POKEMON_FIELD: dict[Facet, str] = {
+    Facet.RARITY: "rarity",
+    Facet.SUPERTYPE: "supertype",
+    Facet.SUBTYPE: "subtypes",
+}
+
+
+def _pokemon_page(query: Query, cfg: Config) -> Page[SearchResult]:
     base = cfg.api_url.replace("/{id}", "")
+    order = provider_sort(query.game, query.sort)
     params = {
-        "q": " ".join(parts) or "*",
-        "orderBy": "set.releaseDate",
-        "pageSize": min(limit, 250),
-        "select": "id,name,number,rarity,artist,set",
+        "q": query_string(query),
+        "orderBy": f"-{order}" if query.descending else order,
+        "page": query.page,
+        "pageSize": query.per_page,
+        # `subtypes` earns its 5% of response size: without it a card added from a
+        # search carried *no* traits at all while the same card added by `fetch`
+        # carried rarity and subtypes — so a frame rule matching a subtype answered
+        # differently depending on which verb filed the card
+        "select": "id,name,number,rarity,artist,subtypes,set",
     }
     resp = _get(base, params=params, ttl=net.SEARCH_TTL)
     if not resp.ok:
-        raise FileError(f"TCG API search failed ({resp.status}) for {query!r}")
-    out: list[SearchResult] = []
-    for data in resp.json().get("data", []):
-        card_set = data.get("set", {})
-        out.append(
-            SearchResult(
-                id=data["id"],
-                name=data.get("name", ""),
-                set_id=card_set.get("id", ""),
-                set_name=card_set.get("name", ""),
-                series=card_set.get("series", ""),
-                year=str(card_set.get("releaseDate", "")).split("/")[0],
-                number=str(data.get("number", "")),
-                printed_total=str(card_set.get("printedTotal", "")),
-                rarity=data.get("rarity") or "—",
-                artist=data.get("artist") or "—",
-                game=GameId.POKEMON,
-                faces=one_face(cfg.scrydex_url.format(id=data["id"])),
-            )
-        )
-    return out
+        raise FileError(f"TCG API search failed ({resp.status}) for {query.text!r}")
+    body = resp.json()
+    rows = _objs(body.get("data"))
+    return Page(
+        items=tuple(_pokemon_result(row, cfg) for row in rows if row.get("id")),
+        page=query.page,
+        per_page=query.per_page,
+        # the API counts every match, not just this page — which is what lets a
+        # screen say "60 of 553" and offer a last page to jump to
+        total=_int(body.get("totalCount")),
+    )
+
+
+def _pokemon_result(data: dict[str, Any], cfg: Config) -> SearchResult:
+    card_set = _obj(data.get("set"))
+    return SearchResult(
+        id=str(data["id"]),
+        name=str(data.get("name") or ""),
+        set_id=str(card_set.get("id") or ""),
+        set_name=str(card_set.get("name") or ""),
+        series=str(card_set.get("series") or ""),
+        year=str(card_set.get("releaseDate") or "").split("/")[0],
+        number=str(data.get("number") or ""),
+        printed_total=str(card_set.get("printedTotal") or ""),
+        rarity=str(data.get("rarity") or "—"),
+        artist=str(data.get("artist") or "—"),
+        game=GameId.POKEMON,
+        faces=one_face(cfg.scrydex_url.format(id=data["id"])),
+        # the tile's picture only — `faces` above is still what `fetch` files
+        thumb_url=cfg.scrydex_thumb_url.format(id=data["id"]),
+        traits=_pokemon_traits(data),
+    )
 
 
 # ---------------------------------------------------------------------- mtg --
@@ -572,7 +764,11 @@ def _mtg_data(cid: str, cfg: Config) -> dict[str, Any]:
     set_code, _, number = cid.partition("-")
     if not set_code or not number:
         raise FileError(f"{cid}: not an MTG card id (expected e.g. neo-136)")
-    resp = _get(f"{cfg.mtg_api_url.rstrip('/')}/cards/{set_code}/{number}")
+    resp = _get(
+        f"{cfg.mtg_api_url.rstrip('/')}/cards/{set_code}/{number}",
+        what=cid,
+        attempts=net.PATIENT_ATTEMPTS,
+    )
     if resp.status == 404:
         raise FileError(f"{cid}: not found on Scryfall")
     if not resp.ok:
@@ -580,26 +776,99 @@ def _mtg_data(cid: str, cfg: Config) -> dict[str, Any]:
     return _obj(resp.json())
 
 
-def _mtg_search(
-    query: str, cfg: Config, set_filter: str | None, limit: int
-) -> list[SearchResult]:
-    parts = [f'name:"{token}"' for token in query.replace('"', "").split() if token]
-    if set_filter and re.fullmatch(r"[a-z0-9]{2,6}", set_filter, re.IGNORECASE):
-        parts.append(f"set:{set_filter}")
-    params = {
-        "q": " ".join(parts) or "*",
-        "unique": "prints",
-        "order": "released",
-        "dir": "asc",
-    }
-    resp = _get(
-        f"{cfg.mtg_api_url.rstrip('/')}/cards/search", params=params, ttl=net.SEARCH_TTL
+#: **Scryfall pages at a fixed 175 and will not be talked down.** proxdex's page
+#: size is a screenful, so the two do not line up and the window has to be cut out
+#: of whichever Scryfall pages contain it — see :func:`_mtg_window`.
+MTG_PAGE_SIZE = 175
+
+#: how Scryfall spells each :class:`Sort`. ``number`` is its ``set`` order, which
+#: is "by set, then collector number" — the order a set's own cards are in, which
+#: is what asking to sort by number means while browsing one.
+_MTG_ORDER: dict[Sort, str] = {
+    Sort.RELEASED: "released",
+    Sort.NAME: "name",
+    Sort.NUMBER: "set",
+    Sort.RARITY: "rarity",
+}
+
+
+def _mtg_query(query: Query) -> str:
+    """``query`` as one Scryfall search string."""
+    parts = [f'name:"{word}"' for word in query.text.replace('"', "").split() if word]
+    if query.set_id:
+        parts.append(f"set:{query.set_id}")
+    if query.rarity:
+        parts.append(f"r:{query.rarity}")
+    if query.year:
+        parts.append(f"year:{query.year}")
+    parts += [f't:"{t}"' for t in query.types]
+    if query.colors:
+        # ORed, not ANDed: picking White and Blue in a filter means "either",
+        # while Scryfall's bare `c:wu` means a card that is *both*, which for two
+        # colours is a handful of cards and reads as a broken filter
+        parts.append("(" + " or ".join(f"c:{c.lower()}" for c in query.colors) + ")")
+    return " ".join(parts)
+
+
+def _mtg_page(query: Query, cfg: Config) -> Page[SearchResult]:
+    """One display page, cut out of Scryfall's 175-card pages.
+
+    A display page of 60 straddles a Scryfall page boundary two times in three, so
+    this fetches the Scryfall pages the window covers and slices. It is at most
+    two requests for a 60-card page (three at the 250 maximum), both of them
+    cached — and it is the alternative to paging the *whole* result set locally,
+    which for a 553-card set would be four requests to draw the first screen.
+    """
+    order = provider_sort(query.game, query.sort)
+    url = f"{cfg.mtg_api_url.rstrip('/')}/cards/search"
+    text = query_string(query)
+    offset = (query.page - 1) * query.per_page
+    first = offset // MTG_PAGE_SIZE + 1
+    rows: list[dict[str, Any]] = []
+    total = -1
+    for provider_page in range(first, first + mtg_page_span(offset, query.per_page)):
+        resp = _get(
+            url,
+            params={
+                "q": text,
+                "unique": "prints",
+                "order": order,
+                "dir": "desc" if query.descending else "asc",
+                "page": provider_page,
+            },
+            ttl=net.SEARCH_TTL,
+        )
+        if resp.status == 404:  # Scryfall's "no cards matched"
+            return Page(items=(), page=query.page, per_page=query.per_page, total=0)
+        if not resp.ok:
+            raise FileError(f"Scryfall search failed ({resp.status}) for {text!r}")
+        body = resp.json()
+        total = _int(body.get("total_cards"))
+        rows += _objs(body.get("data"))
+        if not body.get("has_more"):
+            break
+    window = rows[offset % MTG_PAGE_SIZE :][: query.per_page]
+    return Page(
+        items=tuple(
+            _mtg_result(row)
+            for row in window
+            if row.get("set") and row.get("collector_number")
+        ),
+        page=query.page,
+        per_page=query.per_page,
+        total=total,
     )
-    if resp.status == 404:  # Scryfall's "no cards matched"
-        return []
-    if not resp.ok:
-        raise FileError(f"Scryfall search failed ({resp.status}) for {query!r}")
-    return [_mtg_result(data) for data in resp.json().get("data", [])[:limit]]
+
+
+def mtg_page_span(offset: int, per_page: int) -> int:
+    """How many of Scryfall's fixed 175-card pages a display page can touch.
+
+    Public for the same reason :func:`query_string` is: an error here drops or repeats
+    a card, and neither looks like a bug on a screen of thumbnails.
+    """
+    start = offset // MTG_PAGE_SIZE
+    end = (offset + per_page - 1) // MTG_PAGE_SIZE
+    return end - start + 1
 
 
 def _mtg_meta(data: dict[str, Any]) -> CardMeta:
@@ -632,6 +901,8 @@ def _mtg_result(data: dict[str, Any]) -> SearchResult:
         artist=str(data.get("artist") or "—"),
         game=GameId.MTG,
         faces=_mtg_faces(data),
+        # the tile's picture only — `faces` is still the lossless PNG `fetch` files
+        thumb_url=_mtg_thumb(_mtg_face_uris(data)),
         layout=_mtg_layout(data),
         oversized=data.get("oversized") is True,
         frame=mtg_frame(data),
@@ -772,6 +1043,46 @@ _MAX_FACES = 2
 def _mtg_image(uris: dict[str, Any]) -> str:
     """Scryfall's ``png`` (745×1040) — its largest, and the only lossless one."""
     return str(uris.get("png") or uris.get("large") or uris.get("normal") or "")
+
+
+#: Which of Scryfall's published sizes a *tile* takes, most wanted first.
+#:
+#: Not a setting, unlike the Pokémon equivalent, and the difference follows the two
+#: providers rather than taste: a Pokémon image URL is derivable from the card id, so it
+#: is a configurable template; Scryfall publishes its sizes as keys in the card's own
+#: response, so the only choice is which key to read.
+#:
+#: Measured over 32 cards across four sets: ``png`` — right to *file*, being Scryfall's
+#: only lossless size — has a median of **1657 KB** and a range of 331 KB to 2206 KB,
+#: because an old card's scan is far heavier than a modern one's (`dft` runs ~377 KB,
+#: `lea` ~2182). ``normal`` is 488×680 and **120 KB, range 78-146**. So the saving is
+#: about 14x at the median and 3x on the lightest set — but the better property is
+#: that the thumbnail is *flat*: a page of Alpha now costs what a page of Aetherdrift
+#: costs, where before it was 102 MB against 23.
+#:
+#: ``normal`` rather than ``small`` (146×204, ~12 KB) because a 146px picture is softer
+#: than the ~190px tile it fills; 488px is sharper than Pokémon's 245px ``/small`` and
+#: still nothing next to the PNG.
+_MTG_THUMB_KEYS: tuple[str, ...] = ("normal", "small", "large")
+
+
+def _mtg_thumb(uris: dict[str, Any]) -> str:
+    """The tile-sized picture, or ``""`` — in which case `SearchResult.thumb` falls
+    back to the full image, so a response missing every size still draws."""
+    return next((str(uris[k]) for k in _MTG_THUMB_KEYS if uris.get(k)), "")
+
+
+def _mtg_face_uris(data: dict[str, Any]) -> dict[str, Any]:
+    """Where the *front's* sizes live — on the card, or on its first face.
+
+    The same distinction :func:`_mtg_faces` turns on, and a tile only ever shows the
+    front, so this answers for one side rather than all of them.
+    """
+    shared = _obj(data.get("image_uris"))
+    if shared:
+        return shared
+    faces = _objs(data.get("card_faces"))
+    return _obj(faces[0].get("image_uris")) if faces else {}
 
 
 def _mtg_faces(data: dict[str, Any]) -> tuple[FaceImage, ...]:
@@ -1126,21 +1437,6 @@ def _typed(value: Any) -> str:
 
 
 # ------------------------------------------------------------------ helpers --
-def _keep(
-    result: SearchResult, rarity: str | None, year: str | None, set_filter: str | None
-) -> bool:
-    if rarity and rarity.lower() not in result.rarity.lower():
-        return False
-    if year and str(year) != result.year:
-        return False
-    # a set filter the API couldn't take (a name, not a code) is applied here
-    return not (
-        set_filter
-        and set_filter.lower() not in result.set_id.lower()
-        and set_filter.lower() not in result.set_name.lower()
-    )
-
-
 def _get(
     url: str,
     *,
@@ -1148,16 +1444,30 @@ def _get(
     accept: str = "",
     cache: bool = True,
     ttl: float = net.CACHE_TTL,
+    what: str = "",
+    attempts: int = net.MAX_ATTEMPTS,
 ) -> net.Reply:
     """GET via :mod:`proxdex.net` — rate-limited, retried, and (JSON) cached.
 
     Every failure the caller cannot act on becomes a :class:`FileError`, so the
     CLI and UI report a flaky API the same way they report a missing card.
+
+    ``what`` is the thing being fetched — a card id, usually. Without it the message
+    is the *host's* (``api.pokemontcg.io: HTTP 500 after 4 tries``), which reads as
+    ``SKIPPED api.pokemontcg.io`` in a batch and leaves you unable to tell which card
+    to try again.
     """
     try:
-        return net.get(url, params=params, accept=accept, cache=cache, ttl=ttl)
+        return net.get(
+            url,
+            params=params,
+            accept=accept,
+            cache=cache,
+            ttl=ttl,
+            attempts=attempts,
+        )
     except net.NetworkError as exc:
-        raise FileError(str(exc)) from exc
+        raise FileError(f"{what}: {exc}" if what else str(exc)) from exc
 
 
 def transparent(im: Image.Image) -> bool:

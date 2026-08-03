@@ -68,6 +68,10 @@ from proxdex.games import (
 #: are plain ids validated by :func:`valid_id`.
 class GuideId(StrEnum):
     POKEMON_WOTC = "pokemon-wotc"
+    POKEMON_ECARD = "pokemon-ecard"
+    POKEMON_ECARD_DEEP_TOP = "pokemon-ecard-deep-top"
+    POKEMON_ECARD_EX = "pokemon-ecard-ex"
+    POKEMON_EX_PLAIN = "pokemon-ex-plain"
     MTG_1993 = "mtg-1993"
     MTG_1993_ALPHA = "mtg-1993-alpha"
     MTG_1993_UNLIMITED = "mtg-1993-unlimited"
@@ -207,6 +211,160 @@ _POKEMON_WOTC = FrameGuide(
     name="Pokémon · WOTC vintage (Base-Neo Destiny)",
     game=GameId.POKEMON,
     inset=_mm(3.45, 3.15, 3.45, 3.15),
+)
+
+# **The e-Card frame is not symmetric, and that is the whole of this entry.**
+# Expedition, Aquapolis and Skyridge (`ecard1`/`ecard2`/`ecard3`, 2002-03) carry the
+# Nintendo e-Reader dot-code strip **down the left edge and along the bottom**, so two
+# of the four edges are roughly twice the others — and unlike every other spec here,
+# the *shape* is the finding rather than the size.
+#
+# Read by hand off two cards at different scales, and they agree per edge to a degree
+# that leaves nothing to argue about: left 11.276% against 11.262% (**0.014pp**),
+# right 5.045 / 5.156, top 3.640 / 3.378, bottom 7.495 / 7.722 — every edge inside
+# 0.27pp on images whose widths differ by a factor of 2.2. That is what says the
+# asymmetry belongs to the card and not to either scan: a crop shifts the two opposite
+# edges *against* each other, so a lopsided crop cannot reproduce the same lopsided
+# reading twice at two scales, while a real asymmetric frame does exactly that. One row
+# per card in `docs/measuring-frames.md`; the numbers below are the per-edge average.
+#
+# Two of the four land on WOTC's border almost exactly — top 3.12mm against 3.45, right
+# 3.24 against 3.15 — which is the corroboration worth having, since those readings
+# were taken by different methods (calipers there, pixels here): the same operation
+# printed the same border and added a strip along the other two (bottom 6.76mm, left
+# 7.16). Anything resolving these sets to `pokemon-wotc` would have been right on two
+# edges and ~3-4mm short on the other two, which is far worse than refusing them, and
+# is what happened until this spec existed.
+#
+# A run-length scan was tried as a check — over ten *other* e-Card scans, since the two
+# measured images are not the ones in hand — and is deliberately **not** recorded as
+# one: it read the left edge anywhere from 19px to 61px (3.2% to 10.2%) and the top
+# from 2.06% to 11.64%, because an e-Card's art runs into the strip and much of it is
+# yellow. That is the third failure mode of the deleted auto-detector — a border found
+# where the picture is dark, or missed where the picture matches it — and it is an
+# argument for reading by hand rather than against these numbers.
+_POKEMON_ECARD = FrameGuide(
+    id=GuideId.POKEMON_ECARD.value,
+    name="Pokémon · e-Card (Expedition-Skyridge)",
+    game=GameId.POKEMON,
+    # [top, right, bottom, left] — the two wide edges carry the e-Reader dot code
+    inset=(0.035093, 0.051003, 0.076083, 0.112689),
+)
+
+# **The same three sets hold a second frame, deeper at the top.** Read by hand off one
+# card, 468×650: left 52px, right 20px, top 67px, bottom 49px — so left 11.111%, right
+# 4.274%, top 10.308%, bottom 7.538%. The dot-code strip is in the same place (left and
+# bottom agree with `pokemon-ecard` to 0.158pp and 0.070pp, i.e. 0.10mm and 0.06mm),
+# and the **top is 6.04mm deeper as read** (5.98mm as shipped — the vertical
+# compensation below moves it by 0.45px), which is the finding.
+#
+# Two of the four numbers below are `pokemon-ecard`'s own, and the other two are
+# *derived* rather than taken, which is worth spelling out because it is not what the
+# reading says on its face:
+#
+# * `left` and `bottom` agree with the existing spec well inside its demonstrated
+#   reproducibility, so they are the existing spec's — two specs differing by a tenth
+#   of a millimetre on an edge would be two answers to one question.
+# * `top` and `right` are then re-derived to hold this reading's **sums**, not its
+#   individual edges: 17.846% vertically (art panel 534px of 650) and 15.385%
+#   horizontally. So top = 17.846 - 7.608 = **10.238%** and
+#   right = 15.385 - 11.269 = **4.116%**.
+#
+# Deriving from the sums is the better reading of the same measurement, and for the
+# reason the asymmetry above rests on: a crop shifts two *opposite* edges against each
+# other, so the sum of a pair survives a crop that neither edge alone does. It also
+# makes the substitution lossless — the design's own width and height as a fraction of
+# the card are exactly what was measured, which is the thing a fit has to reproduce.
+#
+# `right` was **not** replaced by the existing spec's 5.100%: that reading is 0.827pp
+# (0.53mm) away, seven times the 0.112pp the existing spec's two independent readings
+# agreed to on that same edge, and past the ±0.5mm cutting tolerance. Swapping it would
+# not have been self-consistent either — holding the horizontal sum would then have
+# forced `left` to 10.28%, which contradicts left being the edge that agreed.
+#
+# **Which printing this is, is not recorded here, deliberately.** The measurement is
+# one card's and the row in `docs/measuring-frames.md` says what is known about it; a
+# guess at *why* the top is deeper would be provenance prose asserting more than was
+# read, which is the failure this file deletes confidence grades for. It resolves as a
+# second candidate on every e-Card set (see `BASELINE`) and a person picks per card,
+# which is the honest shape for a question only they can answer.
+_POKEMON_ECARD_DEEP_TOP = FrameGuide(
+    id=GuideId.POKEMON_ECARD_DEEP_TOP.value,
+    name="Pokémon · e-Card, deep top (Expedition-Skyridge)",
+    game=GameId.POKEMON,
+    # [top, right, bottom, left] — top/right derived to hold the measured sums,
+    # left/bottom shared with `pokemon-ecard`
+    inset=(0.102379, 0.041157, 0.076083, 0.112689),
+)
+
+# **The ex era moved the dot code to the bottom alone, and that is the finding.** The
+# e-Reader strip is what makes the two specs above asymmetric on *two* edges; on the
+# Nintendo Black Star Promos (`np`, 40 cards, 2003-10-01) three edges are ordinary and
+# only the bottom is deep — top 3.26mm, right 2.33, left 2.76, bottom **6.01**. So this
+# is not the e-Card frame with different numbers, it is a different shape, and resolving
+# an `np` card to `pokemon-ecard` would have asked for 7.16mm of left border where the
+# card has 2.76 — the sort of error that looks fine on screen, since the overlay is
+# drawn in fractions too.
+#
+# Read by hand off two cards, 747×1040 and 455×642, and they reproduce the way the
+# e-Card pair does: every edge agrees to **0.17pp or less** (top 3.750 / 3.583, right
+# 3.614 / 3.736, bottom 6.827 / 6.698, left 4.284 / 4.396) across images whose widths
+# differ by 1.64×. Both cards also read `left` wider than `right` by the same 0.67pp,
+# which is why those two are not collapsed into one number the way most specs here
+# collapse opposite edges: a cutting error cancels when it is averaged, and a difference
+# that reproduces in the same direction at two scales is not a cutting error.
+#
+# The numbers below are the **per-edge average**, and the independently-stated totals
+# corroborate three of the four: 59px of 747 and 37px of 455 horizontally, 110px of 1040
+# vertically, all exact against the edges. The fourth is a 1px arithmetic slip in the
+# reading — card 2's vertical total is given as 65 where its own 23 + 43 is 66 — which
+# moves the vertical sum by 0.156pp (0.14mm), well inside the spread above. The edges
+# are what was read off the picture, so the edges are what is stored.
+#
+# **Keyed to `np` alone for now, and the era is why it is not keyed wider.** The strip
+# ran through the ex series, so this geometry very likely covers more of it — but
+# "likely" is what this file does not ship, and every other ex-era set resolves to
+# nothing and refuses to be bordered until somebody reads one. (`Baseline.sets` is a
+# prefix match, and `np` is the only one of pokemontcg.io's 174 Pokémon set ids that
+# begins with it, so the key names exactly one set today.)
+_POKEMON_ECARD_EX = FrameGuide(
+    id=GuideId.POKEMON_ECARD_EX.value,
+    name="Pokémon · e-Card, ex era (Nintendo Black Star Promos)",
+    game=GameId.POKEMON,
+    # [top, right, bottom, left] — only the bottom carries the e-Reader dot code
+    inset=(0.036663, 0.036754, 0.067624, 0.043397),
+)
+
+# **The same promo set also holds an ordinary square border, with no dot code at all.**
+# One card, 554×769: **23px on all four edges**. The strip is what makes the three specs
+# above asymmetric, and a card without one has nothing to be asymmetric about — so this
+# is the plainest spec in the file, and the *fourth* frame the e-Reader era turns out to
+# hold. `np` ran from 2003 into the ex series and only some of it carries a dot code,
+# which is a difference in what was printed rather than in how it was cut, and nothing
+# in the metadata says which a card is: both resolve as candidates and a person picks.
+#
+# Uniform in pixels **and** in millimetres — 2.64mm on the sides against 2.66 top and
+# bottom — which is worth stating because it does not follow from the first: 2.991% and
+# 4.152% are different fractions, and they only land on one width once each is taken of
+# the axis it belongs to. The 0.02mm between them is the image's own aspect sitting
+# 0.85% wide of the card's (554/769 = 0.7204 against 0.7143), so the reading is exactly
+# what a genuinely square border on a 63.5×88.9mm card looks like read off this file. It
+# is the first Pokémon spec whose four edges are one width, and the thinnest of them —
+# WOTC's yellow is 3.45/3.15 and this is nearer `mtg-m15`'s 2.56.
+#
+# Stored as the fractions of **its own file**, like every other spec here, rather than
+# converted to one uniform millimetre figure and back: the house rule is that a spec is
+# the pixel count over the width of the image it was read off, and rounding through a
+# millimetre would put a number in the file that nobody measured.
+_POKEMON_EX_PLAIN = FrameGuide(
+    id=GuideId.POKEMON_EX_PLAIN.value,
+    # Not "(Nintendo Black Star Promos)" any more: `BASELINE` points the whole of the
+    # ex series from `ex5` on at this spec as their *only* frame, so a name saying
+    # which set it was read off would read as which sets it describes.
+    name="Pokémon · ex era, no dot code",
+    game=GameId.POKEMON,
+    # [top, right, bottom, left] — 23px all round, of a 554×769 file
+    inset=(0.029909, 0.041516, 0.029909, 0.041516),
 )
 
 # --- Magic: The Gathering ---------------------------------------------------
@@ -433,6 +591,10 @@ SHIPPED: dict[str, FrameGuide] = {
     g.id: g
     for g in (
         _POKEMON_WOTC,
+        _POKEMON_ECARD,
+        _POKEMON_ECARD_DEEP_TOP,
+        _POKEMON_ECARD_EX,
+        _POKEMON_EX_PLAIN,
         _MTG_1993,
         _MTG_1993_ALPHA,
         _MTG_1993_UNLIMITED,
@@ -501,7 +663,15 @@ class Baseline:
 
     #: the spec these cards are fitted to. A shipped id, because code names it.
     spec: GuideId
-    #: set-id prefixes this covers, for a game whose border followed its sets
+    #: the set ids this covers, **exactly** — for a game whose border followed its sets.
+    #:
+    #: These were prefixes, and a prefix over-claims silently. `("ex1",)` for Ruby &
+    #: Sapphire also matches `ex10` through `ex16` — Unseen Forces to Power Keepers,
+    #: 2005-07, a different era of card entirely — and `("base",)` was quietly claiming
+    #: `basep`, the Wizards Black Star Promos, which nobody measured. A prefix cannot be
+    #: written that covers `ex1` and not `ex10`, so the mechanism had to go rather than
+    #: the intent. Pokémon's measured eras are closed sets, so enumerating them costs a
+    #: dozen strings and buys an answer that cannot reach a set nobody read.
     sets: tuple[str, ...] = ()
     #: frame generations this covers, for a game whose border followed its frame
     frames: tuple[Generation, ...] = ()
@@ -513,10 +683,106 @@ class Baseline:
 #: bordered, rather than being fitted to a number nobody took. Adding one is purely
 #: additive, since what it covers resolved to nothing before.
 BASELINE: dict[GameId, tuple[Baseline, ...]] = {
-    # Pokémon ids come from pokemontcg.io, and this stops exactly where WOTC did:
-    # `base1-6`, `gym1-2`, `neo1-4`. Then the e-Card series begins, which was a
-    # different operation with a frame nobody has measured.
-    GameId.POKEMON: (Baseline(GuideId.POKEMON_WOTC, sets=("base", "gym", "neo")),),
+    # Pokémon ids come from pokemontcg.io, and are **exact** (see `Baseline.sets`).
+    # Three eras are read and the rest are deliberately absent: WOTC's yellow border,
+    # the e-Card series after it — asymmetric, because two edges carry the Nintendo
+    # e-Reader dot code — and the ex era, where that code runs along the bottom alone
+    # (`ex1`-`ex4`, `np`) and then stops. The **whole ex series** answers now, but only
+    # the first five sets of it were read: `ex5` on inherit the plain border from
+    # `np`, which is a decision recorded as one. Everything from Diamond & Pearl
+    # (2007-05) onward still resolves to nothing and refuses to be bordered — the honest
+    # answer until somebody reads one.
+    GameId.POKEMON: (
+        Baseline(
+            GuideId.POKEMON_WOTC,
+            # `basep`, the Wizards Black Star Promos, is here because the `"base"`
+            # prefix was already claiming it and dropping it would stop a card that
+            # borders today. It is the same operation and the same yellow border as
+            # `base1`-`base6`, and it is the one id in this table that was **not**
+            # separately read — `docs/measuring-frames.md` says so out loud rather than
+            # letting an accident pass for a measurement.
+            sets=(
+                "base1",
+                "base2",
+                "base3",
+                "base4",
+                "base5",
+                "base6",
+                "basep",
+                "gym1",
+                "gym2",
+                "neo1",
+                "neo2",
+                "neo3",
+                "neo4",
+            ),
+        ),
+        Baseline(GuideId.POKEMON_ECARD, sets=("ecard1", "ecard2", "ecard3")),
+        # A *second* answer for the same sets, and the first entry in this table that
+        # is one. It is deliberately listed after the frame most e-Card cards take, so
+        # `baselines` returns the common one first and this is the alternative a
+        # person picks on the cards whose top really is deeper. See the spec above.
+        Baseline(GuideId.POKEMON_ECARD_DEEP_TOP, sets=("ecard1", "ecard2", "ecard3")),
+        # **The dot code outlived the e-Card sets, and so both ex-era shapes apply to
+        # the same five sets.** Ruby & Sapphire through Team Magma vs Team Aqua and the
+        # Nintendo Black Star Promos (2003-07 to 2004-03) printed cards *with* an
+        # e-Reader strip along the bottom and cards with a plain square border, and
+        # nothing in the metadata says which a given card is — the same situation as the
+        # two e-Card frames, answered the same way: both resolve as candidates and a
+        # person picks per card.
+        #
+        # `ex5` onward is **not** here, and that is the whole point of the entry below
+        # it: the *strip* is a fact about these five printings only, so from `ex5` there
+        # is one shape rather than two and nothing to pick between. Exact ids, because a
+        # prefix could not say that — `("ex1",)` claims `ex10`-`ex16` too, which is the
+        # reason `Baseline.sets` stopped being a prefix at all.
+        Baseline(GuideId.POKEMON_ECARD_EX, sets=("ex1", "ex2", "ex3", "ex4", "np")),
+        # Second because it is the lighter measurement — two cards against one — and
+        # *not* as a claim about which is commoner, which nobody counted. `resolve` fits
+        # against the first and offers the rest, so the order here is only ever a
+        # default somebody overrides with one click.
+        Baseline(GuideId.POKEMON_EX_PLAIN, sets=("ex1", "ex2", "ex3", "ex4", "np")),
+        # **The rest of the ex series, and the one place this table answers from a
+        # decision rather than a reading.** The dot code stopped after `ex4`: from
+        # Hidden Legends (2005-06) to Power Keepers (2007-05) every card carries the
+        # plain square border above, so there is nothing to pick between and this is
+        # their *only* candidate — which is the difference from the five sets on the
+        # line before, where two shapes really coexist.
+        #
+        # These sixteen ids were **not separately measured**. The number is one card of
+        # `np` (554×769, 23px all round), inherited on the grounds that it is the same
+        # era, the same operation and the same border with the strip left off — the
+        # same basis, and the same caveat, as `basep` sitting on `pokemon-wotc`.
+        # `docs/measuring-frames.md` records it as inherited rather than read, out loud,
+        # so nothing here passes for a hand reading. One card of `ex10` or so would
+        # settle it; until then this is a deliberate decision to let these sets border
+        # at a number from their own era instead of refusing them.
+        #
+        # Exact ids, never a prefix — `("ex1",)` is what used to claim all of these
+        # silently, and enumerating them is what makes the claim reviewable. The four
+        # Trainer Kits are here because they are the same printings boxed differently.
+        Baseline(
+            GuideId.POKEMON_EX_PLAIN,
+            sets=(
+                "ex5",
+                "ex6",
+                "ex7",
+                "ex8",
+                "ex9",
+                "ex10",
+                "ex11",
+                "ex12",
+                "ex13",
+                "ex14",
+                "ex15",
+                "ex16",
+                "tk1a",
+                "tk1b",
+                "tk2a",
+                "tk2b",
+            ),
+        ),
+    ),
     GameId.MTG: (
         # **The 1993 frame is three bands, so the exceptions are keyed by set and the
         # majority by the generation.** Scryfall calls them all one frame; 26 sets read
@@ -547,26 +813,106 @@ BASELINE: dict[GameId, tuple[Baseline, ...]] = {
 }
 
 
-def baseline(
+class Key(StrEnum):
+    """What a game's border followed — the fact that decides how coverage reads.
+
+    :class:`Baseline` has two keys because the two games differ in kind: Pokémon's
+    yellow border ran for a known list of **sets**, MTG's changed with the printing's
+    **frame generation**. So "is this covered?" is a question about a set for one game
+    and about a generation for the other, and asking it the wrong way round is exactly
+    what the deleted coverage report did — it graded 1046 MTG sets as unmeasured while
+    every card in them resolved exactly.
+
+    Derived from :data:`BASELINE` rather than declared beside it, so it cannot drift
+    from the table it describes.
+    """
+
+    SET = "set"
+    GENERATION = "generation"
+
+    @property
+    def label(self) -> str:
+        return "set" if self is Key.SET else "frame generation"
+
+    @property
+    def plural(self) -> str:
+        return "sets" if self is Key.SET else "frame generations"
+
+
+def keyed(game: GameId) -> Key:
+    """How this game's border was keyed — see :class:`Key`.
+
+    A game with a generation entry is keyed on the generation *even though it may
+    also carry set entries*: MTG's are the three 1993 bands and `4bb`, exceptions to
+    a generation rather than a scheme of their own. A game with no baseline at all
+    reads as set-keyed, which is the shape a fresh game's measurements arrive in.
+    """
+    entries = BASELINE.get(game, ())
+    return Key.GENERATION if any(e.frames for e in entries) else Key.SET
+
+
+def set_keys(game: GameId) -> dict[str, tuple[GuideId, ...]]:
+    """Every set id :data:`BASELINE` names for ``game``, and what it answers.
+
+    The whole table for one game, keyed the way it is written — so a coverage report
+    can list the set exceptions of a generation-keyed game without walking every set
+    that has ever printed.
+    """
+    out: dict[str, list[GuideId]] = {}
+    for entry in BASELINE.get(game, ()):
+        for set_id in entry.sets:
+            out.setdefault(set_id, []).append(entry.spec)
+    return {k: tuple(v) for k, v in out.items()}
+
+
+def generation_keys(game: GameId) -> dict[Generation, tuple[GuideId, ...]]:
+    """Every frame generation :data:`BASELINE` answers for ``game``.
+
+    Absent generations are *not* filled in: one that nobody has measured resolves to
+    no spec, which is the state a coverage report exists to name.
+    """
+    out: dict[Generation, list[GuideId]] = {}
+    for entry in BASELINE.get(game, ()):
+        for generation in entry.frames:
+            out.setdefault(generation, []).append(entry.spec)
+    return {k: tuple(v) for k, v in out.items()}
+
+
+def baselines(
     set_id: str, game: GameId, traits: Mapping[str, str] | None = None
-) -> GuideId | None:
-    """The shipped spec for this card, before any rule of the library's own.
+) -> tuple[GuideId, ...]:
+    """Every shipped spec that describes this card, most-likely first.
 
     A **set-id era** answers first and a **frame generation** second, in two passes
     rather than one — so which kind of key wins is a property of this function and
-    not of the order somebody happened to list :data:`BASELINE` in. ``None`` means
-    the shipped baseline has nothing to say about this printing, which is a state
+    not of the order somebody happened to list :data:`BASELINE` in. Empty means the
+    shipped baseline has nothing to say about this printing, which is a state
     (:attr:`~proxdex.specs.Via.NONE`) and not a failure.
+
+    **More than one is allowed, and Pokémon's e-Card sets are why.** Those three sets
+    hold two frames whose tops differ by 6mm, and nothing in the metadata says which a
+    card is in terms anybody has measured — so both are returned, ``resolve`` fits the
+    first and offers the rest, and a person picks per card. Within one pass the table's
+    own order decides, which is what makes "the frame most cards of the set take" a
+    property of how :data:`BASELINE` is written rather than of this function.
     """
     entries = BASELINE.get(game, ())
     sid = (set_id or "").lower()
-    for entry in entries:
-        if entry.sets and sid.startswith(entry.sets):
-            return entry.spec
+    by_set = tuple(e.spec for e in entries if sid in e.sets)
+    if by_set:
+        return by_set
     generation = parse_generation((traits or {}).get(FRAME_TRAIT))
     if generation is None:
-        return None
-    return next((e.spec for e in entries if generation in e.frames), None)
+        return ()
+    return tuple(e.spec for e in entries if generation in e.frames)
+
+
+def baseline(
+    set_id: str, game: GameId, traits: Mapping[str, str] | None = None
+) -> GuideId | None:
+    """The one shipped spec a fit would use — the first of :func:`baselines`."""
+    found = baselines(set_id, game, traits)
+    return found[0] if found else None
 
 
 def from_json(data: dict[str, Any]) -> FrameGuide:

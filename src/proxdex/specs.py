@@ -361,6 +361,46 @@ def _in_ranges(number: str, spec: str) -> bool:
 
 # ---------------------------------------------------------------- resolution --
 @dataclass(frozen=True, slots=True)
+class Candidate:
+    """One spec that could describe this card, and the way it was reached.
+
+    A set can genuinely hold more than one border. Pokémon's e-Card sets are the
+    case that forced this: the same set printed Pokémon cards and Trainer/Energy
+    cards whose frames differ, and no field of the metadata says which a card is in
+    terms proxdex measured — so the honest answer is not to pick for the user but to
+    *offer* what applies and let them choose per card, which is what ``.pin`` records.
+
+    This is **not** the same as ``border --frame``, which forces any spec at all,
+    matched or not. A candidate is one the rules really do reach.
+    """
+
+    spec: FrameGuide
+    via: Via
+    #: the rule id, when ``via`` is a rule or a set default
+    rule: str | None = None
+
+    def json(self) -> dict[str, Any]:
+        """What a chooser needs, which is more than a name.
+
+        ``mm`` is here because the *border widths* are what somebody is choosing
+        between — two candidates named "e-Card" and "e-Card, deep top" say nothing
+        about how they differ, while `3.12 / 3.24 / 6.76 / 7.16` against
+        `9.10 / 2.61 / 6.76 / 7.16` says it at a glance. Millimetres rather than the
+        stored fractions, for the reason the frames table uses them: a border is a
+        physical width, and nobody measures a percentage with calipers.
+        """
+        return {
+            "id": self.spec.id,
+            "name": self.spec.name,
+            "via": self.via.value,
+            "via_label": self.via.label,
+            "rule": self.rule,
+            "mm": list(self.spec.mm()),
+            "frameless": self.spec.frameless,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Resolution:
     """The spec a fit will run against, and how it was chosen."""
 
@@ -374,6 +414,20 @@ class Resolution:
     missing: str | None = None
     #: rules that could not be decided because this card has no recorded traits
     undecided: tuple[str, ...] = ()
+    #: the other specs that also apply, in the order they were reached — the offer,
+    #: never applied on its own. Empty for almost every card.
+    alternatives: tuple[Candidate, ...] = ()
+
+    @property
+    def ambiguous(self) -> bool:
+        """Is there more than one spec that really applies to this card?
+
+        A *state*, not a fault: it means the library holds two measured answers for
+        this printing and only a person can say which the card is. `frames check`
+        deliberately does not report it — every fault there is a broken reference or
+        an unanswerable question, and this is a question with two good answers.
+        """
+        return bool(self.alternatives)
 
     @property
     def have(self) -> bool:
@@ -401,6 +455,9 @@ class Resolution:
                 "(`proxdex frames set`) or pass a spec for this run"
             )
         parts = [f"{self.spec.name} ({self.via.label})"]
+        if self.alternatives:
+            others = ", ".join(c.spec.name for c in self.alternatives)
+            parts.append(f"— {others} also applies; pin one if this is not it")
         if self.missing:
             parts.append(f"— spec '{self.missing}' no longer exists")
         if self.undecided:
@@ -411,8 +468,15 @@ class Resolution:
         return " ".join(parts)
 
     def json(self) -> dict[str, Any]:
+        # `mm` is added here rather than in `FrameGuide.json`, which is also the
+        # **on-disk** format for `frames/<id>.json` — a derived width stored beside the
+        # fractions it comes from is one a hand-edited inset silently contradicts. So
+        # every *served* shape adds it (this one, `Candidate.json`, `json_registry`) and
+        # nothing written to a file carries it.
         return {
-            "spec": self.spec.json() if self.spec else None,
+            "spec": (
+                {**self.spec.json(), "mm": list(self.spec.mm())} if self.spec else None
+            ),
             "shipped": self.spec is not None and frames.is_shipped(self.spec.id),
             "have": self.have,
             "via": self.via.value,
@@ -422,6 +486,8 @@ class Resolution:
             "undecided": list(self.undecided),
             "sure": self.sure,
             "note": self.note,
+            "alternatives": [c.json() for c in self.alternatives],
+            "ambiguous": self.ambiguous,
         }
 
 
@@ -486,14 +552,42 @@ def resolve(
     printing: str | None = None,
     traits: Traits | None = None,
 ) -> Resolution:
-    """Which spec fits this card, and why. See the module docstring for the order.
+    """Which spec fits this card, why, and **what else applies**.
 
-    Every argument that names a spec is untrusted (a CLI flag, a marker file a
-    hand edited, a pin whose spec was removed), so one that does not resolve is
-    *reported* through :attr:`Resolution.missing` and skipped — never a traceback
-    in the middle of a card walk, and never a silent fallback either.
+    See the module docstring for the order. Every argument that names a spec is
+    untrusted (a CLI flag, a marker file a hand edited, a pin whose spec was
+    removed), so one that does not resolve is *reported* through
+    :attr:`Resolution.missing` and skipped — never a traceback in the middle of a
+    card walk, and never a silent fallback either.
+
+    **One walk, and it does not stop at the winner.** The first answer is the
+    resolution, exactly as before; the rest become :attr:`Resolution.alternatives`,
+    which is the offer a person picks from. Collecting them in a second pass would be
+    two implementations of "what applies to this card" that could disagree — the same
+    argument as `imports.plan` and `sheet.plan`.
+
+    ``missing`` and ``undecided`` stop accumulating once the winner is found, which is
+    what the early-returning version reported: a pinned card is not warned about a
+    trait rule further down that the pin settled.
     """
+    found: list[Candidate] = []
+    seen: set[str] = set()
     missing: str | None = None
+    undecided: list[str] = []
+
+    def offer(spec: FrameGuide, via: Via, rule: str | None = None) -> None:
+        """Record one applicable spec. Deduped by spec id: the same numbers reached
+        two ways is **one** choice, and the way with the most precedence names it."""
+        if spec.id in seen:
+            return
+        seen.add(spec.id)
+        found.append(Candidate(spec=spec, via=via, rule=rule))
+
+    def blame(spec_id: str) -> None:
+        nonlocal missing
+        if not found:  # see the docstring: only what stood between here and the winner
+            missing = missing or spec_id
+
     for wanted, via in (
         (override, Via.OVERRIDE),
         (pin, Via.PIN),
@@ -502,53 +596,59 @@ def resolve(
         if not wanted:
             continue
         spec = reg.get(wanted)
-        if spec is not None:
-            return Resolution(spec=spec, via=via)
-        missing = missing or str(wanted)
+        if spec is None:
+            blame(str(wanted))
+            continue
+        offer(spec, via)
 
-    undecided: list[str] = []
-    default: Rule | None = None
+    defaults: list[Rule] = []
     for rule in reg.for_set(game, set_id):
         if rule.is_default:
-            default = default or rule
+            defaults.append(rule)
             continue
         verdict = rule.selects(card_id, traits)
         if verdict is None:
-            undecided.append(rule.id)
+            if not found:
+                undecided.append(rule.id)
             continue
-        if verdict:
-            spec = reg.get(rule.spec)
-            if spec is not None:
-                return Resolution(
-                    spec=spec,
-                    via=Via.RULE,
-                    rule=rule.id,
-                    missing=missing,
-                    undecided=tuple(undecided),
-                )
-            missing = missing or rule.spec
+        if not verdict:
+            continue
+        spec = reg.get(rule.spec)
+        if spec is None:
+            blame(rule.spec)
+            continue
+        offer(spec, Via.RULE, rule.id)
 
-    if default is not None:
+    # Every whole-set rule, not just the first. A second used to be deleted on the
+    # grounds that it could never fire; it can now — by being picked — which is the
+    # whole of this feature, and one set really can hold two borders.
+    for default in defaults:
         spec = reg.get(default.spec)
-        if spec is not None:
-            return Resolution(
-                spec=spec,
-                via=Via.SET_DEFAULT,
-                rule=default.id,
-                missing=missing,
-                undecided=tuple(undecided),
-            )
-        missing = missing or default.spec
+        if spec is None:
+            blame(default.spec)
+            continue
+        offer(spec, Via.SET_DEFAULT, default.id)
 
-    shipped = frames.baseline(set_id, game, traits)
-    if shipped is not None and (spec := reg.get(shipped)) is not None:
+    # every shipped answer, not just the first: a set can hold two frames (Pokémon's
+    # e-Card sets do), and the ones this does not fit against become the offer
+    for shipped in frames.baselines(set_id, game, traits):
+        if (spec := reg.get(shipped)) is not None:
+            offer(spec, Via.ERA)
+
+    if not found:
+        # nothing measured describes this printing. No spec, and no substitute:
+        # `border` refuses, the reports name the card, `--frame` is the escape hatch.
         return Resolution(
-            spec=spec, via=Via.ERA, missing=missing, undecided=tuple(undecided)
+            spec=None, via=Via.NONE, missing=missing, undecided=tuple(undecided)
         )
-    # nothing measured describes this printing. No spec, and no substitute: `border`
-    # refuses, the reports name the card, and `--frame` is the escape hatch.
+    win = found[0]
     return Resolution(
-        spec=None, via=Via.NONE, missing=missing, undecided=tuple(undecided)
+        spec=win.spec,
+        via=win.via,
+        rule=win.rule,
+        missing=missing,
+        undecided=tuple(undecided),
+        alternatives=tuple(found[1:]),
     )
 
 
@@ -770,17 +870,31 @@ def assign(
         spec=spec.id,
     )
     existing = list(reg.rules)
-    if match is Match.SET:
-        for old in [
+    # A second whole-set rule used to be *deleted* here, on the grounds that it could
+    # never be reached and a rule that can never fire is worse than no rule. It can be
+    # reached now: `resolve` collects every applicable spec and offers the ones it did
+    # not pick (`Resolution.alternatives`), so a set holding two borders — Pokémon's
+    # e-Card sets, where a Trainer's frame is not a Pokémon's — is expressible instead
+    # of being silently reduced to one. What is still refused is a rule that says
+    # something the file already says: two identical selectors for the same spec.
+    twin = next(
+        (
             r
             for r in existing
-            if r.is_default and r.game is game and r.set_id.lower() == sid
-        ]:
-            # one default per set: a second would never be reached, and a rule
-            # that can never fire is worse than no rule. Compared on the set id
-            # itself rather than through `covers`, which a global rule answers
-            # `True` to for every set and would have deleted them all.
-            existing.remove(old)
+            if r.game is game
+            and r.set_id.lower() == sid
+            and r.match is match
+            and r.value.strip().lower() == value.strip().lower()
+            and r.spec == spec.id
+        ),
+        None,
+    )
+    if twin is not None:
+        raise ProxdexError(
+            f"{twin.id} already says exactly that — {spec.id} for "
+            f"{twin.scope} by {match.label}"
+            + (f" '{twin.value}'" if twin.value else "")
+        )
     write_rules(
         root,
         [*existing, rule] if match is Match.SET else [rule, *existing],

@@ -33,6 +33,7 @@ from rich.progress import (
 from rich.table import Table
 
 from proxdex import (
+    art,
     bleed,
     frames,
     games,
@@ -41,12 +42,14 @@ from proxdex import (
     media,
     net,
     profiles,
+    progress,
     report,
     scratch,
     sources,
     specs,
     steps,
 )
+from proxdex import browse as browse_mod
 from proxdex import calibrate as calibrate_mod
 from proxdex import doctor as doctor_mod
 from proxdex import grade as grade_mod
@@ -201,9 +204,13 @@ h_mm = 88.9
 bleed_mm = 2.5              # cut bleed added to every edge by cardbleed
 # Where each game's metadata and images come from. Pokémon splits the two
 # (pokemontcg.io for data, scrydex for the scan); Scryfall serves both for MTG.
-# api_url     = "https://api.pokemontcg.io/v2/cards/{id}"
-# scrydex_url = "https://images.scrydex.com/pokemon/{id}/large"
-# mtg_api_url = "https://api.scryfall.com"
+# A search or browse *tile* takes the small scan instead — 245px and ~30 KB
+# against the full image's 825 KB, over sixty tiles a page. Only the full one is
+# ever filed.
+# api_url           = "https://api.pokemontcg.io/v2/cards/{id}"
+# scrydex_url       = "https://images.scrydex.com/pokemon/{id}/large"
+# scrydex_thumb_url = "https://images.scrydex.com/pokemon/{id}/small"
+# mtg_api_url       = "https://api.scryfall.com"
 
 [sheet]
 # proxdex imposes the trim-size masters into the print PDF: each card is sized
@@ -406,9 +413,29 @@ _master = sheet_mod.master
 _sheet_ready = sheet_mod.print_ready
 
 
-def _each(items: Sequence[T], fn: Callable[[T], None], verb: str) -> int:
-    """Run ``fn`` over items with a progress bar; skip per-item FileErrors."""
+def _each(
+    items: Sequence[T], fn: Callable[[T], None], verb: str, name: Callable[[T], str]
+) -> int:
+    """Run ``fn`` over items with a progress bar; skip per-item FileErrors.
+
+    Which items failed is recorded in :data:`_last_failed` as well as counted, so a
+    caller can offer to try them again — a batch that says "3 skipped" and makes you
+    work out which three is most of the annoyance of a flaky API.
+
+    ``name`` says how one item is *called*, and it has no default deliberately. This
+    used to be ``str(item)``, which for the three verbs whose items are ``Card``s
+    printed the whole dataclass — ``Card(id='ecard3-141', dir=PosixPath('/Users/…`` —
+    as the progress note in the web UI, and recorded the same thing in
+    :data:`_last_failed` where a bare id is what a retry needs. Every caller knows
+    what its items are called; nothing here can guess.
+    """
+    _last_failed.clear()
     failed = 0
+    # the same count, twice over: rich draws it for a person, and the sink hands it
+    # to whatever spawned this (the web UI) — which rich cannot, because it stops
+    # drawing the moment stdout is not a terminal
+    sink = progress.Sink()
+    sink.start(verb, len(items))
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -417,17 +444,28 @@ def _each(items: Sequence[T], fn: Callable[[T], None], verb: str) -> int:
         console=console,
         transient=True,
         disable=len(items) < 3,
-    ) as progress:
-        task = progress.add_task(verb, total=len(items))
+    ) as bar:
+        task = bar.add_task(verb, total=len(items))
         for item in items:
-            progress.update(task, description=str(item))
+            called = name(item)
+            bar.update(task, description=called)
+            sink.at(called)
             try:
                 fn(item)
             except FileError as e:
-                err.print(f"[yellow]SKIPPED[/] {e}")
+                err.print(f"[yellow]SKIPPED[/] {escape(str(e))}")
+                _last_failed.append(called)
                 failed += 1
-            progress.advance(task)
+            bar.advance(task)
+            sink.advance(called)
+    sink.finish()
     return failed
+
+
+#: what the last :func:`_each` could not do, in order. A module-level list rather
+#: than a return value because every existing caller reads the *count*, and a batch
+#: verb that wants the names should not have to change the ones that don't.
+_last_failed: list[str] = []
 
 
 # ------------------------------------------------------------------ cli ------
@@ -475,17 +513,21 @@ def init(ctx: click.Context, path: Path | None) -> None:
     console.print(f"[green]initialized[/] proxdex library at [bold]{root}[/]")
 
 
-def _card_from_meta(lib: Library, meta: sources.CardMeta) -> Card:
-    """Find the card, or create its correctly-named folder from metadata."""
+def _card_from_meta(lib: Library, meta: sources.CardMeta) -> tuple[Card, bool]:
+    """Find the card, or create its correctly-named folder from metadata.
+
+    Returns whether the folder was *created* here, because a caller that then fails
+    to put an image in it has to be able to take it back — see :func:`_acquire`.
+    """
     card = lib.find(meta.id)
     if card is not None:
-        return card
+        return card, False
     set_dir = lib.set_dir(meta.set_id, meta.set_name, meta.game)
     card_dir = set_dir / f"{meta.id}_{slugify(meta.name)}"
     card_dir.mkdir(parents=True, exist_ok=True)
     card = Card(id=meta.id, dir=card_dir, set_id=meta.set_id)
     card.write_game(meta.game)
-    return card
+    return card, True
 
 
 def _ensure_card(lib: Library, cfg: Config, cid: str, game: GameId | None) -> Card:
@@ -493,7 +535,48 @@ def _ensure_card(lib: Library, cfg: Config, cid: str, game: GameId | None) -> Ca
     card = lib.find(cid)
     if card is not None:
         return card
-    return _card_from_meta(lib, sources.lookup_any(cid, cfg, game))
+    return _card_from_meta(lib, sources.lookup_any(cid, cfg, game))[0]
+
+
+def _known_meta(
+    cfg: Config,
+    ids: tuple[str, ...],
+    name: str | None,
+    set_name: str | None,
+    rarity: str | None,
+    subtypes: str | None,
+    game: GameId | None,
+) -> sources.CardMeta | None:
+    """The metadata the caller supplied, or None to look it up.
+
+    **Why this exists:** a card added from a search or a browse screen has already
+    been described by the provider — name, set, rarity, subtypes were on the row you
+    clicked — and `fetch` then asked for all of it again. That second request is the
+    one that fails when pokemontcg.io is having a bad afternoon, and it asks for
+    nothing the caller did not already have.
+
+    It is refused for more than one id (each card's description is its own) and for
+    any game but Pokémon (see :func:`proxdex.sources.known_meta`: Scryfall's image
+    URLs are UUID paths only its own response carries, so an MTG card genuinely
+    cannot be filed without asking).
+    """
+    if not name:
+        return None
+    if len(ids) != 1:
+        raise click.UsageError("--name describes one card, so pass exactly one id")
+    if game is not None and game is not GameId.POKEMON:
+        raise click.UsageError(
+            "--name is Pokémon-only: a Magic card's image URL is a uuid path that "
+            "only Scryfall's own answer carries, so it has to be looked up"
+        )
+    return sources.known_meta(
+        ids[0],
+        cfg,
+        name=name,
+        set_name=set_name or "",
+        rarity=rarity or "",
+        subtypes=subtypes or "",
+    )
 
 
 def _resolve_meta(
@@ -568,7 +651,28 @@ def _acquire(
     A two-sided card downloads both sides — they are one card with one id, and
     each side then runs its own pipeline.
     """
-    card = _card_from_meta(lib, meta)
+    card, made = _card_from_meta(lib, meta)
+    try:
+        _fill(lib, card, meta, force, face)
+    except (FileError, OSError):
+        # **A card folder with no picture in it is a card as far as everything else is
+        # concerned.** It has a `.game` and a `.layout`, so `ls` counted it, the contact
+        # sheet drew a tile for it and the tally said 4 of 5 originals — a card that can
+        # never become ready, left behind by a download that failed. If this call
+        # created the folder and nothing landed in it, it is taken back.
+        if made and not any(card.dir.glob(f"{card.id}_*")):
+            shutil.rmtree(card.dir, ignore_errors=True)
+        raise
+
+
+def _fill(
+    lib: Library,
+    card: Card,
+    meta: sources.CardMeta,
+    force: bool,
+    face: int | None,
+) -> None:
+    """Record what the printing is, then download each wanted side's original."""
     card.write_faces(meta.face_names)
     # what kind of printing this is — recorded now so the border step, `sheet`
     # and the card page can act on it without asking the API again
@@ -605,6 +709,21 @@ def _acquire(
     help="Also fetch the cards this one is printed alongside — both meld halves "
     "and the melded card, the tokens it makes.",
 )
+@click.option(
+    "--name",
+    metavar="TEXT",
+    help="This card's name, if you already know it — skips the metadata lookup "
+    "(Pokémon only, one id at a time).",
+)
+@click.option(
+    "--set-name", metavar="TEXT", help="Its set's name, with [cyan]--name[/]."
+)
+@click.option("--rarity", metavar="TEXT", help="Its rarity, with [cyan]--name[/].")
+@click.option(
+    "--subtypes",
+    metavar="A,B",
+    help="Its subtypes, comma-separated, with [cyan]--name[/].",
+)
 @click.pass_context
 def fetch(
     ctx: click.Context,
@@ -613,6 +732,10 @@ def fetch(
     face: int | None,
     force: bool,
     with_related: bool,
+    name: str | None,
+    set_name: str | None,
+    rarity: str | None,
+    subtypes: str | None,
 ) -> None:
     """Download originals by id, with names/sets from that game's API.
 
@@ -631,8 +754,10 @@ def fetch(
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     want = games.parse(game)
+    known = _known_meta(cfg, ids, name, set_name, rarity, subtypes, want)
     queue = list(ids)
     seen: set[str] = set()
+    missed: list[str] = []
     for round_no in range(_RELATED_ROUNDS):
         batch = [cid for cid in queue if cid.lower() not in seen]
         if not batch:
@@ -640,9 +765,13 @@ def fetch(
         seen.update(cid.lower() for cid in batch)
         _each(
             batch,
-            lambda cid: _acquire(lib, _resolve_meta(lib, cfg, cid, want), force, face),
+            lambda cid: _acquire(
+                lib, known or _resolve_meta(lib, cfg, cid, want), force, face
+            ),
             "fetching",
+            name=str,  # already a bare card id
         )
+        missed += _last_failed
         # nothing found in the last round could be fetched, so don't spend the
         # requests (or the noise) looking it up
         last = round_no == _RELATED_ROUNDS - 1
@@ -651,18 +780,133 @@ def fetch(
             if with_related and not last
             else []
         )
+    _retry_hint(missed, game)
     _reindex(lib)
 
 
+def _retry_hint(missed: Sequence[str], game: str | None) -> None:
+    """Name what did not arrive, and the command that tries just those again.
+
+    The metadata API these ids are resolved against answers 500 often enough to lose
+    a card out of a batch (measured at one in two on a bad afternoon), and every one
+    of those is worth another go a minute later — but only if you can tell which. The
+    ids are printed as an argument list you can paste.
+    """
+    if not missed:
+        return
+    what = " ".join(missed)
+    flag = f" --game {game}" if game else ""
+    err.print(
+        f"[yellow]⚠[/] {len(missed)} did not arrive [dim]— try again with[/]\n"
+        f"  proxdex fetch{flag} {escape(what)}"
+    )
+
+
+# ---------------------------------------------------------------- finding ---
+#: The filters every finding verb shares, declared once. `search` and `browse`
+#: differ only in *where the set comes from* — an argument for one, a flag for
+#: the other — so everything else is this list, and neither can drift from the
+#: web UI's filter bar: both spell :class:`proxdex.browse.Facet` values.
+def _query_options(fn: Callable[..., None]) -> Callable[..., None]:
+    opts = [
+        click.option(
+            "--rarity",
+            metavar="TEXT",
+            help="Only this rarity, as the game spells it "
+            "([cyan]'Rare Holo'[/], [cyan]mythic[/]).",
+        ),
+        click.option("--year", metavar="YYYY", help="Only cards released that year."),
+        click.option(
+            "--type",
+            "types",
+            metavar="TEXT",
+            multiple=True,
+            help="Pokémon energy type or Magic card type; repeatable.",
+        ),
+        click.option(
+            "--supertype",
+            metavar="TEXT",
+            help="Pokémon only: [cyan]Pokémon[/] · [cyan]Trainer[/] · [cyan]Energy[/].",
+        ),
+        click.option("--subtype", metavar="TEXT", help="Pokémon only: Basic, VMAX, …"),
+        click.option(
+            "--color",
+            "colors",
+            metavar="WUBRGC",
+            multiple=True,
+            help="Magic only: a colour letter; repeatable, and any of them matches.",
+        ),
+        click.option(
+            "--sort",
+            type=click.Choice([s.value for s in browse_mod.Sort]),
+            default=browse_mod.Sort.RELEASED.value,
+            show_default=True,
+        ),
+        click.option(
+            "--asc/--desc",
+            "ascending",
+            default=None,
+            help="Which way to sort (default: newest first by date, A-Z otherwise).",
+        ),
+        click.option("--page", default=1, show_default=True, help="Which page."),
+        click.option(
+            "--per-page",
+            default=browse_mod.PER_PAGE,
+            show_default=True,
+            help=f"Results per page (max {browse_mod.MAX_PER_PAGE}).",
+        ),
+    ]
+    for opt in reversed(opts):
+        fn = opt(fn)
+    return fn
+
+
+def _query(
+    game: GameId,
+    *,
+    text: str = "",
+    set_id: str = "",
+    rarity: str | None = None,
+    year: str | None = None,
+    types: tuple[str, ...] = (),
+    supertype: str | None = None,
+    subtype: str | None = None,
+    colors: tuple[str, ...] = (),
+    sort: str = browse_mod.Sort.RELEASED.value,
+    ascending: bool | None = None,
+    page: int = 1,
+    per_page: int = browse_mod.PER_PAGE,
+) -> browse_mod.Query:
+    """The flags above as one :class:`proxdex.browse.Query`.
+
+    ``--asc/--desc`` is a tri-state: unset means the sort's own useful direction
+    (newest first for a date, A-Z for a name), which is why it is ``None`` here
+    rather than a ``False`` that would silently reverse every date sort.
+    """
+    return browse_mod.Query(
+        game=game,
+        text=text,
+        set_id=set_id,
+        rarity=rarity or "",
+        year=year or "",
+        types=tuple(types),
+        supertype=supertype or "",
+        subtype=subtype or "",
+        colors=tuple(c.upper() for c in colors),
+        sort=browse_mod.Sort(sort),
+        desc=None if ascending is None else not ascending,
+        page=page,
+        per_page=per_page,
+    )
+
+
 @cli.command()
-@click.argument("query", nargs=-1, required=True, metavar="QUERY...")
+@click.argument("query", nargs=-1, metavar="QUERY...")
 @_GAME
 @click.option(
     "--set", "set_filter", metavar="SET", help="Set id (ex4, neo) or name substring."
 )
-@click.option("--rarity", metavar="TEXT", help="Keep only rarities containing TEXT.")
-@click.option("--year", metavar="YYYY", help="Keep only cards released that year.")
-@click.option("--limit", default=100, show_default=True, help="Max results to request.")
+@_query_options
 @click.option(
     "--select",
     "selection",
@@ -683,48 +927,276 @@ def search(
     query: tuple[str, ...],
     game: str | None,
     set_filter: str | None,
-    rarity: str | None,
-    year: str | None,
-    limit: int,
     selection: str | None,
     fetch_all: bool,
     open_images: bool,
     force: bool,
+    **filters: Any,
 ) -> None:
-    """Search one game's cards by name, then pick which to fetch.
+    """Search one game's cards, then pick which to fetch.
 
-    Shows matches with set, year, collector number, rarity and artist so you
-    can tell prints apart, then downloads the ones you choose. Searching is
-    per-game (the APIs are different); [cyan]--game[/] picks which.
+    Every filter is pushed to the provider, so the count and the page numbers are
+    the *whole* answer's — not this page's. Searching is per-game (the APIs are
+    different); [cyan]--game[/] picks which, and [cyan]proxdex sets[/] lists what
+    there is to filter by.
 
     [dim]Examples:[/]
 
     [dim]  proxdex search entei ex[/]
 
     [dim]  proxdex search --game mtg delver of secrets --set isd[/]
+
+    [dim]  proxdex search charizard --rarity 'Rare Holo' --sort name --asc[/]
+
+    [dim]  proxdex search --set base1 --supertype Trainer --page 2[/]
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     want = games.coerce(game, cfg.library_game)
     text = " ".join(query)
-    results = sources.search(
-        text, cfg, want, set_filter=set_filter, rarity=rarity, year=year, limit=limit
-    )
-    if not results:
+    wanted = _query(want, text=text, set_id=set_filter or "", **filters)
+    if not wanted.narrowed:
         console.print(
-            f"[yellow]no {games.get(want).name} matches for[/] {text!r} "
-            "[dim](--game switches TCG)[/]"
+            "[yellow]nothing to search for[/] [dim]— give a name, or a filter "
+            "like --set. To see everything in a set, use [/]proxdex browse SET[dim].[/]"
         )
         return
-    _print_results(results)
+    found = sources.search_page(wanted, cfg)
+    if not found.items:
+        console.print(
+            _nothing(
+                found,
+                f"[yellow]no {games.get(want).name} matches for[/] "
+                f"{text or _filter_note(wanted)!r} [dim](--game switches TCG)[/]",
+            )
+        )
+        return
+    _print_results(found, lib)
     if open_images:
         import webbrowser
 
-        for result in results[:12]:
+        for result in found.items[:12]:
             webbrowser.open(result.image_url)
+    _fetch_chosen(lib, found.items, selection, fetch_all=fetch_all, force=force)
 
+
+@cli.command()
+@click.argument("set_id", metavar="SET")
+@_GAME
+@_query_options
+@click.option(
+    "--select",
+    "selection",
+    metavar="SPEC",
+    help="Skip the prompt and fetch this selection (e.g. [cyan]1,3-5[/] or an id).",
+)
+@click.option("-f", "--fetch", "fetch_all", is_flag=True, help="Fetch every result.")
+@click.option("--force", is_flag=True, help="Re-download even if the original exists.")
+@click.pass_context
+def browse(
+    ctx: click.Context,
+    set_id: str,
+    game: str | None,
+    selection: str | None,
+    fetch_all: bool,
+    force: bool,
+    **filters: Any,
+) -> None:
+    """Page through one set's cards, marking the ones you already have.
+
+    This is the same call [cyan]search[/] makes — browsing a set is a query with a
+    set and no name — so the filters, the sorts and the paging are identical, and
+    the [green]✓[/] column is the library's own answer rather than a second
+    lookup. Card numbers sort in the set's own order with [cyan]--sort number[/].
+
+    [dim]Examples:[/]
+
+    [dim]  proxdex browse base1 --sort number[/]
+
+    [dim]  proxdex browse dft --game mtg --rarity mythic[/]
+
+    [dim]  proxdex browse sv1 --page 3 --per-page 30[/]
+    """
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    want = games.coerce(game, cfg.library_game)
+    wanted = _query(want, set_id=set_id, **filters)
+    expansion = browse_mod.find(want, set_id, cfg)
+    if expansion is None:
+        # not fatal: a set proxdex's cached list has not seen yet may still answer,
+        # and refusing here would make a brand-new set unbrowsable for a day
+        err.print(
+            f"[yellow]⚠[/] no {games.get(want).name} set called {escape(set_id)!r} "
+            "in the set list [dim](proxdex sets lists them; --game switches TCG)[/]"
+        )
+    else:
+        held = sum(1 for c in lib.cards() if c.set_id == expansion.id)
+        console.print(
+            f"[bold]{escape(expansion.name)}[/] [dim]{expansion.id} · "
+            f"{expansion.total} cards · {expansion.released or 'unreleased'} · "
+            f"{escape(expansion.group_label)}[/]  "
+            f"[green]{held}[/][dim]/{expansion.total} in your library[/]"
+        )
+    found = sources.search_page(wanted, cfg)
+    if not found.items:
+        console.print(_nothing(found, "nothing in that set matches those filters"))
+        return
+    _print_results(found, lib)
+    _fetch_chosen(lib, found.items, selection, fetch_all=fetch_all, force=force)
+
+
+@cli.command(name="sets")
+@_GAME
+@click.option("--group", metavar="TEXT", help="Only groups whose name contains TEXT.")
+@click.option(
+    "--match", metavar="TEXT", help="Only sets whose name or id contains TEXT."
+)
+@click.option("--owned", is_flag=True, help="Only sets you already hold a card from.")
+@click.option(
+    "--json", "as_json", is_flag=True, help="Machine-readable: groups and their sets."
+)
+@click.pass_context
+def sets_cmd(
+    ctx: click.Context,
+    game: str | None,
+    group: str | None,
+    match: str | None,
+    owned: bool,
+    as_json: bool,
+) -> None:
+    """List every set of one game, grouped the way the game groups them.
+
+    Pokémon groups by **series** — an era, so the newest leads. Magic groups by
+    **kind of product** (Expansion, Core, Commander, …), which has no date order,
+    so those follow a fixed list. Each row says how many of that set's cards your
+    library already holds; [cyan]proxdex browse SET[/] opens one.
+
+    [dim]Examples:[/]
+
+    [dim]  proxdex sets[/]
+
+    [dim]  proxdex sets --game mtg --group commander[/]
+
+    [dim]  proxdex sets --owned[/]
+    """
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    want = games.coerce(game, cfg.library_game)
+    held = browse_mod.owned([card.set_id for card in lib.cards()])
+    groups = [
+        replaced
+        for grp in browse_mod.groups(want, cfg)
+        if (replaced := _filter_group(grp, group, match, held, owned=owned)) is not None
+    ]
+    if as_json:
+        console.print_json(
+            json.dumps(
+                {
+                    "game": want.value,
+                    "grouping": browse_mod.grouping(want).value,
+                    "groups": [g.json(held) for g in groups],
+                },
+                indent=2,
+            )
+        )
+        return
+    if not groups:
+        console.print("[dim]no sets match[/]")
+        return
+    for grp in groups:
+        mine = sum(held.get(e.id, 0) for e in grp.expansions)
+        console.print(
+            f"\n[bold]{escape(grp.label)}[/] [dim]{len(grp.expansions)} sets · "
+            f"{grp.cards} cards · {grp.span}[/]"
+            + (f"  [green]{mine}[/] [dim]held[/]" if mine else "")
+        )
+        table = Table(box=None, pad_edge=False, header_style="bold", show_edge=False)
+        table.add_column("Set", style="dim")
+        table.add_column("Name")
+        table.add_column("Cards", justify="right")
+        table.add_column("Released", justify="right")
+        table.add_column("Yours", justify="right")
+        for exp in grp.expansions:
+            count = held.get(exp.id, 0)
+            table.add_row(
+                exp.id,
+                escape(exp.name) + (" [dim](digital)[/]" if exp.digital else ""),
+                str(exp.total or "—"),
+                exp.released or "—",
+                f"[green]{count}[/]" if count else "[dim]·[/]",
+            )
+        console.print(table)
+    total_sets = sum(len(g.expansions) for g in groups)
+    console.print(
+        f"\n[dim]{total_sets} sets in {len(groups)} "
+        f"{browse_mod.grouping(want).plural} · "
+        f"[/]proxdex browse SET[dim] opens one[/]"
+    )
+
+
+def _filter_group(
+    grp: browse_mod.Group,
+    group: str | None,
+    match: str | None,
+    held: dict[str, int],
+    *,
+    owned: bool,
+) -> browse_mod.Group | None:
+    """One group narrowed by the flags, or None when nothing in it survives.
+
+    A group whose *heading* matched is not kept wholesale: `--match` still applies
+    inside it, so `--group commander --match star` means what it reads like.
+    """
+    if group and group.lower() not in grp.label.lower():
+        return None
+    keep = [
+        exp
+        for exp in grp.expansions
+        if (not match or match.lower() in exp.name.lower() or match.lower() in exp.id)
+        and (not owned or held.get(exp.id, 0))
+    ]
+    if not keep:
+        return None
+    return replace(grp, expansions=tuple(keep))
+
+
+def _nothing(page: browse_mod.Page[Any], no_match: str) -> str:
+    """Why a page came back empty — and the two reasons are not the same thing.
+
+    A page *past the end* of a real answer is a paging mistake, and saying "no
+    matches" there is a lie about the query: `--page 3` of a 92-card answer at 60 a
+    page has plenty of matches and none on that page. So the count decides which
+    sentence gets printed, and the one for a bad page names the last real one.
+    """
+    if page.total > 0 and page.page > page.pages:
+        return (
+            f"[dim]page {page.page} is past the end — {page.total} match, "
+            f"and the last page is[/] --page {page.pages}"
+        )
+    return no_match
+
+
+def _filter_note(query: browse_mod.Query) -> str:
+    """What a text-free query asked for, for the "no matches" line."""
+    return " ".join(f"{facet.value}:{value}" for facet, value in query.filters)
+
+
+def _fetch_chosen(
+    lib: Library,
+    results: Sequence[sources.SearchResult],
+    selection: str | None,
+    *,
+    fetch_all: bool,
+    force: bool,
+) -> None:
+    """The pick-and-fetch tail `search` and `browse` share.
+
+    One implementation, because the two verbs differ in what they *look up* and
+    not in what they do with the answer — and a second copy of the prompt is a
+    second place `--select` could stop meaning the same thing.
+    """
     if fetch_all:
-        chosen = results
+        chosen = list(results)
     elif selection is not None:
         chosen = _parse_selection(selection, results)
     elif sys.stdin.isatty():
@@ -740,13 +1212,25 @@ def search(
     if not chosen:
         console.print("[dim]nothing selected.[/]")
         return
-    _each(chosen, lambda r: _acquire(lib, r.to_meta(), force), "fetching")
+    _each(
+        chosen,
+        lambda r: _acquire(lib, r.to_meta(), force),
+        "fetching",
+        name=lambda r: r.id,
+    )
     _reindex(lib)
 
 
-def _print_results(results: Sequence[sources.SearchResult]) -> None:
+def _print_results(page: browse_mod.Page[sources.SearchResult], lib: Library) -> None:
+    """One page of results, with a column saying which are already filed.
+
+    The numbers in the ``#`` column are **this page's**, 1-based, because that is
+    what `--select` takes — while the footer counts the whole answer. Both are
+    true and they are different, so the footer says which page you are on.
+    """
     table = Table(box=None, pad_edge=False, header_style="bold")
     table.add_column("#", justify="right", style="cyan")
+    table.add_column("", justify="center")  # in the library already
     table.add_column("ID", style="dim")
     table.add_column("Name")
     table.add_column("Set")
@@ -754,10 +1238,47 @@ def _print_results(results: Sequence[sources.SearchResult]) -> None:
     table.add_column("No.", justify="right")
     table.add_column("Rarity")
     table.add_column("Artist")
-    for i, r in enumerate(results, 1):
+    have = 0
+    for i, r in enumerate(page.items, 1):
         num = f"{r.number}/{r.printed_total}" if r.printed_total else r.number
-        table.add_row(str(i), r.id, r.name, r.set_name, r.year, num, r.rarity, r.artist)
+        mine = lib.find(r.id) is not None
+        have += mine
+        table.add_row(
+            str(i),
+            "[green]✓[/]" if mine else "",
+            r.id,
+            escape(r.name),
+            escape(r.set_name),
+            r.year,
+            num,
+            escape(r.rarity),
+            escape(r.artist),
+        )
     console.print(table)
+    console.print(_page_footer(page, have))
+
+
+def _page_footer(page: browse_mod.Page[Any], have: int) -> str:
+    """Where this page sits in the whole answer.
+
+    A provider that will not say how many matched (``total`` unknown) gets a
+    footer that says so rather than a confident count — the same reason
+    :class:`proxdex.browse.Page` keeps ``-1`` instead of falling back to 0.
+    """
+    where = (
+        f"{page.first}-{page.last} of {page.total}"
+        if page.known
+        else f"{page.first}-{page.last}"
+    )
+    parts = [f"[dim]{where} · page {page.page}"]
+    if page.known and page.pages > 1:
+        parts.append(f" of {page.pages}")
+    if have:
+        parts.append(f" · [/][green]✓[/] [dim]{have} already in your library")
+    if page.has_more:
+        parts.append(f" · [/]--page {page.page + 1}[dim] for more")
+    parts.append("[/]")
+    return "".join(parts)
 
 
 def _parse_selection(
@@ -910,7 +1431,7 @@ def import_(
             f"[dim](stage {planned.stage.value} {planned.stage.label})[/]"
         )
 
-    failed = _each(list(run.ready), one, "importing")
+    failed = _each(list(run.ready), one, "importing", name=lambda a: a.name)
     console.print(
         f"[dim]{len(run.ready) - failed} filed"
         + (f", {failed} failed" if failed else "")
@@ -1016,7 +1537,9 @@ def where(ctx: click.Context, clear_cache: bool) -> None:
     console.print(f"[bold]library[/]  {lib.root}")
     console.print(f"config    {cfg_file} {mark}")
     console.print(f"game      {games.get(lib.default_game).name} [dim](default)[/]")
-    console.print(f"cache     {net.cache_dir()}")
+    # the art count is worth naming: it is much the largest thing in there (a
+    # browsed set is 60 pictures) and it is what --clear-cache would drop
+    console.print(f"cache     {net.cache_dir()} [dim]({art.cached()} picture(s))[/]")
     # the one external tool proxdex drives, and the one step that cannot run
     # without it — so "why is upscale refusing?" is answerable here rather than
     # only at the moment it refuses
@@ -1165,6 +1688,13 @@ def _matches(
     default=LsSort.SET.value,
     show_default=True,
 )
+@click.option("--page", default=1, show_default=True, help="Which page.")
+@click.option(
+    "--per-page",
+    default=0,
+    metavar="N",
+    help="Rows per page; [cyan]0[/] (the default) lists every match at once.",
+)
 @click.option(
     "--json",
     "as_json",
@@ -1179,6 +1709,8 @@ def ls(
     set_id: str | None,
     only: str | None,
     sort: str,
+    page: int,
+    per_page: int,
     as_json: bool,
 ) -> None:
     """List cards with their stage progress and print status.
@@ -1189,6 +1721,14 @@ def ls(
     [dim]  proxdex ls --only ready --sort recent[/]
 
     [dim]  proxdex ls charizard --game pokemon[/]
+
+    [dim]  proxdex ls --per-page 40 --page 2[/]
+
+    Paging here **slices what is already read**, unlike [cyan]search[/] and
+    [cyan]browse[/], which ask the provider for a window: a library is local, so
+    every page is in hand the moment the first one is, and asking twice could only
+    disagree with itself. Which is also why there is no default page size — a
+    listing of your own cards should print in full unless you say otherwise.
     """
     lib = _lib(ctx)
     by_card = report.card_batch_index(lib)
@@ -1212,16 +1752,32 @@ def ls(
         LsSort.RECENT: lambda c: -_newest(c),
     }
     cards.sort(key=key[LsSort(sort)])
+    matched = len(cards)
+    shown = (
+        browse_mod.slice_page(cards, page, per_page)
+        if per_page
+        else browse_mod.Page(items=tuple(cards), page=1, per_page=max(1, matched))
+    )
+    cards = list(shown.items)
 
     if as_json:
+        # the envelope only appears when paging was *asked* for, so `ls --json`
+        # keeps serving the bare list `/api/cards` mirrors — a shape that changes
+        # depending on a flag is one every reader has to branch on
+        rows = [_card_json(card, by_card.get(card.id)) for card in cards]
         console.print_json(
             json.dumps(
-                [_card_json(card, by_card.get(card.id)) for card in cards], indent=2
+                {**shown.json(), "cards": rows} if per_page else rows,
+                indent=2,
             )
         )
         return
     if not cards:
-        console.print("[dim]no cards match[/]")
+        console.print(
+            "[dim]no cards match[/]"
+            if not matched
+            else f"[dim]page {page} is past the end — {matched} cards match[/]"
+        )
         return
 
     table = Table(box=None, pad_edge=False, header_style="bold")
@@ -1255,6 +1811,10 @@ def ls(
         "([green]✓[/] done · [yellow]⤳[/] skipped · · pending)   "
         "↑ = the side printed on the front[/]"
     )
+    if per_page:
+        # the tally below counts *this page*, so say where the page sits first —
+        # a per-stage count over 40 of 300 cards otherwise reads as the library's
+        console.print(_page_footer(shown, 0))
     _tally(cards)
 
 
@@ -1830,7 +2390,7 @@ def upscale(
             )
 
     fell_short: list[tuple[str, int, int]] = []
-    _each(lib.select(ids), one, "upscaling")
+    _each(lib.select(ids), one, "upscaling", name=lambda c: c.id)
     if fell_short:
         worst = min(dpi for _, _, dpi in fell_short)
         err.print(
@@ -1907,7 +2467,7 @@ def grade(
                 f"[green]✓[/] {_label(card, f)}: graded → {dst.relative_to(lib.root)}"
             )
 
-    _each(lib.select(ids), one, "grading")
+    _each(lib.select(ids), one, "grading", name=lambda c: c.id)
     _reindex(lib)
 
 
@@ -2058,6 +2618,41 @@ def _resolve_spec(
     )
 
 
+def _tune_help() -> None:
+    """Every fill setting, what it does and what it takes.
+
+    Its own listing rather than thirteen more flags on `border --help`: these are
+    tuned rarely, by somebody looking at one card, and burying the four options
+    people actually use under a wall of sliders serves nobody.
+    """
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    table.add_column("Setting", style="cyan")
+    table.add_column("Takes")
+    table.add_column("Default", style="magenta")
+    table.add_column("What it does")
+    for knob in bleed.KNOBS:
+        span = knob.bounds
+        if knob.options is not None:
+            takes = " | ".join(knob.choices)
+        elif span is None:  # pragma: no cover - a knob is a set or a range, pinned
+            takes = "—"
+        elif knob.kind is bleed.Kind.AUTO_INT:
+            takes = f"auto | {span.lo:g}-{span.hi:g}"
+        else:
+            takes = f"{span.lo:g}-{span.hi:g}"
+        table.add_row(knob.key, takes, str(knob.default), knob.help)
+    console.print(table)
+    console.print(
+        "\n[dim]Only the geometry is fixed by the frame spec — these change how the "
+        "*added* border is invented, and nothing else. A card keeps what it was last "
+        "given.[/]"
+    )
+    console.print(
+        "[dim]e.g.[/] proxdex border ecard3-141 --tune mode=smart "
+        "[dim](the dot-code strip doubles under the default `pattern`)[/]"
+    )
+
+
 def _warn_spec(card: Card, found: specs.Resolution) -> None:
     """Say out loud when the fit is running against a broken or unanswerable
     choice of spec. Not against a spec whose *numbers* are provisional — that is
@@ -2080,6 +2675,18 @@ def _warn_spec(card: Card, found: specs.Resolution) -> None:
         err.print(
             f"[yellow]⚠[/] {card.id}: no frame spec has been measured for this "
             "printing [dim](`proxdex frames set`, or `--frame` for this run)[/]"
+        )
+    if found.ambiguous and found.spec is not None:
+        # Not a warning: two measured answers is a question only a person can settle,
+        # and the fit is running against a real one either way. Said on every run
+        # because a border fitted to the wrong one of two looks perfect on screen.
+        # (An alternative implies a winner — `ambiguous` cannot be true without one —
+        # but saying so is free and the checker cannot know it.)
+        others = ", ".join(f"{c.spec.id} ({c.via.label})" for c in found.alternatives)
+        console.print(
+            f"  [dim]⌖ {card.id}: {1 + len(found.alternatives)} specs apply — using "
+            f"[/][cyan]{found.spec.id}[/][dim] ({found.via.label}); also {others}. "
+            f"Pick another with `proxdex frames pin <spec> {card.id}`[/]"
         )
 
 
@@ -2148,9 +2755,9 @@ def frames_cmd(ctx: click.Context) -> None:
 
     Run bare, this lists the specs and what your own cards resolve to.
     [cyan]set[/] records a spec's four numbers, [cyan]assign[/] points part of a
-    set (or all of it) at one, [cyan]pin[/] overrules the rules for one card, and
+    set (or all of it) at one, [cyan]pin[/] overrules the rules for one card,
     [cyan]check[/] lists everything about this library's frames that needs a
-    decision.
+    decision, and [cyan]coverage[/] lists what nobody has measured yet.
 
     A spec is four numbers — there is no confidence grade, because reading a border
     off the publisher's scan is not a measurement of the card and grading it as one
@@ -2185,7 +2792,9 @@ def frames_cmd(ctx: click.Context) -> None:
         _, count = seen.get(key, (found, 0))
         seen[key] = (found, count + 1)
     mine = Table(box=None, pad_edge=False, header_style="bold")
-    for col in ("Set", "Game", "Cards", "Resolves to", "From"):
+    # "Or" rather than a second row: these are two answers to *one* question about the
+    # same cards, and a row each would read as two groups resolving differently
+    for col in ("Set", "Game", "Cards", "Resolves to", "From", "Or"):
         mine.add_column(col)
     for (game, set_id, _, _), (found, count) in sorted(seen.items()):
         mine.add_row(
@@ -2194,9 +2803,15 @@ def frames_cmd(ctx: click.Context) -> None:
             str(count),
             found.spec.id if found.spec else "[yellow]none measured[/]",
             found.via.label + (f" ({found.rule})" if found.rule else ""),
+            ", ".join(c.spec.id for c in found.alternatives) or "[dim]—[/]",
         )
     console.print("\n[bold]Sets in this library[/]")
     console.print(mine)
+    if any(found.ambiguous for found, _ in seen.values()):
+        console.print(
+            "[dim]An [/][bold]Or[/][dim] is a second measured spec that also applies — "
+            "pick per card with [/][cyan]proxdex frames pin <spec> <card-id>[/]"
+        )
     if issues := _audit(lib, reg):
         console.print(
             f"\n[yellow]{len(issues)}[/] thing(s) need a decision — "
@@ -2544,6 +3159,90 @@ _FAULT_HINT: dict[specs.Fault, str] = {
 }
 
 
+@frames_cmd.command("coverage")
+@_GAME
+@click.option("--all", "show_all", is_flag=True, help="Every row, not just the gaps.")
+@click.option("--json", "as_json", is_flag=True, help="Emit the coverage as JSON.")
+@click.pass_context
+def frames_coverage(
+    ctx: click.Context, game: str | None, show_all: bool, as_json: bool
+) -> None:
+    """What has a measured frame spec, and what nobody has read yet.
+
+    [cyan]check[/] is about the cards you hold; this is about the ones you could —
+    so it reads the provider's set list (one request, cached) rather than the
+    library, because a printing nobody has measured is usually one you do not own
+    yet. [cyan]border[/] refuses such a card, so this is the list of what to go and
+    measure ([cyan]docs/measuring-frames.md[/] says how).
+
+    Each game is asked the question [bold]its own border followed[/]: Pokémon's ran
+    for known runs of sets, so a row is a set; MTG's changed with the printing's
+    frame generation — a modern set holds retro-frame cards beside modern ones — so
+    a row is a generation and there is deliberately no per-set verdict. Grading MTG
+    per set is what the deleted coverage report did, and it called 1046 sets
+    unmeasured while every card in them resolved exactly.
+    """
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    reg = _registry(lib)
+    held = browse_mod.owned([card.set_id for card in lib.cards()])
+    wanted = [games.coerce(game, lib.default_game)] if game else list(GameId)
+    reports = [inventory.coverage(g, cfg, reg, held) for g in wanted]
+    if as_json:
+        console.print_json(data={"games": [r.json() for r in reports]})
+        return
+    for found in reports:
+        _print_coverage(found, show_all=show_all)
+
+
+def _print_coverage(found: inventory.Coverage, *, show_all: bool) -> None:
+    name = games.get(found.game).name
+    mark = "[green]✓[/]" if found.complete else "[yellow]○[/]"
+    console.print(
+        f"\n{mark} [bold]{name}[/] — [bold]{found.covered}[/] of "
+        f"[bold]{found.total}[/] {found.key.plural} covered"
+    )
+    console.print(f"[dim]{found.note}[/]")
+    for band in found.bands:
+        rows = band.rows if show_all else tuple(r for r in band.rows if not r.covered)
+        if not rows:
+            continue
+        table = Table(box=None, pad_edge=False, header_style="bold")
+        # the band's own name goes above the table, not into a column head: it is a
+        # sentence ("Sets keyed away from their generation") and as a heading over
+        # short ids it wrapped to three lines and dragged every other column with it
+        for col in (rows[0].key.label.title(), "Name", "Year", "Held", "Spec", "From"):
+            table.add_column(col)
+        for row in rows:
+            table.add_row(
+                row.subject,
+                row.name,
+                row.year or "[dim]—[/]",
+                str(row.owned) if row.owned else "[dim]—[/]",
+                ", ".join(a.spec for a in row.answers) or "[yellow]none measured[/]",
+                ", ".join(
+                    a.via.label + (f" ({a.rule})" if a.rule else "")
+                    for a in row.answers
+                )
+                or "[dim]—[/]",
+            )
+        console.print(
+            f"\n[bold]{band.label}[/] [dim]— {band.covered} of {len(band.rows)} "
+            f"covered[/]"
+        )
+        console.print(table)
+    if found.complete:
+        return
+    if not show_all:
+        console.print("\n[dim]gaps only — [/][cyan]--all[/][dim] shows every row[/]")
+    if found.owned_gaps:
+        err.print(
+            f"[yellow]⚠[/] {found.owned_gaps} card(s) already in this library have "
+            "no measured spec — [dim]`proxdex border` refuses them until one is "
+            "recorded (`proxdex frames set`) or `--frame` is passed for the run[/]"
+        )
+
+
 @frames_cmd.command("preview")
 @click.argument("set_id", metavar="SET")
 @_GAME
@@ -2616,6 +3315,25 @@ def frames_preview(
     help="Keep [cyan]--frame[/] as this card's pin, so every later run uses it too.",
 )
 @_FACE
+@click.option(
+    "--tune",
+    "tune_pairs",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Tune how the *added* border is filled, e.g. [cyan]--tune mode=smart[/]. "
+    "Repeatable; [cyan]proxdex border --tune-help[/] lists every setting. Kept on the "
+    "card, so a re-border fills it the same way.",
+)
+@click.option(
+    "--no-tune",
+    is_flag=True,
+    help="Ignore this card's stored fill settings and use cardbleed's defaults.",
+)
+@click.option(
+    "--tune-help",
+    is_flag=True,
+    help="List every fill setting, what it does and what it takes, then exit.",
+)
 @click.option("--force", is_flag=True, help="Re-run even if a bordered image exists.")
 @click.option("--dry-run", is_flag=True, help="Report the plan; don't write.")
 @click.pass_context
@@ -2634,6 +3352,9 @@ def border(
     frame: str | None,
     save_frame: bool,
     face: int | None,
+    tune_pairs: tuple[str, ...],
+    no_tune: bool,
+    tune_help: bool,
     force: bool,
     dry_run: bool,
 ) -> None:
@@ -2660,10 +3381,21 @@ def border(
     default, its era, or a pin. [cyan]--frame[/] overrides it for this run;
     [cyan]--frame … --save[/] pins it to the card for good.
 
+    Where a border has to be **widened**, the added area is invented, and how it is
+    invented is a judgement about one picture — cardbleed's defaults occasionally repeat
+    a texture that should not repeat. [cyan]--tune KEY=VALUE[/] changes that and nothing
+    about the geometry; [cyan]--tune-help[/] lists the settings, and the UI's border
+    panel has the same ones with a live preview. A tuning is kept on the card and
+    re-used, until [cyan]--no-tune[/].
+
     [cyan]--dry-run[/] reports the plan without writing.
     """
+    if tune_help:
+        _tune_help()
+        return
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
+    asked = bleed.Tuning.from_pairs(tune_pairs)
     inner = (inner_top, inner_right, inner_bottom, inner_left)
     use_inner = any(v is not None for v in inner)
     if use_inner and not all(v is not None for v in inner):
@@ -2688,6 +3420,16 @@ def border(
             w, h = im.width, im.height
         trim = _trim_mm(card, cfg)
         marks = cast("tuple[float, float, float, float]", inner) if use_inner else None
+        if marks is None and max(grow_mm.values()) <= 0:
+            # A reading is the expensive part of this step and proxdex will not guess at
+            # one, so the last one is kept and re-used (`.marks-bordered`). That is what
+            # makes `border --force --tune …` a whole workflow: change how the added
+            # border is filled without placing four marks again.
+            marks = card.marks(Stage.BORDERED, f)
+            if marks is not None:
+                console.print(
+                    f"  [dim]⌖ {name}: re-using the marks this card was aligned to[/]"
+                )
         # one call decides the spec, and it reports which of the seven ways it got
         # there: an override, this card's pin, its printing, a rule, the set's
         # default, its era, or nothing at all
@@ -2731,14 +3473,35 @@ def border(
             )
             if plan.cropped:
                 note += f" [yellow](cropped {', '.join(plan.cropped)})[/]"
+            # A tuning is a decision somebody made *looking at this card*, so it is
+            # kept and re-used: without that, every re-border would silently revert to
+            # the fill they rejected. `--tune` this run wins; `--no-tune` says defaults.
+            stored = () if no_tune else card.tune(Stage.BORDERED, f)
+            fill = (
+                asked if (asked.values or no_tune) else bleed.Tuning.from_pairs(stored)
+            )
+            if not fill.empty:
+                note += f" [dim]· fill {' '.join(fill.spelled())}[/]"
+            # A fill setting can only change border that is *invented*. Where the marks
+            # already sit on the spec nothing is added (extensions come back as float
+            # noise) and every value produces a byte-identical file, so asking for one
+            # deserves an answer rather than silence.
+            if not fill.empty and not bleed.extends(plan):
+                err.print(
+                    f"[yellow]⚠[/] {name}: nothing is being added to this border, so a "
+                    "fill setting changes nothing here — it is the stretch that "
+                    "reshapes it. Try --no-stretch."
+                )
             if dry_run:
                 console.print(f"[cyan]{name}[/]: {note}")
                 return
-            bleed.fit(src, dst, guide, inner_t, trim, stretch=do_stretch)
+            bleed.fit(src, dst, guide, inner_t, trim, stretch=do_stretch, tune=fill)
             # what it was fitted to, beside the file: `doctor` compares it against
             # what the rules say today, because a spec that has since been
             # corrected leaves a master that is wrong and looks fine
             card.write_fit(Stage.BORDERED, f, guide.id, guide.inset)
+            card.write_marks(Stage.BORDERED, f, inner_t)
+            card.write_tune(Stage.BORDERED, f, fill.spelled())
         else:
             if max(grow_mm.values()) <= 0:
                 console.print(f"[dim]· {name}: nothing to expand[/]")
@@ -2760,7 +3523,7 @@ def border(
         for f in _faces(card, face):
             one_face(card, f)
 
-    _each(lib.select(ids), one, "bordering")
+    _each(lib.select(ids), one, "bordering", name=lambda c: c.id)
     if not dry_run:
         _reindex(lib)
 
@@ -2854,7 +3617,7 @@ def doctor(ctx: click.Context, ids: tuple[str, ...], fix: bool, yes: bool) -> No
             f"[green]✓[/] {finding.path.name} [dim]({finding.check.label})[/]"
         )
 
-    failed = _each(found.repairable, one, "repairing")
+    failed = _each(found.repairable, one, "repairing", name=lambda f: f.path.name)
     console.print(
         f"[dim]{len(found.repairable) - failed} repaired"
         + (f", {failed} failed" if failed else "")

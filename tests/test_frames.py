@@ -246,13 +246,16 @@ class TestAssign:
         reg = specs.load(library.root)
         assert [r.match for r in reg.rules] == [Match.NUMBERS, Match.SET]
 
-    def test_one_default_per_set(self, library: Library) -> None:
+    def test_a_second_whole_set_rule_is_kept(self, library: Library) -> None:
+        """It used to be *deleted* as unreachable. It is reachable now — by being
+        picked — so both stand and `resolve` offers the one it did not use. See
+        `TestMoreThanOneBorderCanApply`."""
         add(library.root, "pokemon-swsh")
         add(library.root, "pokemon-other")
         specs.assign(library.root, "pokemon-swsh", POKEMON, "swsh4", Match.SET)
         specs.assign(library.root, "pokemon-other", POKEMON, "swsh4", Match.SET)
         reg = specs.load(library.root)
-        assert [r.spec for r in reg.rules] == ["pokemon-other"]
+        assert [r.spec for r in reg.rules] == ["pokemon-swsh", "pokemon-other"]
 
     def test_a_rule_cannot_name_a_spec_that_does_not_exist(
         self, library: Library
@@ -1168,3 +1171,673 @@ class TestTokensNeedNoSpec:
         """The result of the measurement, stated so a future reader does not re-open
         it: there is deliberately no token spec, because there is nothing to add."""
         assert not [i for i in frames.SHIPPED if "token" in i or "emblem" in i]
+
+
+class TestTheECardFrameIsAsymmetric:
+    """The e-Card series is the one spec whose *shape* is the finding.
+
+    Expedition, Aquapolis and Skyridge (2002-03) carry the Nintendo e-Reader dot-code
+    strip down the left edge and along the bottom, so two of the four edges are about
+    twice the other two. Every other spec here collapses opposite edges deliberately —
+    that is how a cutting error cancels — and doing it here would split the difference
+    on all four, asking for ~2.5mm too much border on two edges and ~2.5mm too little
+    on the others. It would look plausible on screen, because the overlay is drawn in
+    fractions too.
+
+    Read by hand off two cards at 337x467 and 737x1036 (`docs/measuring-frames.md`).
+    The reason to believe the asymmetry belongs to the *card* is that it reproduced:
+    a crop shifts the two opposite edges against each other, so it cannot yield the
+    same lopsided reading twice at scales 2.2x apart.
+    """
+
+    #: the two hand readings, as (w, h, top, right, bottom, left) in pixels
+    READINGS = (
+        (337, 467, 17, 17, 35, 38),
+        (737, 1036, 35, 38, 80, 83),
+    )
+
+    def test_the_shipped_inset_is_the_average_of_the_two_readings(self) -> None:
+        """Pinned against the pixels rather than restating the stored decimals, so a
+        number nobody measured cannot be edited in and still look like this."""
+        per_edge = [
+            [t / h, r / w, b / h, left / w] for w, h, t, r, b, left in self.READINGS
+        ]
+        want = tuple((a + b) / 2 for a, b in zip(per_edge[0], per_edge[1], strict=True))
+        spec = frames.SHIPPED[GuideId.POKEMON_ECARD.value]
+        for got, expected in zip(spec.inset, want, strict=True):
+            assert abs(got - expected) < 5e-7
+
+    def test_the_two_readings_agree_per_edge(self) -> None:
+        """The whole basis of the spec: every edge inside 0.27pp across a 2.2x scale
+        difference, and the widest edge — the one an off-centre crop would distort
+        most — inside 0.015pp."""
+        first, second = self.READINGS
+        spreads = [
+            abs(a / d1 - b / d2)
+            for a, b, d1, d2 in zip(
+                first[2:],
+                second[2:],
+                (first[1], first[0], first[1], first[0]),
+                (second[1], second[0], second[1], second[0]),
+                strict=True,
+            )
+        ]
+        assert max(spreads) < 0.0027
+        assert spreads[3] < 0.00015  # left, the dot-code edge
+
+    def test_the_wide_edges_are_the_left_and_the_bottom(self) -> None:
+        """Which edges, not just that two of them differ — the strip is on the left
+        and the bottom, and a spec with them on the right and the top would fit every
+        card mirrored. Confirmed against the printed card: `ecard1-1`'s dot code runs
+        down the left edge and along the bottom."""
+        top, right, bottom, left = frames.SHIPPED[GuideId.POKEMON_ECARD.value].inset
+        assert left > 2 * right
+        assert bottom > 2 * top
+
+    def test_the_two_ordinary_edges_land_on_the_wotc_border(self) -> None:
+        """The corroboration worth having: the same operation printed the same border
+        and added a strip. Top 3.12mm against WOTC's 3.45 and right 3.24 against 3.15
+        — within a third of a millimetre, on numbers taken by different methods
+        (calipers there, pixels here) from cards a year apart."""
+        ecard = frames.SHIPPED[GuideId.POKEMON_ECARD.value].mm()
+        wotc = frames.SHIPPED[GuideId.POKEMON_WOTC.value].mm()
+        assert abs(ecard[0] - wotc[0]) < 0.4  # top
+        assert abs(ecard[1] - wotc[1]) < 0.4  # right
+
+    def test_all_three_e_card_sets_resolve_to_it(self) -> None:
+        for set_id in ("ecard1", "ecard2", "ecard3"):
+            assert frames.baseline(set_id, POKEMON) is GuideId.POKEMON_ECARD
+
+    def test_it_did_not_take_the_wotc_sets_with_it(self) -> None:
+        """Adding an era must leave the one already there answering for exactly what it
+        did — every set of it, and no more."""
+        for set_id in ("base1", "base6", "gym1", "gym2", "neo1", "neo4"):
+            assert frames.baseline(set_id, POKEMON) is GuideId.POKEMON_WOTC
+
+    def test_the_wizards_promos_keep_the_wotc_border(self) -> None:
+        """`basep` is the one id in `BASELINE` that was not separately read. It is there
+        because the old `"base"` *prefix* was already claiming it, and dropping it would
+        stop a card that borders today — the same operation and the same yellow border,
+        recorded as inherited rather than measured in `docs/measuring-frames.md`. Pinned
+        so that if it is ever dropped, that is a decision somebody made on purpose."""
+        assert frames.baseline("basep", POKEMON) is GuideId.POKEMON_WOTC
+
+    def test_no_unmeasured_pokemon_set_is_claimed_by_a_near_id(self) -> None:
+        """The whole class of bug exact matching removes. `si1` (Southern Islands, 2001)
+        sits between the WOTC sets in time and was never read; nothing may answer for it
+        because its id happens to start with a letter something else claims."""
+        for set_id in ("si1", "base", "gym", "neo", "ecard", "basep1"):
+            assert frames.baselines(set_id, POKEMON) == (), set_id
+
+    def test_diamond_and_pearl_onward_still_refuses(self) -> None:
+        """Adding an era is purely additive, and the remaining gap is still a gap: a
+        printing nobody has read must resolve to nothing and refuse to be bordered,
+        not borrow the e-Card numbers because they are the nearest in time.
+
+        The ex series is deliberately **not** in this list any more — `ex5` on inherit
+        the era's plain border by an explicit decision (see
+        `TestTheRestOfTheExSeriesInheritsThePlainBorder`). Everything from Diamond &
+        Pearl is where refusing starts.
+        """
+        for set_id in ("dp1", "hgss1", "bw1", "xy1", "sm1", "swsh1", "sv1", "pop1"):
+            assert frames.baseline(set_id, POKEMON) is None
+
+    def test_it_resolves_by_era_with_a_note_nobody_has_to_read(self) -> None:
+        reg = specs.load(Path("/nonexistent"))
+        found = specs.resolve(reg, "ecard1-1", "ecard1", POKEMON)
+        assert found.via is Via.ERA
+        assert spec_of(found) == GuideId.POKEMON_ECARD.value
+        assert found.have
+
+
+class TestMoreThanOneBorderCanApply:
+    """One set can hold two borders, and only a person can say which a card is.
+
+    Pokémon's e-Card sets are the case that forced this: the same set printed Pokémon
+    cards and Trainer/Energy cards whose frames differ, and nothing in the metadata
+    says which in terms anybody has measured. The old answer was to *delete* a second
+    whole-set rule as unreachable; the answer now is to reach it — `resolve` collects
+    every applicable spec, uses the most specific, and **offers** the rest.
+
+    This earns tests for two reasons. It is a change to the one function every fitting
+    surface goes through, so the winner must be exactly what it was before; and the
+    offer is invisible until two cards are cut side by side, which is the same argument
+    the rest of this file rests on.
+    """
+
+    def test_two_whole_set_rules_both_survive(self, library: Library) -> None:
+        """The old code removed the first when the second was added. A rule silently
+        deleted is worse than a rule that loses, now that losing means "offered"."""
+        add(library.root, "pkm-trainer")
+        add(library.root, "pkm-mon")
+        specs.assign(library.root, "pkm-trainer", POKEMON, "base1", Match.SET)
+        specs.assign(library.root, "pkm-mon", POKEMON, "base1", Match.SET)
+        reg = specs.load(library.root)
+        assert {r.spec for r in reg.rules} == {"pkm-trainer", "pkm-mon"}
+
+    def test_both_are_offered_and_the_first_still_wins(self, library: Library) -> None:
+        add(library.root, "pkm-trainer")
+        add(library.root, "pkm-mon")
+        specs.assign(library.root, "pkm-trainer", POKEMON, "base1", Match.SET)
+        specs.assign(library.root, "pkm-mon", POKEMON, "base1", Match.SET)
+        found = specs.resolve(specs.load(library.root), "base1-4", "base1", POKEMON)
+        assert found.via is Via.SET_DEFAULT
+        assert spec_of(found) == "pkm-trainer"
+        assert found.ambiguous
+        # the second rule *and* the shipped era: three measured answers really do
+        # describe this printing, and the offer names every one it did not take
+        assert [c.spec.id for c in found.alternatives] == [
+            "pkm-mon",
+            GuideId.POKEMON_WOTC.value,
+        ]
+
+    def test_the_shipped_era_is_offered_beside_a_set_rule(
+        self, library: Library
+    ) -> None:
+        """The commonest real shape: a library adds one spec for a set the shipped
+        baseline already answers, and both are true of the printing."""
+        add(library.root, "pkm-trainer")
+        specs.assign(library.root, "pkm-trainer", POKEMON, "base1", Match.SET)
+        found = specs.resolve(specs.load(library.root), "base1-4", "base1", POKEMON)
+        assert spec_of(found) == "pkm-trainer"
+        assert [(c.spec.id, c.via) for c in found.alternatives] == [
+            (GuideId.POKEMON_WOTC.value, Via.ERA)
+        ]
+
+    def test_picking_one_is_a_pin_and_the_other_is_still_offered(
+        self, library: Library
+    ) -> None:
+        """The offer is symmetric, which is what makes it a choice rather than a
+        one-way door: pinning the alternative leaves the rule's answer offered."""
+        add(library.root, "pkm-trainer")
+        specs.assign(library.root, "pkm-trainer", POKEMON, "base1", Match.SET)
+        reg = specs.load(library.root)
+        found = specs.resolve(
+            reg, "base1-4", "base1", POKEMON, pin=GuideId.POKEMON_WOTC.value
+        )
+        assert (spec_of(found), found.via) == (GuideId.POKEMON_WOTC.value, Via.PIN)
+        assert [c.spec.id for c in found.alternatives] == ["pkm-trainer"]
+
+    def test_one_spec_reached_twice_is_one_choice(self, library: Library) -> None:
+        """Deduped by spec id: the same four numbers arrived at two ways is not two
+        borders, and offering it as one would ask a question with the same answer
+        twice. The way with the most precedence names it."""
+        add(library.root, "pkm-both")
+        specs.assign(library.root, "pkm-both", POKEMON, "base1", Match.SET)
+        found = specs.resolve(
+            specs.load(library.root), "base1-4", "base1", POKEMON, pin="pkm-both"
+        )
+        assert (spec_of(found), found.via) == ("pkm-both", Via.PIN)
+        assert [c.spec.id for c in found.alternatives] == [GuideId.POKEMON_WOTC.value]
+
+    def test_an_ordinary_card_is_not_ambiguous(self, library: Library) -> None:
+        """The property that matters most: almost every card has exactly one answer,
+        and nothing new appears on it."""
+        found = specs.resolve(specs.load(library.root), "base1-4", "base1", POKEMON)
+        assert not found.ambiguous
+        assert found.alternatives == ()
+
+    def test_a_rule_saying_the_same_thing_twice_is_refused(
+        self, library: Library
+    ) -> None:
+        """A second *identical* selector for the same spec adds nothing and would
+        show up as an alternative to itself if it were not deduped. Refused at the
+        point of writing, where the message can name the rule that already says it."""
+        add(library.root, "pkm-trainer")
+        specs.assign(library.root, "pkm-trainer", POKEMON, "base1", Match.SET)
+        with pytest.raises(ProxdexError, match="already says exactly that"):
+            specs.assign(library.root, "pkm-trainer", POKEMON, "base1", Match.SET)
+
+    def test_an_undecidable_rule_below_the_winner_is_still_not_reported(
+        self, library: Library
+    ) -> None:
+        """The walk no longer stops at the winner, so this is the thing that could
+        have regressed: a pinned card must not start warning about a trait rule the
+        pin already settled."""
+        add(library.root, "pkm-secret")
+        add(library.root, "pkm-pinned")
+        specs.assign(
+            library.root, "pkm-secret", POKEMON, "base1", Match.RARITY, "Rare Secret"
+        )
+        found = specs.resolve(
+            specs.load(library.root), "base1-4", "base1", POKEMON, pin="pkm-pinned"
+        )
+        assert (spec_of(found), found.via) == ("pkm-pinned", Via.PIN)
+        assert found.undecided == ()
+        assert found.sure
+
+    def test_a_missing_spec_below_the_winner_is_still_not_reported(
+        self, library: Library
+    ) -> None:
+        add(library.root, "pkm-pinned")
+        # written directly: `assign` refuses a spec that does not exist, and what this
+        # needs is the state a *removed* one leaves behind — a rule pointing at nothing
+        specs.write_rules(
+            library.root,
+            [
+                specs.Rule(
+                    id="r1",
+                    game=POKEMON,
+                    set_id="ecard3",
+                    match=Match.SET,
+                    value="",
+                    spec="gone",
+                )
+            ],
+            counter=2,
+        )
+        found = specs.resolve(
+            specs.load(library.root), "ecard3-1", "ecard3", POKEMON, pin="pkm-pinned"
+        )
+        assert (spec_of(found), found.via) == ("pkm-pinned", Via.PIN)
+        assert found.missing is None
+        assert found.sure
+
+
+class TestTheECardSetsShipTwoFrames:
+    """`pokemon-ecard-deep-top`, and the substitution that produced its numbers.
+
+    The reading was one card, 468×650: left 52px, right 20px, top 67px, bottom 49px.
+    Left and bottom agreed with `pokemon-ecard` to 0.158pp and 0.070pp, so those are
+    *shared* — two specs differing by a tenth of a millimetre on an edge would be two
+    answers to one question — and top and right were re-derived to hold the reading's
+    **sums** rather than its individual edges.
+
+    Every one of those numbers is now four decimal places in a source file, which is
+    exactly the kind of thing that gets edited later by somebody who does not have the
+    reading in front of them. So the arithmetic is asserted from the raw pixel counts.
+    """
+
+    #: the reading, as given
+    W, H = 468, 650
+    LEFT_PX, RIGHT_PX, TOP_PX, BOTTOM_PX = 52, 20, 67, 49
+
+    def test_left_and_bottom_are_the_existing_spec_s_exactly(self) -> None:
+        """Not "close to": the same float. An e-Card's dot-code strip is in the same
+        place on both frames, and a fit has to put it in the same place too."""
+        ecard = frames.SHIPPED[GuideId.POKEMON_ECARD.value]
+        deep = frames.SHIPPED[GuideId.POKEMON_ECARD_DEEP_TOP.value]
+        assert deep.inset[3] == ecard.inset[3]  # left
+        assert deep.inset[2] == ecard.inset[2]  # bottom
+
+    def test_the_substituted_edges_were_close_enough_to_substitute(self) -> None:
+        """The premise of sharing them. 0.158pp and 0.070pp — well inside the 0.27pp
+        the existing spec's own two readings agreed to across a 2.2x scale gap."""
+        ecard = frames.SHIPPED[GuideId.POKEMON_ECARD.value]
+        assert abs(self.LEFT_PX / self.W - ecard.inset[3]) * 100 < 0.2
+        assert abs(self.BOTTOM_PX / self.H - ecard.inset[2]) * 100 < 0.1
+
+    def test_the_vertical_sum_is_the_one_that_was_measured(self) -> None:
+        """The compensation, and the whole reason `top` is not the 10.308% read off the
+        card: substituting a bottom 0.45px different would otherwise have moved the art
+        panel. Held to the reading's own sum instead."""
+        deep = frames.SHIPPED[GuideId.POKEMON_ECARD_DEEP_TOP.value]
+        measured = (self.TOP_PX + self.BOTTOM_PX) / self.H
+        assert deep.inset[0] + deep.inset[2] == pytest.approx(measured, abs=5e-6)
+
+    def test_the_horizontal_sum_is_the_one_that_was_measured(self) -> None:
+        """Same operation on the other axis, because `left` was substituted too."""
+        deep = frames.SHIPPED[GuideId.POKEMON_ECARD_DEEP_TOP.value]
+        measured = (self.LEFT_PX + self.RIGHT_PX) / self.W
+        assert deep.inset[1] + deep.inset[3] == pytest.approx(measured, abs=5e-6)
+
+    def test_the_top_is_the_finding(self) -> None:
+        """~6mm deeper than the other e-Card frame. The raw reading was +6.04mm and
+        the shipped number is +5.98mm, the difference being the 0.45px the vertical
+        compensation moved the top by — worth pinning as the *shipped* figure, since
+        that is the one a card is fitted to."""
+        ecard = frames.SHIPPED[GuideId.POKEMON_ECARD.value]
+        deep = frames.SHIPPED[GuideId.POKEMON_ECARD_DEEP_TOP.value]
+        assert deep.mm()[0] - ecard.mm()[0] == pytest.approx(5.98, abs=0.02)
+
+    def test_right_was_not_substituted(self) -> None:
+        """0.827pp / 0.53mm apart — seven times the reproducibility the existing spec
+        showed on that edge, and past the cutting tolerance. Substituting it would also
+        have forced `left` to 10.28% to hold the sum, contradicting left being close."""
+        ecard = frames.SHIPPED[GuideId.POKEMON_ECARD.value]
+        deep = frames.SHIPPED[GuideId.POKEMON_ECARD_DEEP_TOP.value]
+        assert deep.inset[1] != ecard.inset[1]
+
+    def test_both_frames_are_shipped_for_every_ecard_set(self) -> None:
+        for set_id in ("ecard1", "ecard2", "ecard3"):
+            assert frames.baselines(set_id, POKEMON) == (
+                GuideId.POKEMON_ECARD,
+                GuideId.POKEMON_ECARD_DEEP_TOP,
+            ), set_id
+
+    def test_the_common_frame_is_the_one_a_fit_uses(self, library: Library) -> None:
+        """Most e-Card cards take the shallow top, so that is what `border` runs
+        against with nothing chosen — the other is the offer."""
+        found = specs.resolve(specs.load(library.root), "ecard3-1", "ecard3", POKEMON)
+        assert spec_of(found) == GuideId.POKEMON_ECARD.value
+        assert found.via is Via.ERA
+
+    def test_the_deep_one_is_offered_on_every_ecard_card(
+        self, library: Library
+    ) -> None:
+        """Which is how anybody finds it: nothing in the metadata says which frame a
+        card has, so the only workable answer is to name both and let a person pick."""
+        found = specs.resolve(specs.load(library.root), "ecard3-1", "ecard3", POKEMON)
+        assert [c.spec.id for c in found.alternatives] == [
+            GuideId.POKEMON_ECARD_DEEP_TOP.value
+        ]
+
+    def test_picking_it_fits_against_it(self, library: Library) -> None:
+        found = specs.resolve(
+            specs.load(library.root),
+            "ecard3-1",
+            "ecard3",
+            POKEMON,
+            pin=GuideId.POKEMON_ECARD_DEEP_TOP.value,
+        )
+        assert (spec_of(found), found.via) == (
+            GuideId.POKEMON_ECARD_DEEP_TOP.value,
+            Via.PIN,
+        )
+        assert [c.spec.id for c in found.alternatives] == [GuideId.POKEMON_ECARD.value]
+
+
+class TestTheExEraStripRunsAlongTheBottom:
+    """`pokemon-ecard-ex`, and why it is a shape rather than a renumbering.
+
+    Two cards, read by hand: 747×1040 (left 32, right 27, top 39, bottom 71 px) and
+    455×642 (left 20, right 17, top 23, bottom 43). The e-Reader strip is on the
+    **bottom alone** here, where the e-Card sets carry it down the left as well — so
+    resolving one of these to `pokemon-ecard` would ask for 7.16mm of left border on a
+    card that has 2.76, which is invisible on screen because the overlay is drawn in
+    fractions too.
+
+    The numbers are the per-edge average of the two readings, so the arithmetic is
+    asserted from the raw pixel counts: four floats in a source file are exactly what
+    gets edited later by somebody without the reading in front of them.
+    """
+
+    #: the two readings, as given
+    A = (747, 1040, {"left": 32, "right": 27, "top": 39, "bottom": 71})
+    B = (455, 642, {"left": 20, "right": 17, "top": 23, "bottom": 43})
+
+    @classmethod
+    def _fracs(cls, edge: str) -> tuple[float, float]:
+        return tuple(  # type: ignore[return-value]
+            px[edge] / (h if edge in ("top", "bottom") else w)
+            for w, h, px in (cls.A, cls.B)
+        )
+
+    @classmethod
+    def _avg(cls, edge: str) -> float:
+        a, b = cls._fracs(edge)
+        return (a + b) / 2
+
+    @property
+    def spec(self) -> frames.FrameGuide:
+        return frames.SHIPPED[GuideId.POKEMON_ECARD_EX.value]
+
+    @pytest.mark.parametrize(
+        ("edge", "index"),
+        [("top", 0), ("right", 1), ("bottom", 2), ("left", 3)],
+    )
+    def test_every_edge_is_the_average_of_the_two_readings(
+        self, edge: str, index: int
+    ) -> None:
+        assert self.spec.inset[index] == pytest.approx(self._avg(edge), abs=5e-6)
+
+    @pytest.mark.parametrize("edge", ["top", "right", "bottom", "left"])
+    def test_the_two_readings_reproduce(self, edge: str) -> None:
+        """The premise of averaging them rather than picking one: every edge agrees
+        within 0.17pp across images whose widths differ by 1.64x, which is the same
+        argument the e-Card asymmetry rests on."""
+        a, b = self._fracs(edge)
+        assert abs(a - b) * 100 < 0.17
+
+    def test_the_stated_totals_corroborate_the_edges(self) -> None:
+        """Three of the four were given independently and land exactly: 59px of 747
+        and 37px of 455 across, 110px of 1040 down. (The fourth, card 2's vertical
+        total, is given as 65 where its own edges sum to 66 — a 1px slip worth 0.14mm,
+        which is why the *edges* are what is stored.)"""
+        assert self.A[2]["left"] + self.A[2]["right"] == 59
+        assert self.B[2]["left"] + self.B[2]["right"] == 37
+        assert self.A[2]["top"] + self.A[2]["bottom"] == 110
+
+    def test_only_the_bottom_is_deep(self) -> None:
+        """The finding. Three ordinary edges and one strip — so this cannot be the
+        e-Card spec with a different top, and a fit against that one would be wrong on
+        the left by more than the border it is placing."""
+        top, right, bottom, left = self.spec.mm()
+        assert bottom == pytest.approx(6.01, abs=0.05)
+        assert max(top, right, left) < 3.4
+        ecard = frames.SHIPPED[GuideId.POKEMON_ECARD.value]
+        assert ecard.mm()[3] - left > 4.0
+
+    def test_the_sides_are_not_collapsed(self) -> None:
+        """Most specs here average opposite edges, because that is what makes a
+        cutting error cancel. Both cards read `left` wider than `right` by the same
+        0.67pp, and a difference that reproduces in one direction at two scales is not
+        a cutting error."""
+        assert self.spec.inset[3] > self.spec.inset[1]
+        for w, _h, px in (self.A, self.B):
+            assert (px["left"] - px["right"]) / w * 100 == pytest.approx(0.67, abs=0.05)
+
+    def test_the_black_star_promos_resolve_to_it(self, library: Library) -> None:
+        found = specs.resolve(specs.load(library.root), "np-9", "np", POKEMON)
+        assert (spec_of(found), found.via) == (GuideId.POKEMON_ECARD_EX.value, Via.ERA)
+
+    def test_it_is_what_a_fit_uses_with_nothing_chosen(self, library: Library) -> None:
+        """The set holds a second frame — the cards printed with no dot code — so this
+        is a default rather than the only answer. It is first on weight of evidence
+        (two cards against one), not on a claim about which is commoner."""
+        found = specs.resolve(specs.load(library.root), "np-9", "np", POKEMON)
+        assert spec_of(found) == GuideId.POKEMON_ECARD_EX.value
+        assert [c.spec.id for c in found.alternatives] == [
+            GuideId.POKEMON_EX_PLAIN.value
+        ]
+
+    #: the five sets that carry the dot code, or carried it on some cards: Ruby &
+    #: Sapphire, Sandstorm, Dragon, Team Magma vs Team Aqua, and the promos beside them
+    DOT_CODE_SETS = ("ex1", "ex2", "ex3", "ex4", "np")
+
+    def test_it_covers_the_five_dot_code_sets(self) -> None:
+        """2003-07 to 2004-03. The strip outlived the e-Card sets by four sets, and both
+        ex-era shapes apply to every one of them, because a set printed cards with the
+        strip and cards without it."""
+        for set_id in self.DOT_CODE_SETS:
+            assert frames.baselines(set_id, POKEMON) == (
+                GuideId.POKEMON_ECARD_EX,
+                GuideId.POKEMON_EX_PLAIN,
+            ), set_id
+
+    def test_the_ecard_sets_keep_their_own_two_frames(self) -> None:
+        """The ex-era shapes are not offered there: those sets carry the strip down the
+        left as well, which is a third and fourth shape, already measured."""
+        assert frames.baselines("ecard3", POKEMON) == (
+            GuideId.POKEMON_ECARD,
+            GuideId.POKEMON_ECARD_DEEP_TOP,
+        )
+
+    def test_the_strip_is_a_fact_about_these_five_printings_only(self) -> None:
+        """`pokemon-ecard-ex` must not reach past `ex4`. The rest of the series answers
+        (with the plain border, below), but never with the dot-code shape — fitting a
+        plain card to it would ask 6.01mm of bottom border where the card has 2.66."""
+        for set_id in ("ex5", "ex9", "ex16", "tk1a", "pop1"):
+            assert GuideId.POKEMON_ECARD_EX not in frames.baselines(set_id, POKEMON)
+
+    def test_a_set_id_is_matched_exactly_and_not_by_prefix(self) -> None:
+        """The reason `Baseline.sets` is no longer a prefix list, pinned on an era where
+        the answer really does stop.
+
+        `ex10`-`ex16` are claimed now — deliberately, by sixteen strings somebody wrote
+        down — so the prefix trap is pinned one era earlier instead, where nothing may
+        answer: `neo1` is read, `neo1x` is not a set at all. That substitution is the
+        point rather than a weakening; what a prefix key cost was the *visibility* of a
+        claim, and `pop1` sitting beside `ex16` in the table is what shows it.
+        """
+        assert frames.baselines("neo1", POKEMON) == (GuideId.POKEMON_WOTC,)
+        assert frames.baselines("neo1x", POKEMON) == ()
+        assert frames.baselines("ex16", POKEMON)
+        assert frames.baselines("ex16x", POKEMON) == ()
+        # POP series ids also begin with a claimed letter run and were never read
+        assert frames.baselines("pop1", POKEMON) == ()
+
+    def test_both_shapes_are_offered_on_an_ex_card(self, library: Library) -> None:
+        """Which is the whole point of covering these sets with two specs: a Ruby &
+        Sapphire card may or may not carry the strip, and only a person can say."""
+        found = specs.resolve(specs.load(library.root), "ex1-1", "ex1", POKEMON)
+        assert found.ambiguous
+        assert [spec_of(found), *(c.spec.id for c in found.alternatives)] == [
+            GuideId.POKEMON_ECARD_EX.value,
+            GuideId.POKEMON_EX_PLAIN.value,
+        ]
+
+
+class TestThePromoSetAlsoHoldsASquareBorder:
+    """`pokemon-ex-plain` — the plainest spec here, and the fourth e-Reader-era frame.
+
+    One card, 554×769, **23px on all four edges**. No dot code, so nothing to be
+    asymmetric about: `np` holds cards printed with the strip and cards printed without
+    it, which is a difference in what was printed rather than in how it was cut.
+    """
+
+    W, H, PX = 554, 769, 23
+
+    @property
+    def spec(self) -> frames.FrameGuide:
+        return frames.SHIPPED[GuideId.POKEMON_EX_PLAIN.value]
+
+    def test_it_is_the_reading_divided_by_its_own_file(self) -> None:
+        """The house rule: a spec is the pixel count over the width of the image it was
+        read off, never rounded through a millimetre."""
+        top, right, bottom, left = self.spec.inset
+        assert top == pytest.approx(self.PX / self.H, abs=5e-7)
+        assert bottom == pytest.approx(self.PX / self.H, abs=5e-7)
+        assert right == pytest.approx(self.PX / self.W, abs=5e-7)
+        assert left == pytest.approx(self.PX / self.W, abs=5e-7)
+
+    def test_opposite_edges_are_the_same_number(self) -> None:
+        """Not "within a tolerance of": the same float, because one number was read
+        for each axis — the collapse every spec does except the e-Reader ones."""
+        top, right, bottom, left = self.spec.inset
+        assert top == bottom
+        assert right == left
+
+    def test_the_border_is_square_in_millimetres_too(self) -> None:
+        """Worth pinning because it does not follow from the above: 2.991% and 4.152%
+        are different fractions and only land on one width once each is taken of its own
+        axis. The 0.02mm between them is this file's aspect sitting 0.85% wide of the
+        card's, which is what a genuinely square border read off it looks like."""
+        top, right, bottom, left = self.spec.mm()
+        assert max(top, right, bottom, left) - min(top, right, bottom, left) < 0.03
+        assert top == pytest.approx(2.66, abs=0.01)
+        assert right == pytest.approx(2.64, abs=0.01)
+
+    def test_it_is_thinner_than_every_other_pokemon_spec(self) -> None:
+        """WOTC's yellow is 3.45/3.15 and the strip specs are deeper still; this is
+        nearer `mtg-m15`. A card of it fitted to `pokemon-wotc` would gain ~0.5mm of
+        border on every edge."""
+        mine = max(self.spec.mm())
+        others = [
+            max(frames.SHIPPED[g.value].mm())
+            for g in (
+                GuideId.POKEMON_WOTC,
+                GuideId.POKEMON_ECARD,
+                GuideId.POKEMON_ECARD_DEEP_TOP,
+                GuideId.POKEMON_ECARD_EX,
+            )
+        ]
+        assert mine < min(others)
+
+    def test_it_has_no_strip(self) -> None:
+        """The distinguishing fact. Every other Pokémon spec measured since the e-Card
+        sets carries one edge far deeper than the rest; here no edge is 1.5x another in
+        millimetres, and the same set's strip spec has a bottom twice this one's."""
+        mm = self.spec.mm()
+        assert max(mm) / min(mm) < 1.5
+        strip = frames.SHIPPED[GuideId.POKEMON_ECARD_EX.value]
+        assert strip.mm()[2] / mm[2] > 2.0
+
+    def test_both_promo_frames_are_offered(self, library: Library) -> None:
+        """Nothing in the metadata says whether a promo carries the dot code, so the
+        only workable answer is to name both — the e-Card shape exactly."""
+        found = specs.resolve(specs.load(library.root), "np-9", "np", POKEMON)
+        assert found.ambiguous
+        assert [spec_of(found), *(c.spec.id for c in found.alternatives)] == [
+            GuideId.POKEMON_ECARD_EX.value,
+            GuideId.POKEMON_EX_PLAIN.value,
+        ]
+
+    def test_picking_it_fits_against_it(self, library: Library) -> None:
+        found = specs.resolve(
+            specs.load(library.root),
+            "np-9",
+            "np",
+            POKEMON,
+            pin=GuideId.POKEMON_EX_PLAIN.value,
+        )
+        assert (spec_of(found), found.via) == (GuideId.POKEMON_EX_PLAIN.value, Via.PIN)
+        assert [c.spec.id for c in found.alternatives] == [
+            GuideId.POKEMON_ECARD_EX.value
+        ]
+
+
+class TestTheRestOfTheExSeriesInheritsThePlainBorder:
+    """`ex5`-`ex16` and the four Trainer Kits take `pokemon-ex-plain` — and only it.
+
+    The dot code stops after `ex4`, so from Hidden Legends (2005-06) to Power Keepers
+    (2007-05) there is one shape and nothing to pick between. That is the fact worth
+    pinning twice over, because it is **not** a measurement: sixteen set ids rest on
+    the one `np` card, inherited on the grounds of same era, same operation, same border
+    with the strip left off — the standing `basep` has on `pokemon-wotc`, recorded as
+    inherited in `docs/measuring-frames.md` rather than passing for a reading.
+
+    So the test is about the *decision* rather than about numbers: which sets it claims,
+    that it claims them **alone** (offering the dot-code shape here would ask 6.01mm of
+    bottom border where the card has 2.66), and that it stops where the reading's
+    grounds stop — Diamond & Pearl still refuses.
+    """
+
+    INHERITED = (
+        "ex5",
+        "ex6",
+        "ex7",
+        "ex8",
+        "ex9",
+        "ex10",
+        "ex11",
+        "ex12",
+        "ex13",
+        "ex14",
+        "ex15",
+        "ex16",
+        "tk1a",
+        "tk1b",
+        "tk2a",
+        "tk2b",
+    )
+
+    def test_every_one_of_them_answers_with_the_plain_border(self) -> None:
+        for set_id in self.INHERITED:
+            assert frames.baselines(set_id, POKEMON) == (GuideId.POKEMON_EX_PLAIN,), (
+                set_id
+            )
+
+    def test_it_is_their_only_candidate(self, library: Library) -> None:
+        """Unlike `ex1`-`ex4` and `np`, where two borders genuinely coexist and a person
+        picks. Here there is nothing to choose, so nothing is offered — and a card of
+        these sets borders without a decision."""
+        for set_id in self.INHERITED:
+            found = specs.resolve(
+                specs.load(library.root), f"{set_id}-1", set_id, POKEMON
+            )
+            assert spec_of(found) == GuideId.POKEMON_EX_PLAIN.value, set_id
+            assert not found.ambiguous, set_id
+            assert found.sure, set_id
+
+    def test_it_is_the_same_spec_np_was_read_from(self) -> None:
+        """One reading, not a copy of it. A second entry with the same numbers typed
+        again is one a later correction updates in only one place."""
+        assert GuideId.POKEMON_EX_PLAIN in frames.baselines("np", POKEMON)
+
+    def test_it_stops_where_the_reading_s_grounds_stop(self) -> None:
+        """The claim is "the ex era, with the strip left off", so it may not run on
+        into the era after it. Diamond & Pearl (2007-05) is a different frame nobody has
+        read, and inheriting *again* from here would be a guess built on a guess."""
+        for set_id in ("dp1", "dp2", "pop1", "pop5", "hgss1"):
+            assert frames.baselines(set_id, POKEMON) == (), set_id

@@ -92,6 +92,14 @@
      of each corner. Matching the measurement makes the cut land exactly where
      the provider's die-cut was. One number, both games. */
   --card-radius: 4.30% / 3.08%;
+  /* **The card's own aspect, from `games.CARD_W_MM`/`CARD_H_MM`** — 63.5×88.9mm,
+     the published poker size both games print at. It was the rounded 63/88, which
+     is 0.8% out: every thumbnail box in the app was very slightly the wrong shape,
+     and `object-fit: cover` then shaved the difference off two edges of every card
+     silently. An oversized printing is a different shape again and says so per
+     tile, since that is a property of the card and not of the grid. */
+  --card-ar: 63.5 / 88.9;
+  --card-ar-oversized: 88.9 / 127;
 
   /* How tall the sticky topbar actually is, right now. Everything that sticks
      below it pins to this. It was a hardcoded 4.5rem, which is a *guess* at a bar
@@ -124,7 +132,13 @@ h6 { font-size: .9375rem; }
 /* --- crop marks ----------------------------------------------------------
    Four L-shaped hairline brackets, drawn with one pseudo-element — the same
    marks `proxdex sheet` prints at each card corner. Contact-sheet tiles only:
-   the proof shows the card and nothing else, so nothing competes with it. */
+   the proof shows the card and nothing else, so nothing competes with it.
+
+   On the **picture**, not the tile. `inset: -7px` draws them just outside whatever
+   carries the class, and that used to be the whole `.slot` — so the brackets framed the
+   card *and* the two lines of text under it, which is not a thing a press marks the
+   corners of. They now sit in the tile's own padding, around the card alone, which is
+   what a crop mark is for. */
 .marks { position: relative; }
 .marks::after {
   content: ""; position: absolute; inset: -7px; pointer-events: none;
@@ -260,23 +274,67 @@ h6 { font-size: .9375rem; }
 .sheetgrid.lg { grid-template-columns: repeat(auto-fill, minmax(224px, 1fr)); }
 /* a real <a href="/card/…"> so the tile is linkable (open in a new tab, copy
    link), intercepted for same-tab clicks by the router */
+/* A tile is a card on a proof sheet, and its text is a **docket**: two lines of
+   fixed height, each a flex row where exactly one child may grow and truncate. That
+   shape is the whole fix for a contact sheet that used to come out ragged — the meta
+   was two free-flowing chip rows, so a tile with a `pin: pokemon-ex-plain` chip was
+   taller than its neighbours and the chip itself ran 113px past the tile's own edge at
+   `sm` density. Nothing here can wrap, so no tile can be a different height from the
+   one beside it and nothing can leave the box. What does not fit is a `title`. */
 .slot {
-  position: relative; cursor: pointer; background: none; border: 0; padding: 0;
-  text-align: left; display: block; color: inherit; text-decoration: none;
+  position: relative; cursor: pointer; background: none; border: 0;
+  padding: var(--s2); border: 1px solid transparent;
+  border-radius: var(--bs-border-radius);
+  text-align: left; display: flex; flex-direction: column; min-width: 0;
+  color: inherit; text-decoration: none;
 }
+/* the hover lights the whole cell, which is what says the picture and the two lines
+   under it are one card — the same move `.hit` makes on a search result, so a tile
+   behaves the same way in both grids */
+.slot:hover { background: var(--stock); border-color: var(--rule); }
+.slot.picked { background: var(--mark-dim); border-color: var(--mark); }
 .slot .shot {
-  width: 100%; aspect-ratio: 63/88; object-fit: cover; display: block;
-  background: var(--stock-2); border: 1px solid var(--rule);
+  width: 100%; aspect-ratio: var(--card-ar); object-fit: cover; display: block;
+  background: var(--stock-2);
+  /* `--rule-2` — "a rule that has to be seen" — and it has to be seen *here* more
+     than anywhere: an MTG card's own border is black on a #0c0c10 page, so at the
+     hairline `--rule` a black-bordered card had no visible edge at all and read as
+     art floating on the ground while a yellow-bordered Pokémon card read as a card.
+     One ring, darker than the yellow and lighter than the black, seats both. */
+  border: 1px solid var(--rule-2);
   border-radius: var(--card-radius);
 }
 .slot:hover .shot { border-color: rgba(242,65,140,.5); }
 .slot.picked .shot { border-color: var(--mark); box-shadow: 0 0 0 2px var(--mark-dim); }
 .slot .cardname {
   font-weight: 600; font-size: .8125rem; margin-top: var(--s2);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
 }
-.slotmeta { display: flex; align-items: center; gap: .375rem; margin-top: .125rem; min-width: 0; }
-.slotmeta .id { font-family: var(--font-mono); font-size: .625rem; color: var(--faint); }
+/* one docket line: `min-width: 0` on both the row and its growing child, or a long
+   name refuses to shrink and pushes the fixed part out of the tile instead */
+.dline {
+  display: flex; align-items: center; gap: .375rem; min-width: 0;
+  margin-top: .125rem; white-space: nowrap;
+}
+.dline > .grow { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dline > .fix { flex: 0 0 auto; }
+.dline .id { font-family: var(--font-mono); font-size: .625rem; color: var(--faint); }
+/* What this *printing* is — two-sided, oversized, borderless, pinned — along the foot
+   of the picture rather than in the docket. It belongs to the card rather than to the
+   job, there can be several at once, and down here a fourth one is clipped by the
+   picture's own edge instead of making this tile taller than the next. A pin says
+   `pin`, not `pin: pokemon-ex-plain`: which spec is a card-page fact, and the name was
+   the single widest thing on the whole screen. */
+.slotshot { position: relative; display: block; }
+.slot .flags {
+  position: absolute; inset: auto 0 0 0;
+  display: flex; gap: 2px; overflow: hidden; padding: 3px;
+  pointer-events: none;
+}
+.slot .flags .chip {
+  background: rgba(12,12,16,.82); backdrop-filter: blur(2px);
+  border-color: var(--rule-2); font-size: .5625rem; padding: 0 .25rem;
+}
 /* the checkbox only appears on hover, or once a selection exists — the grid is
    a contact sheet first and a work queue second */
 .slot .pick {
@@ -287,7 +345,10 @@ h6 { font-size: .9375rem; }
 }
 .slot .pick:checked { background-color: var(--mark); border-color: var(--mark); }
 .slot:hover .pick, .slot.picked .pick, body.picking .slot .pick { opacity: 1; }
-.sheetgrid.sm .cardname, .sheetgrid.sm .strip { display: none; }
+/* At `sm` a tile is 104px wide and the grid is a pure contact sheet: the picture is
+   the whole point and every word is noise at that size. The flags go with the docket
+   for the same reason — a `2 sides` chip on a 104px card is 40% of its width. */
+.sheetgrid.sm .cardname, .sheetgrid.sm .dline, .sheetgrid.sm .flags { display: none; }
 
 /* stage strip: one tick per stage — the card's state at a glance */
 .strip { display: flex; gap: 2px; }
@@ -438,7 +499,7 @@ img.skel::after { content: ""; }
   margin: 0 auto;
 }
 .viewer {
-  position: relative; width: 100%; aspect-ratio: 63/88;
+  position: relative; width: 100%; aspect-ratio: var(--card-ar);
   background: var(--stock-2); border: 1px solid var(--rule);
   border-radius: var(--card-radius); overflow: hidden;
 }
@@ -613,10 +674,61 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
   margin: 0; font-family: var(--font-mono); font-size: .75rem;
   font-variant-numeric: tabular-nums; text-align: right;
 }
-/* four per-edge number fields, laid out like the edges they set */
-.edges { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--s2); }
-.edges label { font-family: var(--font-mono); font-size: .625rem; color: var(--dim); display: block; }
-.edges .form-control { height: 1.75rem; font-size: .75rem; font-family: var(--font-mono); }
+/* **When more than one spec applies, that is a choice, so it looks like one.** It used
+   to be a via chip beside a mono id, then a row of same-weight outline buttons for the
+   others — which showed neither *which* is in force (only the chip's presence said so,
+   two elements away) nor what the id was called, since the buttons carried the names and
+   the selected one did not. And the pick target was a 3rem button in a row of them.
+
+   A radio group instead, one row per applicable spec, each carrying the name and its
+   four border widths — because the widths are the thing being chosen between, and
+   "e-Card" vs "e-Card, deep top" says nothing about how they differ while
+   `6.76 / 7.16` vs `9.10 / 2.61` says it at a glance. The whole row is the label, so the
+   hit area is the row; arrow keys move between them because they are real radios. The
+   selected row takes **the accent on its own frame** — the same two states `.hit` and the
+   contact sheet's tiles use, so a chosen thing looks chosen the same way everywhere. */
+.fspick { display: grid; gap: var(--s1); margin-top: var(--s2); }
+.fsopt {
+  display: grid; grid-template-columns: auto 1fr auto; gap: var(--s2);
+  align-items: center; padding: var(--s2); margin: 0; cursor: pointer;
+  border: 1px solid var(--rule); border-radius: var(--bs-border-radius);
+  background: var(--stock); min-width: 0;
+}
+.fsopt:hover { background: var(--stock-2); border-color: var(--rule-2); }
+.fsopt.is-on { background: var(--mark-dim); border-color: var(--mark); }
+.fsopt input { margin: 0; }
+.fsopt > span { min-width: 0; }
+/* Two lines, not one. A spec's name is what distinguishes it from the other candidate
+   and the two share a long prefix — truncated to one line the rows read "Pokémon ·
+   e-Card, ex era …" against "Pokémon · ex era, no dot code (Nintendo B…", which hides
+   the difference at exactly the point somebody is looking for it. */
+.fsname {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; font-size: .75rem; line-height: 1.25;
+}
+.fsopt.is-on .fsname { color: var(--type); }
+.fsnum {
+  display: block; font-family: var(--font-mono); font-size: .6875rem;
+  font-variant-numeric: tabular-nums; color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fsopt.is-on .fsnum { color: var(--dim); }
+/* One spec applies, so this is a *label* and takes none of the selection styling above:
+   name, widths, how it got here, and the one control that keeps it. */
+.fsone {
+  display: grid; grid-template-columns: 1fr auto; gap: var(--s2);
+  align-items: center; margin-top: var(--s2); min-width: 0;
+}
+.fsone > span { min-width: 0; }
+/* this line carries the widths *and* how the spec was reached, so it is allowed to
+   wrap: clipped to one line it read `3.45 / 3.15 mm · matched by its era/f…`, which
+   truncates the answer rather than the label. The chooser's rows stay clipped — there
+   the widths are alone and short, and ragged rows would break the comparison. */
+.fsone .fsnum { white-space: normal; }
+/* one line under the group: what the choice currently rests on, and the way out of it */
+.fsfoot { display: flex; align-items: baseline; gap: var(--s2); margin-top: var(--s2); }
+.fsfoot .hint { margin: 0; min-width: 0; }
+.fsfoot > button { margin-left: auto; flex-shrink: 0; }
 
 /* --- step settings ------------------------------------------------------- */
 /* every step shows its settings from the moment you focus it — there are no
@@ -625,8 +737,12 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
 .setting > label { font-size: .75rem; color: var(--dim); }
 .setting .form-select, .setting .form-control { height: 2rem; font-size: .8125rem; }
 .settings { display: flex; flex-direction: column; gap: var(--s3); }
-.settings .opt { display: flex; flex-direction: column; gap: .2rem; }
-.settings .opt .why { font-size: .6875rem; color: var(--faint); line-height: 1.4; }
+/* An option's own `help` is on the row's `title` rather than printed under it. It ran
+   two to four lines per setting — most of the panel's height, restated on every visit,
+   above the card you are trying to look at. Same affordance the fill knobs already use
+   (`.fillrow > label`), and `steps.py` stays the one declaration: the CLI's `--help`
+   prints the identical sentence at length, where there is room for it. */
+.settings .opt { display: flex; flex-direction: column; gap: .2rem; cursor: help; }
 
 /* --- card data (what the provider says) -----------------------------------
    A reference sheet, not a form: labels are micro-caps, every value is mono
@@ -682,29 +798,214 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
 .keyrow span { color: var(--dim); }
 
 /* --- search results ------------------------------------------------------ */
-.results { display: grid; gap: var(--s3); grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); }
-.hit { position: relative; display: block; cursor: pointer; }
-.hit img {
-  width: 100%; aspect-ratio: 63/88; object-fit: cover; background: var(--stock-2);
-  border: 1px solid var(--rule); border-radius: var(--card-radius);
+/* --- a card you can add: search results and a set's cards ------------------
+   **One tile, drawn the same on both screens**, because a hit is a hit — Search and a
+   set view share this renderer, so they cannot drift apart.
+
+   The tile is a *cell*, not an image with things loose beneath it. That was the whole
+   problem: the meta text between the picture and the button wrapped to two, three or
+   four lines depending on the card, so every button in a row sat at a different height
+   and read as floating between two cards rather than belonging to one. Three things fix
+   it together — every meta line is truncated to exactly one line, the cell is a flex
+   column whose meta area takes the slack, and the grid stretches the row — so the
+   buttons land on one line and the association is obvious. */
+.results { display: grid; gap: var(--s2); grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.hit {
+  display: flex; flex-direction: column; min-width: 0;
+  padding: var(--s2); border-radius: var(--bs-border-radius);
+  border: 1px solid transparent; cursor: pointer; position: relative;
 }
-.hit input { position: absolute; top: .5rem; left: .5rem; z-index: 2; }
-/* the browser's own `search --open`: the provider's full-resolution scan, one
-   card at a time. It sits over the thumbnail rather than in the meta line so it
-   is where your eye already is — and it must outrank the label's own click,
-   which selects the card. */
+/* **The hover lights the whole cell**, which is what says "these three things are one
+   card". It is the same move `.settile` makes on the set index, and the same accent the
+   library's tiles use on their own border. */
+.hit:hover { background: var(--stock); border-color: var(--rule); }
+.hit.picked { background: var(--mark-dim); border-color: var(--mark); }
+.hit .hitshot { position: relative; display: block; }
+.hit img {
+  width: 100%; aspect-ratio: var(--card-ar); object-fit: cover; display: block;
+  /* the same ring the contact sheet's tiles use, for the same reason: an MTG card's
+     border is black on a #0c0c10 page, so at the hairline it had no visible edge — a
+     grid of Commander Legends read as floating art while the Pokémon sets read as
+     cards. `--rule-2` is the token for a rule that has to be seen. */
+  background: var(--stock-2); border: 1px solid var(--rule-2);
+  border-radius: var(--card-radius);
+}
+/* the same two border states the contact sheet's tiles use, so a picked card looks
+   picked in the same way everywhere in the app */
+.hit:hover img { border-color: rgba(242,65,140,.5); }
+.hit.picked img { border-color: var(--mark); box-shadow: 0 0 0 2px var(--mark-dim); }
+/* an oversized printing is a different shape, and the tile says so rather than letting
+   `cover` crop 1.2mm of border off a plane's long edges */
+.hit.over img { aspect-ratio: var(--card-ar-oversized); }
+/* a card already filed is settled: dimmed, not pickable, and its button is a statement */
+.hit.have { cursor: default; }
+.hit.have img { border-color: var(--proof); opacity: .5; }
+.hit.have:hover img { border-color: var(--proof); }
+
+/* one badge slot, two meanings: accent = you picked it, green = it is already filed.
+   Both the same size in the same place, so the eye reads the *colour*. */
+.hit .badge-pick, .hit .have-tick {
+  position: absolute; top: .375rem; right: .375rem; z-index: 2;
+  width: 1.5rem; height: 1.5rem; border-radius: 50%;
+  display: grid; place-items: center; font-size: .8125rem; font-weight: 700;
+  line-height: 1; box-shadow: 0 2px 8px rgba(0,0,0,.5);
+}
+.hit .badge-pick { background: var(--mark); color: #fff; }
+.hit .have-tick { background: var(--proof); color: var(--ink); }
+/* the provider's own scan, full size, for telling two prints apart. On hover only, and
+   it must outrank the tile's own click — opening it is not picking the card. */
 .hit .full {
-  position: absolute; top: .5rem; right: .5rem; z-index: 2; opacity: 0;
+  position: absolute; top: .375rem; left: .375rem; z-index: 3; opacity: 0;
   font-size: .625rem; letter-spacing: .04em; text-transform: uppercase;
   padding: .125rem .375rem; border-radius: 3px; text-decoration: none;
-  background: color-mix(in srgb, var(--stock) 82%, transparent);
-  border: 1px solid var(--rule); color: var(--dim);
+  background: color-mix(in srgb, var(--ink) 82%, transparent);
+  border: 1px solid var(--rule-2); color: var(--dim);
 }
 .hit:hover .full, .hit .full:focus-visible { opacity: 1; }
 .hit .full:hover { color: var(--type); border-color: var(--mark); }
-.hit.have img { border-color: var(--proof); }
-.hit .hitmeta { font-size: .6875rem; color: var(--dim); margin-top: .375rem; line-height: 1.4; }
-.hit .hitmeta b { color: var(--type); font-size: .75rem; }
+.hit .kindtag {
+  position: absolute; bottom: .375rem; left: .375rem; z-index: 2;
+  font-size: .5625rem; letter-spacing: .04em; text-transform: uppercase;
+  padding: .0625rem .3125rem; border-radius: 3px;
+  background: color-mix(in srgb, var(--ink) 76%, transparent); color: var(--dim);
+  border: 1px solid var(--rule-2);
+}
+/* **Every meta line is exactly one line.** A wrapped artist credit is what pushed the
+   buttons out of alignment, and a name that wraps to two lines is not worth a row of
+   ragged tiles — the full text is on the tile's own title attribute. */
+.hit .hitmeta {
+  flex: 1; min-width: 0; font-size: .6875rem; color: var(--dim);
+  margin-top: var(--s2); line-height: 1.45;
+}
+.hit .hitmeta > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hit .hitmeta .nm { color: var(--type); font-size: .75rem; font-weight: 600; }
+.hit .seticon {
+  height: .875rem; width: .875rem; object-fit: contain; vertical-align: -.125rem;
+  margin-right: .1875rem; opacity: .75;
+}
+.hit .seticon.glyph { filter: invert(1); opacity: .92; }
+/* the one-card action, inside its own tile and flush with its picture's width */
+.hit .addbtn {
+  display: block; width: 100%; margin-top: var(--s2);
+  font-size: .6875rem; letter-spacing: .04em; text-transform: uppercase;
+  padding: .3125rem; border-radius: var(--bs-border-radius-sm);
+  background: var(--stock-2); border: 1px solid var(--rule-2); color: var(--dim);
+}
+/* `button.addbtn`, not `.addbtn`: the settled state is a <span>, and a span has no
+   `:disabled` to exclude — so `:not(:disabled)` matched it and "✓ In your library" lit
+   up magenta under the cursor as though it were still pressable. */
+.hit:hover button.addbtn { color: var(--type); border-color: var(--rule-2); }
+.hit button.addbtn:hover:not(:disabled) {
+  background: var(--mark); border-color: var(--mark); color: #fff;
+}
+.hit button.addbtn:disabled { opacity: .5; }
+.hit .addbtn.done {
+  background: transparent; border-color: transparent; color: var(--proof);
+  text-transform: none; letter-spacing: 0;
+}
+/* the tray's own thumbnails: proof that what you picked is what you think it is */
+.picktray { display: flex; gap: 2px; }
+.picktray img {
+  height: 2.25rem; aspect-ratio: var(--card-ar); object-fit: cover;
+  border-radius: 2px; border: 1px solid var(--rule-2);
+}
+
+/* --- browse: the set index ------------------------------------------------
+   The screen that answers "what is there", which a search box cannot: you have to
+   already know a card's name to search for it. Sets are grouped the way the *game*
+   groups them (an era for Pokemon, a kind of product for Magic - see
+   proxdex/browse.py), and each tile leads with the set's own logo, because that is
+   what anybody recognises a set by. */
+/* Named `expgrid`, not `setgrid`: the settings screen already owns that class, and
+   its one-column rule sits further down the sheet — so a "set grid" here silently
+   became a single column with one blown-out track. */
+.expgrid {
+  display: grid; gap: var(--s3);
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+}
+/* `min-width: 0` is load-bearing, not tidying. A grid track of `minmax(190px, 1fr)`
+   still takes its *item's* min-content width into account, and a set logo is a
+   1000px PNG — so one tile widened its whole column to the image's intrinsic size
+   and the four-column grid collapsed to one. The tile must be allowed to be
+   narrower than what is inside it; `overflow: hidden` is what then clips. */
+.settile {
+  display: flex; flex-direction: column; gap: var(--s2);
+  padding: var(--s3); text-align: left; width: 100%; min-width: 0; overflow: hidden;
+  background: var(--stock); border: 1px solid var(--rule);
+  border-radius: var(--bs-border-radius); color: var(--type);
+}
+.settile:hover { background: var(--stock-2); border-color: var(--rule-2); }
+/* The logo box is a fixed height with the art *contained*, so a wide wordmark and
+   a tall Magic symbol sit on the same baseline and no grid row is taller than its
+   neighbours. Magic serves no wordmark at all, so the symbol stands alone there -
+   a tile cannot assume both exist. */
+/* A fixed box with the art *contained*: `max-height` in rem rather than 100%, since
+   a percentage resolves against a box this element's own content was growing. */
+.setlogo {
+  height: 3rem; width: 100%; min-width: 0; overflow: hidden;
+  display: grid; place-items: center;
+}
+.setlogo img {
+  max-height: 3rem; max-width: 100%; width: auto; height: auto; object-fit: contain;
+}
+.setlogo img.sym { height: 2.25rem; width: 2.25rem; max-height: 2.25rem; }
+/* the same box at the top of a set view, where it sits beside the name rather than
+   above it — bounded in both directions, or a wide wordmark takes the whole row */
+.setlogo.head { height: 2.5rem; width: 7rem; flex: 0 0 auto; }
+.setlogo.head img { max-height: 2.5rem; }
+.setlogo.head img.sym { height: 2rem; width: 2rem; max-height: 2rem; }
+/* **Scryfall's set symbols are black SVGs**, drawn for a light page, so on this one
+   they are a black shape on near-black and effectively absent. They are inverted to
+   the page's own ink instead. Pokémon's symbols are *coloured* PNGs and must not be
+   touched, so this is not applied to every symbol — the tile says which kind it is
+   holding, off the expansion's own game. */
+.setlogo img.glyph, .seticon.glyph { filter: invert(1); opacity: .92; }
+.settile .sname { font-size: .8125rem; font-weight: 600; line-height: 1.25; }
+.settile .smeta {
+  font-size: .6875rem; color: var(--dim);
+  display: flex; gap: var(--s2); flex-wrap: wrap; align-items: baseline;
+}
+/* how much of the set you hold, as a bar under the tile - the fact that makes the
+   index worth re-opening. Absent entirely at zero: an empty bar on 900 sets is
+   noise, and "none of it" is what a missing bar already says. */
+.setbar { height: 2px; background: var(--rule); border-radius: 2px; overflow: hidden; }
+.setbar i { display: block; height: 100%; background: var(--proof); }
+.grouphead {
+  display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap;
+  margin: var(--s6) 0 var(--s3); padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--rule);
+}
+.grouphead h6 { margin: 0; font-size: .9375rem; }
+.groupjump { display: flex; gap: var(--s1); flex-wrap: wrap; }
+.groupjump button {
+  font-size: .6875rem; padding: .1875rem .5rem; border-radius: 999px;
+  background: var(--stock); border: 1px solid var(--rule); color: var(--dim);
+}
+.groupjump button:hover { color: var(--type); border-color: var(--rule-2); }
+.groupjump button.on {
+  background: var(--mark-dim); border-color: var(--mark); color: var(--mark);
+}
+
+/* --- browse/search: the filter chips and the pager ------------------------ */
+/* Named `qchip`, not `chip`: `.chip` is already the app's small meta label — the
+   `printed`/`queued` tags on a library tile and the kind tags beside a card id —
+   and a second definition of it here restyled every one of them magenta. */
+.qchips { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center; }
+.qchip {
+  display: inline-flex; align-items: center; gap: var(--s1);
+  font-size: .6875rem; padding: .1875rem .25rem .1875rem .5rem;
+  border-radius: 999px; background: var(--mark-dim);
+  border: 1px solid var(--mark); color: var(--type);
+}
+.qchip b { font-weight: 600; color: var(--mark); }
+.qchip button {
+  background: none; border: 0; color: var(--dim); line-height: 1;
+  padding: 0 .25rem; font-size: .8125rem;
+}
+.qchip button:hover { color: var(--type); }
+.pager { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.pager .at { font-size: .75rem; color: var(--dim); }
+.pager .jump { width: 4.75rem; }
 
 /* --- import wizard -------------------------------------------------------
    A folder of loose files, reviewed one row at a time before anything is sent.
@@ -731,7 +1032,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
 .imptab .fname { font-size: .75rem; color: var(--dim); word-break: break-all; max-width: 14rem; }
 .imptab .why { font-size: .6875rem; color: var(--faint); line-height: 1.35; }
 .imptab .pv {
-  width: 2.5rem; aspect-ratio: 63/88; object-fit: cover; display: block;
+  width: 2.5rem; aspect-ratio: var(--card-ar); object-fit: cover; display: block;
   border: 1px solid var(--rule); border-radius: 3px; background: var(--stock-2);
 }
 /* the plan's verdict per row: the same words `import --dry-run` prints */
@@ -800,9 +1101,14 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
 
 /* --- sheet dialog: pick the side of every two-sided card ----------------- */
 /* ---------- sheet builder ------------------------------------------------- */
-.sheetgrid { display: grid; gap: var(--s4); grid-template-columns: minmax(0,1fr); }
-@media (min-width: 1200px) { .sheetgrid { grid-template-columns: minmax(0,1fr) 23rem; }
-  .sheetgrid > div:last-child { position: sticky; top: var(--bar); align-self: start; } }
+/* `.sheetpage`, NOT `.sheetgrid` — the contact sheet has owned that name since the
+   first screen, and two unconditional definitions of one class is the `.slot` bug
+   again: this one took over the contact sheet's row gap (it asks for `--s5` between
+   rows and was getting `--s4`), and `$('.sheetgrid')` in `filterInPlace` would match
+   whichever came first in the document. Same lesson, one screen along. */
+.sheetpage { display: grid; gap: var(--s4); grid-template-columns: minmax(0,1fr); }
+@media (min-width: 1200px) { .sheetpage { grid-template-columns: minmax(0,1fr) 23rem; }
+  .sheetpage > div:last-child { position: sticky; top: var(--bar); align-self: start; } }
 /* a copies stepper: − N + as one control, so the count reads as a quantity */
 .stepn { display: inline-flex; align-items: stretch; border: 1px solid var(--rule);
   border-radius: .375rem; overflow: hidden; background: var(--stock-2); }
@@ -820,7 +1126,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
   text-align: left; }
 .poolcard:hover { border-color: var(--mark); }
 .poolcard.notready { opacity: .55; }
-.poolcard img { width: 100%; aspect-ratio: 63/88; object-fit: cover; border-radius: 2px;
+.poolcard img { width: 100%; aspect-ratio: var(--card-ar); object-fit: cover; border-radius: 2px;
   background: var(--stock-3); }
 .poolcard .nm { font-size: .6875rem; color: var(--type); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
@@ -831,16 +1137,24 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
 @media (min-width: 768px) { .calgrid { grid-template-columns: 12rem minmax(0,1fr); } }
 /* the sheet, as it really is: which slots hold a round and where the next goes */
 .slotmap { display: grid; gap: 3px; max-width: 11rem; }
-.slot { aspect-ratio: 1200/1350; display: flex; flex-direction: column;
+/* `.calslot`, NOT `.slot` — which the contact sheet has owned since long before this
+   screen existed. One stylesheet, no scoping, later rule wins: these six lines were
+   landing on every library tile, so each one was forced to `aspect-ratio: 1200/1350`
+   with `justify-content: center` while holding a 63:88 image plus a name and two meta
+   rows. The tile was therefore *shorter than its contents*, which is what put a card's
+   id and its pin chip outside the tile's own box, and centring made every tile in a row
+   a different height. Invisible in Python and to `node --check`; the rule in CLAUDE.md
+   about grepping for a selector first exists because of exactly this. */
+.calslot { aspect-ratio: 1200/1350; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 2px;
   border: 1px dashed var(--rule); border-radius: 3px; background: var(--stock-2); }
-.slot b { font-size: .875rem; color: var(--faint); line-height: 1; }
-.slot .mono { font-size: .5625rem; color: var(--faint); }
-.slot.used { border-style: solid; border-color: var(--rule-2); background: var(--stock-3); }
-.slot.used b { color: var(--type); }
+.calslot b { font-size: .875rem; color: var(--faint); line-height: 1; }
+.calslot .mono { font-size: .5625rem; color: var(--faint); }
+.calslot.used { border-style: solid; border-color: var(--rule-2); background: var(--stock-3); }
+.calslot.used b { color: var(--type); }
 /* the next slot is where the following round gets printed */
-.slot.next { border-color: var(--mark); border-style: solid; }
-.slot.next b { color: var(--mark); }
+.calslot.next { border-color: var(--mark); border-style: solid; }
+.calslot.next b { color: var(--mark); }
 /* the convergence trail — the whole point of iterating, so it is a picture */
 .trend { display: flex; align-items: flex-end; gap: var(--s2); height: 4.5rem; }
 .tbar { flex: 0 0 2.5rem; display: flex; flex-direction: column; align-items: center;
@@ -849,7 +1163,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
 .tbar .mono { font-size: .5625rem; color: var(--faint); }
 .profline { border: 1px solid var(--rule); border-radius: .375rem; padding: var(--s2);
   display: flex; flex-direction: column; gap: var(--s1); }
-.tbl tr.muted td, .slot.muted b { opacity: .45; }
+.tbl tr.muted td, .calslot.muted b { opacity: .45; }
 .recipe { display: grid; gap: var(--s2); grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); }
 img.proof { width: 100%; max-width: 32rem; border: 1px solid var(--rule); border-radius: .25rem; }
 
@@ -863,6 +1177,14 @@ img.proof { width: 100%; max-width: 32rem; border: 1px solid var(--rule); border
 .pickrow .nm { flex: 1 1 auto; min-width: 0; font-size: .75rem; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 
+/* one row per fill setting; the accent marks the ones that are no longer default */
+.fillrow {
+  display: grid; grid-template-columns: 1fr 6.5rem; gap: .25rem .5rem;
+  align-items: center; margin-bottom: .25rem;
+}
+.fillrow > label { font-size: .7rem; color: var(--faint); margin: 0; cursor: help; }
+.fillrow.on > label { color: var(--mark); }
+
 /* --- overlays ------------------------------------------------------------ */
 .modal-content, .toast, .dropdown-menu { background: var(--stock); border-color: var(--rule); }
 .toast { --bs-toast-bg: var(--stock); }
@@ -872,6 +1194,93 @@ img.proof { width: 100%; max-width: 32rem; border: 1px solid var(--rule); border
 }
 #busy.on { display: grid; }
 .spinner-border { color: var(--mark); }
+
+/* What is running, and how far it has got. The count is the command's own
+   (proxdex.progress), so the bar is determinate exactly when something really
+   knows the total — everything else gets the sweep and an elapsed clock, never a
+   fraction nobody measured. */
+.working {
+  width: min(24rem, calc(100vw - 2rem)); padding: .75rem;
+  background: var(--stock); border: 1px solid var(--rule-2); border-radius: .5rem;
+}
+/* The note is whatever the command is on — a card id, a page, a filename — and it
+   is one line, because the panel is a fixed size and a wrapping note used to push
+   the clock around underneath the bar. Truncated rather than shortened: the full
+   text is on the element's own `title`. */
+#bz_note {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#bz_time { white-space: nowrap; }
+.bzbar {
+  height: 4px; margin: .5rem 0; border-radius: 2px; overflow: hidden;
+  background: var(--rule); position: relative;
+}
+.bzbar > i {
+  display: block; height: 100%; width: 0; background: var(--mark);
+  transition: width .18s linear;
+}
+/* no total: a sweep, which says "running" without claiming a position */
+.bzbar.sweep > i {
+  width: 34%; animation: bzsweep 1.1s ease-in-out infinite;
+}
+@keyframes bzsweep {
+  from { transform: translateX(-100%) }
+  to   { transform: translateX(295%) }
+}
+/* ---- a read that fills a grid ----
+   The top sweep says *something* is loading; over a page of results that is not
+   enough, because the thing being replaced is right in front of you. Turning the
+   page used to leave the previous page's cards on screen with "Searching…" printed
+   *below* them — so the grid you were looking at was 60 cards of the wrong page,
+   the only word about it was off the bottom of the window, and clicking Next twice
+   looked like it had done nothing at all.
+
+   So a read that replaces the grid paints **ghost cells in the grid's own layout**:
+   the old cards go (nothing on screen is stale), the page keeps its height (nothing
+   jumps when the real cards land) and the wait is where you are looking. The bar
+   above them is `.bzbar.sweep`, the same indeterminate one the busy panel uses —
+   and indeterminate on purpose. One HTTP request has no countable parts: a bar
+   creeping to 90% of a provider round-trip is a fraction nobody measured, which is
+   the rule the whole progress layer is built on. What can honestly be shown beside
+   it is the *elapsed* clock and this browser's own median for the same read, which
+   is what `typicalTime` already does for an uncounted job. */
+/* A ghost is a `.hit` with the words taken out, and it carries the real tile's own
+   `.hitshot` / `.hitmeta` / `.addbtn` boxes — so its height matches **by construction**
+   rather than by tuning three numbers that drift the next time a tile changes. The
+   first version was an image plate and two bars: 297px against a real tile's 359px, so
+   the grid grew by a fifth of its height the moment the cards landed, which is the jump
+   the ghosts exist to prevent. Each empty line takes its height from an `\a0` in
+   `::before`, which is exactly one line of the font that will fill it; the plate is an
+   inset child, so it reads as text rather than as a full-height slab. */
+.hitghost { cursor: default; pointer-events: none; }
+.hitghost:hover { background: transparent; border-color: transparent; }
+.hitghost .hgshot {
+  display: block; width: 100%; aspect-ratio: var(--card-ar);
+  border: 1px solid var(--rule); border-radius: var(--card-radius);
+  background: var(--stock-2);
+}
+.hitghost .hgrow { position: relative; }
+.hitghost .hgrow::before { content: "\a0"; }
+.hitghost .hgrow > i {
+  position: absolute; left: 0; right: 0; top: 25%; bottom: 25%;
+  border-radius: 2px; background: var(--stock-3);
+}
+.hitghost .hgrow.short > i { right: 42%; }
+.hitghost .addbtn::before { content: "\a0"; }
+#findbusy { display: flex; align-items: baseline; gap: var(--s2); }
+#findbusy .bzbar { flex: 1 1 auto; margin: 0; }
+
+/* a top-edge sweep for a plain read (a set list, a page of results): it is not a
+   job with a count, and a full-screen overlay for one would be in the way */
+#topload {
+  position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 1090;
+  background: var(--mark-dim); overflow: hidden; display: none;
+}
+#topload.on { display: block; }
+#topload > i {
+  display: block; height: 100%; width: 30%; background: var(--mark);
+  animation: bzsweep 1s ease-in-out infinite;
+}
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
@@ -884,6 +1293,7 @@ img.proof { width: 100%; max-width: 32rem; border: 1px solid var(--rule); border
     <span class="libpath mono d-none d-lg-inline" id="lib" title=""></span>
     <nav class="d-flex gap-1" id="nav">
       <button class="navlink active" data-view="library">Library</button>
+      <button class="navlink" data-view="browse">Browse</button>
       <button class="navlink" data-view="search">Search</button>
       <button class="navlink" data-view="import">Import</button>
       <button class="navlink" data-view="sheet">Sheet</button>
@@ -905,7 +1315,21 @@ img.proof { width: 100%; max-width: 32rem; border: 1px solid var(--rule); border
 
 <main id="main" class="container-fluid px-3 py-4"></main>
 
-<div id="busy"><div class="spinner-border" role="status"><span class="visually-hidden">Working</span></div></div>
+<div id="topload"><i></i></div>
+
+<div id="busy" role="status" aria-live="polite">
+  <div class="working">
+    <div class="d-flex align-items-baseline gap-2">
+      <b id="bz_verb">Working</b>
+      <span class="mono ms-auto" id="bz_count"></span>
+    </div>
+    <div class="bzbar" id="bz_bar"><i></i></div>
+    <div class="d-flex align-items-baseline gap-2">
+      <span class="hint mb-0 mono" id="bz_note"></span>
+      <span class="hint mb-0 mono ms-auto" id="bz_time"></span>
+    </div>
+  </div>
+</div>
 
 <div id="loupe" hidden>
   <canvas width="156" height="156"></canvas>
@@ -977,8 +1401,34 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const state = {
   view:'library', id:null, face:0, step:null,
   cards:[], meta:null, cfg:null, details:{},
-  search:{q:'', game:'', set:'', rarity:'', year:'', related:false}, results:null,
-  lib:{q:'', game:'', set:'', st:'', sort:'name', density:'md'},
+  /* **One query, two screens.** `find` is what /api/search is asked — a card name
+     and every filter — and it is shared by Search and by a set view, because
+     browsing a set *is* a query with a set in it (see proxdex/browse.py). `results`
+     holds the last page envelope the server sent: items plus where the page sits in
+     the whole answer, which is what lets the pager offer a last page. */
+  find:{game:'', q:'', set:'', rarity:'', year:'', type:'', supertype:'', subtype:'',
+        color:'', sort:'released', desc:null, page:1, per_page:60},
+  results:null,
+  /* `fetch --related` is a property of the *fetch*, not of the query, so it does
+     not live in `find` and never reaches /api/search. */
+  search_related:false,
+  /* **What you have picked to add, and it outlives the page you picked it on.** It
+     used to be read straight out of the DOM (`#results input:checked`), so turning
+     to page 2 threw the selection away without saying so — you would tick eight
+     cards across three pages and add the last two. It is a Map id → the row, keyed
+     by id so a card cannot be picked twice, and holding the row so the tray can show
+     you the thumbnails of what is actually in it. */
+  pick:new Map(),
+  /* ids currently being fetched, so a card's own Add button can say so and cannot
+     be pressed twice */
+  adding:new Set(),
+  /* the set index's own state: which game, which group is expanded, a filter over
+     set names. Separate from `find` because "what sets exist" is a different
+     question from "which cards match". */
+  browse:{game:'', set:'', group:'', q:'', owned:false},
+  /* the set index and the filter vocabulary, per game, fetched once each */
+  exp:{}, facets:{},
+  lib:{q:'', game:'', set:'', st:'', sort:'name', density:'md', page:1, per_page:0},
   sel:new Set(),
   // the compare tool: 'off' shows the step's output, 'wipe' clips it over its
   // input along `split`, 'fade' cross-dissolves at `blend`. Mutually exclusive,
@@ -996,8 +1446,14 @@ const state = {
   // the import wizard: the files the browser is holding, what the server says
   // they would become, and how far the upload got. `rows` holds real File
   // objects and their object URLs — nothing is uploaded to draw the review.
+  /* the import wizard. `prefix` survives a Clear on purpose — you are usually
+     importing folder after folder of the same set, and retyping the set code each
+     time is the one thing the screen already knew. (The *folder* cannot be
+     remembered: a browser will not let a page pre-fill a file input's path, and
+     faking a "last folder" that does not reopen is worse than not offering it.) */
   imp:{rows:[], plan:null, planning:false, on_existing:'overwrite', ignored:0,
-       running:false, at:0, find:null, q:'', results:null, done:null},
+       running:false, at:0, find:null, q:'', results:undefined, done:null,
+       prefix:'', only_blocked:false},
 };
 const card = () => state.cards.find(c => c.id === state.id) || null;
 /* What a card is, when it is not an ordinary one-sided 63×88 print. The names
@@ -1028,6 +1484,29 @@ function kindChips(c){
     out.push(`<span class="chip" title="Pinned to the ${esc(c.pin)} frame spec, whatever this set's rules say">pin: ${esc(c.pin)}</span>`);
   return out.join('');
 }
+
+/* The same facts at tile size, where there is no room to spell them.
+   Two differences from `kindChips`, both about width: a pin says `pin` rather than
+   `pin: pokemon-ex-plain` (which spec is a card-page question, and that string was the
+   widest thing on the contact sheet by a factor of three), and the whole list also
+   comes back as `note` for the tile's `title`, so what the picture's edge clips is
+   still readable on hover. */
+function kindFlags(c){
+  const out = [];
+  const lay = layoutOf(c.layout);
+  if(lay && c.layout !== 'single') out.push([lay.label, lay.note]);
+  else if((c.faces || []).length > 1) out.push(['2 sides', 'Two-sided card']);
+  if(c.oversized)
+    out.push(['oversized', `Printed at ${trimMm(trimOf('oversized'))}mm, on its own pages`]);
+  if(c.frame === 'borderless')
+    out.push(['borderless', 'No printed frame, so the border step only corrects the aspect']);
+  if(c.pin) out.push(['pin', `Pinned to the ${c.pin} frame spec, whatever this set's rules say`]);
+  return {
+    html: out.map(([label, note]) =>
+      `<span class="chip" title="${esc(note)}">${esc(label)}</span>`).join(''),
+    note: out.length ? ' · ' + out.map(([label]) => label).join(' · ') : '',
+  };
+}
 const cardIndex = () => visible().findIndex(c => c.id === state.id);
 const revOf = id => (state.cards.find(c => c.id === id) || {}).rev || '0';
 /* the focused side of the focused card, and its per-stage state */
@@ -1045,13 +1524,243 @@ function toast(msg, ms=4500){
   _toast.show();
 }
 const tail = s => (s||'').trim().split('\n').slice(-4).join('\n');
-async function get(p){ const r = await fetch(p); if(!r.ok) throw await r.text(); return r.json(); }
+
+/* ---------- waiting -------------------------------------------------------
+   Three kinds of wait, and they are not the same thing to look at:
+
+   * A **read** (the facets, a card's data sheet) is quick and does not block you — it
+     gets a 2px sweep at the top of the window. A modal spinner for one would be in
+     the way, which is why every read used to have no indication at all.
+
+     **One indicator at a time, and the nearer one wins.** A read that replaces a
+     container has its own strip in that container (`beginRead`), and the top sweep
+     stands down for as long as one is up: two bars for one wait is the reader
+     checking which of them is about the thing they clicked. The top sweep is now the
+     *fallback* — it fires only for a read with nowhere of its own to show, which is
+     the facets, a card's details and the boot reads. Deliberately kept rather than
+     deleted: without it those go back to no indication at all.
+   * A **job with a count** — a batch of cards, the pages of a PDF — gets a real
+     bar. The count is the running command's own (proxdex.progress writes it,
+     `/api/progress` reads it); nothing is inferred from the log.
+   * A **job with no count** — one card through Upscayl, the slowest thing here —
+     gets a sweep, an elapsed clock, and, once you have run that command before,
+     "~40s typical". That number is the median of *your* last runs of the same
+     command, kept in this browser, and it is labelled as an estimate. It is never
+     turned into a bar position: a fraction nobody measured that sits at 90% is
+     the same lie as a border nobody measured. */
+let _reads = 0;
+function reading(on){
+  _reads = Math.max(0, _reads + (on ? 1 : -1));
+  paintTopload();
+}
+/* The one place the top sweep is turned on or off, because two things decide it: a
+   read being in flight, and no inline strip having claimed the wait already. Both
+   `reading` and `beginRead`/`endRead` call this rather than toggling the class
+   themselves, or whichever ran last would win. */
+function paintTopload(){
+  $('#topload').classList.toggle('on', _reads > 0 && !_rd.at);
+}
+async function get(p){
+  reading(true);
+  try{
+    const r = await fetch(p);
+    if(!r.ok) throw await r.text();
+    return await r.json();
+  } finally { reading(false); }
+}
+
+/* How long this command has taken before, from this browser's own history. */
+const TIMES_KEY = 'proxdex.times';
+function loadTimes(){
+  try{ return JSON.parse(localStorage.getItem(TIMES_KEY) || '{}') || {}; }
+  catch(e){ return {}; }
+}
+function recordTime(cmd, secs){
+  if(!cmd || !(secs > 0.4)) return;             // too quick to be worth an estimate
+  const all = loadTimes();
+  all[cmd] = [...(all[cmd] || []), Math.round(secs * 10) / 10].slice(-9);
+  try{ localStorage.setItem(TIMES_KEY, JSON.stringify(all)); } catch(e){}
+}
+function typicalTime(cmd){
+  const runs = (loadTimes()[cmd] || []).slice().sort((a, b) => a - b);
+  if(runs.length < 2) return 0;                 // one run is an anecdote, not a typical
+  return runs[Math.floor(runs.length / 2)];     // median: one slow afternoon shouldn't set it
+}
+const secs = s => s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${s.toFixed(s < 10 ? 1 : 0)}s`;
+
+/* ---------- a read that replaces what you are looking at ------------------
+   The top sweep is right for a read that leaves the screen alone. It is not enough
+   for one that *replaces a grid*, and paging is the case that proved it: turning the
+   page left the previous page's 60 cards on screen, with "Searching…" printed below
+   them — off the bottom of the window on any real page. So the only signal was in
+   the one place you were not looking, and the cards you were looking at were the
+   wrong page's. Clicking Next twice in a row looked like it had done nothing.
+
+   `beginRead` therefore clears the container and puts the wait *there*: a sweep bar,
+   an elapsed clock, and this browser's own median for the same kind of read once it
+   has one. Three things about it:
+
+   * **The bar is indeterminate, and that is not a shortcut.** One HTTP request has
+     no countable parts, so there is no fraction to have — and a bar creeping to 90%
+     of a provider round-trip is the same invention the whole progress layer refuses
+     (`progress.UNKNOWN`, and the note above). The clock is measured and the median is
+     labelled as a median; neither is turned into a position.
+   * **It is held back by `GRACE_MS`**, like the busy panel, because a warm read
+     answers in ~9ms and a sweep that appears and vanishes reads as a glitch. The
+     *ghosts* are painted immediately, since they are the layout rather than an
+     animation, and their sheen is delayed for the same reason.
+   * **A superseded read is not recorded.** `runFind` drops an answer a later query
+     overtook, and timing that half-read would drag the median below anything the
+     provider ever actually did — so only a read that finished feeds `recordTime`. */
+let _rd = {timer: 0, at: 0, key: '', host: ''};
+
+function beginRead(hostId, key){
+  endRead(false);
+  _rd = {timer: setInterval(paintRead, 200), at: performance.now(), key, host: hostId};
+  paintTopload();          // this wait has a strip of its own; the top sweep stands down
+  const host = $('#' + hostId);
+  if(host) host.innerHTML = '';
+  setTimeout(paintRead, GRACE_MS);
+}
+function paintRead(){
+  if(!_rd.at) return;
+  const host = $('#' + _rd.host);           // looked up per tick: the screen may not
+  if(!host) return;                         // have rendered when the read started
+  const el = (performance.now() - _rd.at) / 1000;
+  if(el * 1000 < GRACE_MS) return;
+  if(!host.firstChild){
+    host.innerHTML = `<div id="findbusy" class="mb-2">
+      <div class="bzbar sweep"><i></i></div>
+      <span class="hint mono mb-0" id="rd_time"></span></div>`;
+  }
+  const typical = typicalTime(_rd.key);
+  const est = typical
+    ? (el > typical * 2 ? ' · longer than usual' : ` · ~${secs(typical)} typical`)
+    : '';
+  const t = $('#rd_time');
+  if(t) t.textContent = secs(el) + est;
+}
+function endRead(ok){
+  if(_rd.timer) clearInterval(_rd.timer);
+  if(ok && _rd.at) recordTime(_rd.key, (performance.now() - _rd.at) / 1000);
+  const host = _rd.host && $('#' + _rd.host);
+  if(host) host.innerHTML = '';
+  _rd = {timer: 0, at: 0, key: '', host: ''};
+  paintTopload();          // whatever else is still reading may have the top sweep back
+}
+
+/* A mutation that finishes in a blink must not flash a modal. Skipping a step,
+   flipping a card or setting a config key is over in ~100ms, and an overlay that
+   appears and vanishes reads as a glitch rather than as progress — so the panel is
+   held back for GRACE_MS while the top sweep (which is not in the way) says
+   something is happening immediately. Anything slower than that really is a wait,
+   and gets the panel. */
+const GRACE_MS = 320;
+let _poll = 0, _grace = 0, _startedAt = 0, _cmd = '', _busy = false, _wasPositional = false;
+
+/* The top sweep during a mutation is the *pre-panel* acknowledgement and nothing more,
+   so it is a hold that gets handed over: on at the click, off the moment the panel
+   takes the wait. It used to stay on underneath the panel, which is two indicators for
+   one wait — the reader then has to work out which of them is about the thing they
+   clicked.
+
+   Held through one flag rather than by calling `reading` at each site, because the two
+   sites were **asymmetric**: `showBusy` incremented unconditionally and `hideBusy`
+   decremented only `if(_busy)`, so two overlapping mutations added two and took one
+   away and the sweep stayed lit for the rest of the session with nothing running at
+   all — a second indicator that never went out, and no way to tell it from a real one.
+   Idempotent here, so no ordering of clicks can leak it. */
+let _sweepHeld = false;
+function holdSweep(on){
+  if(on === _sweepHeld) return;
+  _sweepHeld = on;
+  reading(on);
+}
+
+function showBusy(cmd){
+  _cmd = cmd || '';
+  _startedAt = performance.now();
+  _busy = true;
+  _wasPositional = false;
+  holdSweep(true);                            // instant, non-modal acknowledgement
+  paintBusy(null);
+  clearTimeout(_grace);
+  _grace = setTimeout(() => {
+    if(!_busy) return;
+    $('#busy').classList.add('on');
+    holdSweep(false);                         // the panel is the indicator from here
+  }, GRACE_MS);
+  clearInterval(_poll);
+  pollBusy();                                 // don't show a guessed verb for 300ms
+  _poll = setInterval(pollBusy, 300);
+}
+function hideBusy(){
+  clearInterval(_poll); _poll = 0;
+  clearTimeout(_grace); _grace = 0;
+  holdSweep(false);
+  _busy = false;
+  $('#busy').classList.remove('on');
+  // Only a run the estimate would ever be *shown* for is remembered, so the median
+  // stays a median of comparable runs: one card through Upscayl (40s) and forty of
+  // them (half an hour) are the same command, and pooling them would put a number
+  // on the panel that describes neither. A counted run needs no typical — it has a
+  // measured `left` — so this bucket is exactly the runs of one item or of an
+  // unknown number.
+  if(!_wasPositional) recordTime(_cmd, (performance.now() - _startedAt) / 1000);
+}
+async function pollBusy(){
+  // deliberately not through `get`: this *is* the progress indicator, and driving
+  // the top sweep from it would leave it on for as long as the job runs
+  try{
+    const r = await fetch('/api/progress');
+    paintBusy(r.ok ? await r.json() : null);
+  } catch(e){ paintBusy(null); }
+}
+function paintBusy(p){
+  // The server knows the verb it actually ran ("upscale"), which the URL does not
+  // (`/api/step` is every step) — so the estimate is keyed on that as soon as it
+  // is known, and the label stops being a guess a moment after it started as one.
+  if(p && p.command) _cmd = p.command;
+  // the server's clock, so a job another tab started is not timed from the moment
+  // this one happened to look at it
+  const mine = (performance.now() - _startedAt) / 1000;
+  const elapsed = Math.max(mine, (p && p.elapsed) || 0);
+  const verb = titleOf((p && p.verb) || _cmd) || 'Working';
+  // `positional` — not `total > 0`. One item is a real count with no position in
+  // it: the bar could only read 0% and then be gone, which is exactly what a single
+  // card through Upscayl looked like. See progress.Report.positional.
+  const bar = !!(p && p.positional);
+  if(bar) _wasPositional = true;
+  $('#bz_verb').textContent = verb + (p && p.jobs > 1 ? ` (+${p.jobs - 1} more)` : '');
+  $('#bz_count').textContent = bar ? `${p.done} of ${p.total}` : '';
+  $('#bz_bar').classList.toggle('sweep', !bar);
+  $('#bz_bar').firstElementChild.style.width = bar
+    ? `${Math.round(100 * Math.min(1, p.done / p.total))}%` : '';
+  const note = (p && p.note) || '';
+  $('#bz_note').textContent = note;
+  $('#bz_note').title = note;                 // truncated in CSS; full text here
+  // Two different kinds of estimate, and each says which it is. `left` is measured
+  // from this run's own rate over the items it has already finished; `typical` is
+  // the median of your last runs of the same command, which is all there is to go
+  // on when nothing is counting. Neither is ever turned into a bar position.
+  const left = bar && p.left > 0 ? `~${secs(p.left)} left` : '';
+  const typical = bar ? 0 : typicalTime(_cmd);
+  // Well past your own median is worth saying out loud — it is the difference
+  // between a slow step and one that has stopped, and it is the same measurement
+  // either way rather than a new claim. Twice the median, so an ordinary spread of
+  // run times does not trip it.
+  const est = left || (typical
+    ? (elapsed > typical * 2 ? 'longer than usual' : `~${secs(typical)} typical`)
+    : '');
+  $('#bz_time').textContent = secs(elapsed) + (est ? ` · ${est}` : '');
+}
+const titleOf = cmd => cmd ? cmd[0].toUpperCase() + cmd.slice(1) : '';
 
 async function act(path, body, okmsg){
   const {_method, ...payload} = body || {};
   const method = _method || 'POST';
   let ok = false, result = false;
-  $('#busy').classList.add('on');
+  showBusy(pathVerb(path));
   try{
     const r = await fetch(path, {
       method,
@@ -1068,10 +1777,18 @@ async function act(path, body, okmsg){
     // which wants the PDF that came out) reads its fields
     if(ok) result = j || true;
   } catch(e){ toast('Failed\n' + e, 14000); }
-  $('#busy').classList.remove('on');
+  hideBusy();
   await refresh(true);
   return result;
 }
+/* The verb to show until the first poll answers — a guess from the URL, and only
+   for the few ms before the server says what it really ran. `step` is excluded
+   because `/api/step` is *every* step, so it would render as "Step": a plain
+   "Working" is better than a word that is not the command's name. */
+const pathVerb = path => {
+  const v = (path || '').replace(/^\/api\//, '').split(/[/?]/)[0];
+  return v === 'step' ? '' : v;
+};
 
 /* A confirm() replacement that matches the rest of the console. */
 let _ask;
@@ -1120,6 +1837,15 @@ const side = f => (f ? `&face=${f}` : '');
 const viewsrc = (id, stage, f) => `/api/view/${encodeURIComponent(id)}/${stage}?rev=${revOf(id)}${side(f)}`;
 const fullsrc = (id, stage, f) => `/api/image/${encodeURIComponent(id)}/${stage}?rev=${revOf(id)}${side(f)}`;
 const thumbsrc = (c, f) => `/api/thumb/${encodeURIComponent(c.id)}?rev=${c.rev}${side(f)}`;
+/* A *provider's* picture — a set logo, a symbol, a search hit — always through
+   /api/art, never straight from the CDN. Measured before this existed: the set
+   index pulled 24.7 MB of logo PNGs into a slot 2.25rem tall and one 60-card page
+   pulled 45 MB of full-size scans into 190px tiles, both again on every visit.
+   The size names where it is drawn (see proxdex.art.Size) and the answer is
+   immutable, so the second visit does no network at all. The one URL that stays
+   the provider's own is a hit's `full ↗` link, which exists to offer the original. */
+const artsrc = (url, size) =>
+  url ? `/api/art?size=${size}&u=${encodeURIComponent(url)}` : '';
 /* Warm the browser cache for images we are about to want (next/prev card, the
    card's other stages) — a decoded hit makes those navigations instant. */
 function prefetch(urls){ for(const u of urls) if(u) new Image().src = u; }
@@ -1157,8 +1883,21 @@ function currentUrl(){
     return `/card/${encodeURIComponent(state.id)}` + (state.step ? `/${state.step}` : '') + s;
   }
   if(state.view === 'search'){
-    const p = new URLSearchParams(Object.entries(state.search).filter(([,v]) => v));
-    return '/search' + (p.toString() ? '?' + p : '');
+    // the set stays here: on Search it is one filter among many, not the page
+    return '/search?' + findParams();
+  }
+  /* /browse is the index and /browse/<set> is one set's cards. The set is in the
+     *path* rather than a parameter because it is a page you navigate to, with its
+     own history entry and its own scroll position — the filters beside it are
+     parameters, because they narrow that page rather than replacing it. */
+  if(state.view === 'browse'){
+    if(!state.browse.set){
+      const p = new URLSearchParams({game: browseGame()});
+      if(state.browse.group) p.set('group', state.browse.group);
+      return '/browse?' + p;
+    }
+    const p = findParams(); p.delete('set');
+    return `/browse/${encodeURIComponent(state.browse.set)}?` + p;
   }
   if(state.view === 'import') return '/import';
   if(state.view === 'frames') return '/frames';
@@ -1177,10 +1916,14 @@ function routeFromUrl(){
     return {view:'card', id:decodeURIComponent(parts[1]), face, step};
   }
   if(parts[0] === 'search'){
-    return {view:'search', id:null, step:null, search:{
-      q: q.get('q') || '', game: q.get('game') || '', set: q.get('set') || '',
-      rarity: q.get('rarity') || '', year: q.get('year') || '',
-    }};
+    return {view:'search', id:null, step:null, find:findFromQuery(q)};
+  }
+  if(parts[0] === 'browse'){
+    const set = parts[1] ? decodeURIComponent(parts[1]) : '';
+    const game = q.get('game') || '';
+    return {view:'browse', id:null, step:null,
+            browse:{game, set, group:q.get('group') || '', q:'', owned:false},
+            find:{...findFromQuery(q), set}};
   }
   if(parts[0] === 'import') return {view:'import', id:null, step:null};
   if(parts[0] === 'frames') return {view:'frames', id:null, step:null};
@@ -1206,8 +1949,27 @@ function navigate(next, {replace = false} = {}){
   render();
   if(!samePage) window.scrollTo(0, 0);
 }
+/* A query read back off the URL. Every field is present and defaulted, so a pasted
+   link with two parameters restores the same shape as one with ten — a partial
+   `find` would leave an `undefined` reaching the API as the string "undefined".
+   `desc` is tri-state: absent means "the sort's own direction", which is why it is
+   null rather than false. */
+function findFromQuery(q){
+  const desc = q.get('desc');
+  return {
+    game: q.get('game') || '', q: q.get('q') || '', set: q.get('set') || '',
+    rarity: q.get('rarity') || '', year: q.get('year') || '',
+    type: q.get('type') || '', supertype: q.get('supertype') || '',
+    subtype: q.get('subtype') || '', color: q.get('color') || '',
+    sort: q.get('sort') || 'released',
+    desc: desc === null ? null : desc === '1',
+    page: Math.max(1, parseInt(q.get('page'), 10) || 1),
+    per_page: Math.max(1, parseInt(q.get('per_page'), 10) || 60),
+  };
+}
 const routeState = () => ({view:state.view, id:state.id, face:state.face, step:state.step,
-                           profile:state.profile, search:{...state.search}});
+                           profile:state.profile, find:{...state.find},
+                           browse:{...state.browse}});
 /* Update the address bar in place — used while typing a search, where a
    re-render would fight the form and a push would bury the last page. */
 function syncUrl(){ history.replaceState(routeState(), '', currentUrl()); }
@@ -1254,16 +2016,45 @@ function render(){
   else if(state.view === 'card'){ renderCard(); }
   else if(state.view === 'search'){
     m.innerHTML = viewSearch();
+    ensureFindData();
+    paintPickBar();
     if(state.results){          // returning to Search: repaint, don't re-query
-      paintResults(state.results);
-      showHint(state.results.length ? '' : 'No matches. Try fewer words, or switch game.');
-    } else if(state.search.q.trim()) doSearch();   // a /search?q=… link
+      paintHits(state.results);
+      // the same sentence as a fresh query's, so returning to the screen does not
+      // downgrade a named cause back to "try fewer filters"
+      if(state.results.items.length) showHint('');
+      else { const h = $('#results_hint'); if(h) h.innerHTML = emptyHint(state.results); }
+    } else if(state.find.q.trim() || state.find.set) runFind();   // a /search?q=… link
+  }
+  else if(state.view === 'browse'){
+    m.innerHTML = viewBrowse();
+    unskelAll(m);     // set logos this browser already holds, plated for no reason
+    ensureFindData();
+    paintPickBar();   // `render` clears `hasbar`; the tray outlives the screen
+    if(state.browse.set){
+      // a set view always has a query to run — the set itself is the query
+      if(state.results && state.results.query
+         && state.results.query.set === state.browse.set) paintHits(state.results);
+      else runFind();
+    }
   }
   else if(state.view === 'import') renderImport();
   else if(state.view === 'frames') renderFrames();
   else if(state.view === 'sheet') renderSheet();
   else if(state.view === 'print') renderPrint();
   else if(state.view === 'settings') renderSettings();
+}
+
+/* The set index and the facet vocabulary, fetched at most once per game and only
+   when a screen that uses them is on. Re-rendering when they land is what makes the
+   set symbols and the filter dropdowns appear without a spinner over the whole
+   page — and the guard on `state.view` is there because either await can outlive
+   the screen that asked, exactly as the align panel's readers can. */
+function ensureFindData(){
+  const game = state.view === 'browse' ? browseGame() : findGame();
+  const want = state.view;
+  if(!state.facets[game]) loadFacets(game).then(() => { if(state.view === want) render(); });
+  if(!state.exp[game]) loadExpansions(game).then(() => { if(state.view === want) render(); });
 }
 
 /* ---------- library: the contact sheet ----------------------------------- */
@@ -1300,34 +2091,93 @@ function sheetReady(c){
   return f && f.status[last] !== 'pending';
 }
 
+/* ---------- the library, by the page -------------------------------------
+   **Paging here slices what is already loaded**, and that is the whole difference
+   from Search: the library is local, so every card is in hand the moment the first
+   one is, and asking the server for a window would be slower *and* could disagree
+   with itself between two pages. It is a rendering concern, so it is rendered —
+   which is also why the instant filter above it still works on every card and not
+   just this page.
+
+   Default 0 = all, matching `proxdex ls`: a listing of your own cards should print
+   in full unless you ask otherwise. */
+function libPage(rows){
+  const per = state.lib.per_page;
+  if(!per) return rows;
+  const pages = Math.max(1, Math.ceil(rows.length / per));
+  // a filter that shrinks the answer must not leave you stranded past its end
+  if(state.lib.page > pages) state.lib.page = pages;
+  const start = (state.lib.page - 1) * per;
+  return rows.slice(start, start + per);
+}
+function libPager(matched){
+  const per = state.lib.per_page;
+  if(!per || matched <= per) return '';
+  const pages = Math.ceil(matched / per), at = state.lib.page;
+  const first = (at - 1) * per + 1;
+  return `
+    <div class="pager mt-3">
+      <button class="btn btn-sm btn-outline-secondary" ${at <= 1 ? 'disabled' : ''}
+        onclick="setLibPage(${at - 1})">← Prev</button>
+      <span class="at mono">${first}–${Math.min(matched, at * per)} of ${matched} · page ${at} of ${pages}</span>
+      <button class="btn btn-sm btn-outline-secondary" ${at >= pages ? 'disabled' : ''}
+        onclick="setLibPage(${at + 1})">Next →</button>
+    </div>`;
+}
+function setLibPage(n){
+  state.lib.page = Math.max(1, n);
+  render();
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+function setLibPerPage(n){
+  state.lib.per_page = Math.max(0, parseInt(n, 10) || 0);
+  state.lib.page = 1;
+  render();
+}
+
 function viewLibrary(){
-  const rows = visible();
+  const matched = visible();
+  const rows = libPage(matched);
   const sets = [...new Set(state.cards.map(c => c.set))].sort();
   const f = state.lib;
   const opt = (v, label, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
 
+  /* The game was a chip on every tile, and in a one-game library that is the same
+     word fifteen times in the row where the card's own id has to fit — the least
+     surprising fact winning the most contested space. It is worth ink only when it
+     varies, so it is shown when the library really holds more than one game. */
+  const games = new Set(state.cards.map(c => c.game));
+  const mixed = games.size > 1;
+
   const slots = rows.map(c => {
     const picked = state.sel.has(c.id);
+    const flags = kindFlags(c);
     return `
-    <a class="slot marks ${picked ? 'picked' : ''}" href="/card/${encodeURIComponent(c.id)}"
+    <a class="slot ${picked ? 'picked' : ''}" href="/card/${encodeURIComponent(c.id)}"
        data-cid="${esc(c.id)}"
-       onclick="return openCard('${esc(c.id)}', event)" title="${esc(c.name)} · ${esc(c.id)}">
-      <input class="form-check-input pick" type="checkbox" ${picked ? 'checked' : ''}
-             aria-label="Select ${esc(c.name)}"
-             onclick="event.stopPropagation();togglePick('${esc(c.id)}')">
-      <img class="shot skel" loading="lazy" alt="${esc(c.name)}"
-           src="${thumbsrc(c, c.front_face)}" onload="unskel(this)"
-           onerror="unskel(this);this.style.opacity=.12">
-      <div class="cardname">${esc(c.name)}</div>
-      <div class="slotmeta">
-        <span class="id">${esc(c.id)}</span>
-        ${kindChips(c)}
-        ${c.printed ? '<span class="chip good">printed</span>'
-          : c.batch ? '<span class="chip">queued</span>' : ''}
+       onclick="return openCard('${esc(c.id)}', event)"
+       title="${esc(c.name)} · ${esc(c.id)}${flags.note}">
+      <span class="slotshot marks">
+        <input class="form-check-input pick" type="checkbox" ${picked ? 'checked' : ''}
+               aria-label="Select ${esc(c.name)}"
+               onclick="event.stopPropagation();togglePick('${esc(c.id)}')">
+        <img class="shot skel" loading="lazy" alt="${esc(c.name)}"
+             src="${thumbsrc(c, c.front_face)}" onload="unskel(this)"
+             onerror="unskel(this);this.style.opacity=.12">
+        ${flags.html ? `<span class="flags">${flags.html}</span>` : ''}
+      </span>
+      <div class="cardname" title="${esc(c.name)}">${esc(c.name)}</div>
+      <div class="dline">
+        <span class="grow id">${esc(c.id)}</span>
+        ${c.printed ? '<span class="fix chip good">printed</span>'
+          : c.batch ? '<span class="fix chip">queued</span>' : ''}
       </div>
-      <div class="slotmeta"><div class="strip">${
-        STAGES().map(s => `<span class="tick ${cardStatus(c,s)}"></span>`).join('')
-      }</div><span class="chip ms-auto">${esc(c.game)}</span></div>
+      <div class="dline">
+        <div class="grow strip">${
+          STAGES().map(s => `<span class="tick ${cardStatus(c,s)}"></span>`).join('')
+        }</div>
+        ${mixed ? `<span class="fix chip">${esc(c.game)}</span>` : ''}
+      </div>
     </a>`;
   }).join('');
 
@@ -1369,10 +2219,16 @@ function viewLibrary(){
           ${['sm','md','lg'].map(d => `<button class="${f.density === d ? 'on' : ''}"
              onclick="setFilter('density','${d}')">${d.toUpperCase()}</button>`).join('')}
         </span>
+        <select class="form-select" style="max-width:8rem" title="Cards per page"
+                onchange="setLibPerPage(this.value)">
+          ${[0,60,120,240].map(n => opt(String(n), n ? n + ' / page' : 'All',
+                                        String(f.per_page))).join('')}
+        </select>
       </span>
     </div>
     ${notice}
-    ${slots ? `<div class="sheetgrid ${f.density}">${slots}</div>`
+    ${slots ? `<div class="sheetgrid ${f.density}">${slots}</div>
+               ${libPager(matched.length)}`
             : `<div class="panel p-5 text-center">
                  <p class="mb-1">${state.cards.length ? 'Nothing matches those filters.' : 'No cards yet.'}</p>
                  <p class="hint mb-3">${state.cards.length
@@ -1420,6 +2276,10 @@ function tallyStrip(){
 
 function setFilter(key, value){
   state.lib[key] = value;
+  // any narrowing or reordering starts again at page 1 — a filter applied while on
+  // page 5 of the old answer lands past the end of the new one, which reads as
+  // "nothing matches" when plenty does
+  if(key !== 'density') state.lib.page = 1;
   // Typing in the name filter must not rebuild the grid. Recreating every tile's
   // <img> on each keystroke is exactly the flicker — the browser paints an empty
   // box before it re-decodes a file it already has. Hide what no longer matches.
@@ -1533,7 +2393,13 @@ async function loadBatches(){
    the focused step's settings and actions (always, from the moment you focus
    it), and the centre is the proof: this step's output, or its input at full
    colour with the fact stated around the card rather than over it. */
-function go(view){ navigate({view, id:null, step:null}); }
+function go(view){
+  // the nav's Browse means the index, even if you were last inside a set — a
+  // top-level nav item that lands you three levels deep is a trap
+  if(view === 'browse') return navigate({view, id:null, step:null,
+                                         browse:{...state.browse, set:'', group:''}});
+  navigate({view, id:null, step:null});
+}
 /* Let ⌘/ctrl/middle-click and "open in new tab" work like any other link. */
 function openCard(id, ev){
   if(ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button)) return true;
@@ -1615,19 +2481,13 @@ function defaultStep(c){
     if(stStatus(c, PIPE()[i].stage) === 'done') return PIPE()[i].key;
   return PIPE()[0].key;
 }
-/* Changing a stage invalidates everything downstream (the CLI removes those
-   stale files). Warn before that throws away a done upscale — it is slow. */
-function cascadeVictims(c, key){
-  const i = PIPE().findIndex(s => s.key === key);
-  return PIPE().slice(i + 1).filter(s => stStatus(c, s.stage) === 'done');
-}
-async function okCascade(c, key){
-  const v = cascadeVictims(c, key);
-  if(!v.some(s => s.key === 'upscale')) return true;
-  return ask(`Rebuilding from ${SPEC(key).label.toLowerCase()} removes the existing `
-    + `${v.map(s => s.label.toLowerCase()).join(' and ')}. The upscale is slow to redo.`,
-    'Rebuild');
-}
+/* Changing a stage invalidates everything downstream and that is **not** confirmed.
+   It used to be, and the dialog was in the way of the very thing it protected: tuning a
+   border means re-running it over and over, and a modal between every attempt makes the
+   loop unusable. The cascade is still *reported* — the CLI's `_cascade` says what went
+   and the rail shows it — which is the honest version: you are told what happened
+   rather than asked to predict it, and nothing here is unrecoverable because every
+   stage after the original is derived. */
 
 /* What the card shell in the DOM was built for, as `id/face/rev`.
 
@@ -2139,23 +2999,51 @@ function renderStepPanel(c, key){
     <p class="hint mb-0 mt-1">${esc(s.blurb)}</p>
     ${io}
     ${s.options.length ? `<hr class="rule" style="margin:${'.875rem 0'}">
-      <div class="settings" id="stepsettings">${s.options.map(optField).join('')}</div>` : ''}
+      <div class="settings" id="stepsettings">${
+        s.options.map(o => optField(o, stepValue(c, key, o))).join('')}</div>` : ''}
+    ${key === 'border' && st === 'done' ? fillPanel() : ''}
     ${key === 'border' ? '<div id="alpanel"></div>' : ''}
     ${key === PIPE()[0].key ? sourceExtra() : ''}
     <div class="d-grid gap-2 mt-3" id="stepactions">${footer(c, key, st)}</div>
   </div>`;
 }
 
+/* **What a step's settings are set to, for as long as you are looking at this side of
+   this card.** Every control used to render from `o.default` and nothing else, so the DOM
+   was the only place a choice lived — and any re-render silently threw it away. That was
+   invisible for settings only read when Run is pressed, and a real bug for border's
+   Frame, which the align layer reads: choosing a spec then clicking `Align the border`
+   (a re-render) reverted to Automatic, so a printing with no measured spec went straight
+   back to "no spec to align to" and looked un-alignable.
+
+   Keyed by card, side and step, and dropped whole when that key changes: a per-run
+   override must never leak onto the next card, which is the one thing worse than
+   forgetting it. */
+const stepMem = {key: '', values: {}};
+const stepMemKey = (c, key) => `${c.id}/${state.face}/${key}`;
+function stepValue(c, key, o){
+  return stepMem.key === stepMemKey(c, key) && o.key in stepMem.values
+    ? stepMem.values[o.key] : o.default;
+}
+function rememberSettings(){
+  const c = card(); if(!c || !state.step) return;
+  const key = stepMemKey(c, state.step);
+  if(stepMem.key !== key){ stepMem.key = key; stepMem.values = {}; }
+  for(const o of SPEC(state.step).options){
+    const el = $('#so_' + o.key); if(!el) continue;
+    stepMem.values[o.key] = o.kind === 'bool' ? el.checked : el.value;
+  }
+}
 /* One control per declared option, its kind choosing the widget. */
-function optField(o){
+function optField(o, value){
   const id = 'so_' + o.key;
   let ctl;
   if(o.kind === 'bool'){
     ctl = `<div class="form-check mb-0">
-      <input class="form-check-input" type="checkbox" id="${id}" ${o.default ? 'checked' : ''}
+      <input class="form-check-input" type="checkbox" id="${id}" ${value ? 'checked' : ''}
              onchange="onSetting()">
       <label class="form-check-label" style="font-size:.8125rem" for="${id}">${esc(o.label)}</label></div>`;
-    return `<div class="opt">${ctl}<span class="why">${esc(o.help)}</span></div>`;
+    return `<div class="opt" title="${esc(o.help)}">${ctl}</div>`;
   }
   if(o.kind === 'choice'){
     // what "unset" means comes from the option's own schema — border's frame falls
@@ -2163,7 +3051,7 @@ function optField(o){
     const auto = o.optional
       ? `<option value="">${esc(o.auto_label || 'Automatic')}</option>` : '';
     ctl = `<select class="form-select form-select-sm mono" id="${id}" onchange="onSetting()">${auto}${
-      o.choices.map(v => `<option ${String(v) === String(o.default) ? 'selected' : ''}
+      o.choices.map(v => `<option ${String(v) === String(value) ? 'selected' : ''}
         >${esc(String(v))}</option>`).join('')}</select>`;
   } else {
     // the range and increment come from the option's own schema — the API refuses
@@ -2173,13 +3061,12 @@ function optField(o){
     // "1400" alone is a number nobody can interpret, "1400 dpi" is a resolution
     ctl = `<span class="d-flex align-items-center gap-1"><input
       class="form-control form-control-sm mono" type="number" id="${id}"
-      value="${esc(o.default ?? '')}"${bound('min', o.low)}${bound('max', o.high)}${
+      value="${esc(value ?? '')}"${bound('min', o.low)}${bound('max', o.high)}${
       bound('step', o.step_by) || ' step="any"'} oninput="onSetting()">${
       o.unit ? `<span class="faint" style="font-size:.75rem">${esc(o.unit)}</span>` : ''}</span>`;
   }
-  return `<div class="opt">
-    <div class="setting"><label for="${id}">${esc(o.label)}</label>${ctl}</div>
-    <span class="why">${esc(o.help)}</span></div>`;
+  return `<div class="opt" title="${esc(o.help)}">
+    <div class="setting"><label for="${id}">${esc(o.label)}</label>${ctl}</div></div>`;
 }
 /* Read the panel back into the wire shape the API validates. */
 function stepSettings(key){
@@ -2192,9 +3079,40 @@ function stepSettings(key){
   return out;
 }
 /* A settings change while the border marks are live changes what the fit would
-   do, so the ghost trim and the readout have to follow it immediately. */
+   do, so the ghost trim and the readout have to follow it immediately.
+
+   **The Frame setting is not just another input**, which is why this does more than
+   re-solve: it is what every line on the layer is measured against. Choosing one where
+   nothing resolved turns "no spec to align to" into the ordinary marks flow, and choosing
+   `borderless` takes the marks away entirely — so the panel and the target are re-stated
+   too. Only a change that flips whether there *are* marks rebuilds the layer, because
+   that recreates the source `<img>` and a fresh img paints an empty box before it decodes
+   a file the browser already holds.
+
+   And it follows the frame **with the layer down as well**, which it did not: it returned
+   early on `!align.on`, so on a *done* step — where the target outline is still drawn over
+   the master, and where re-running with another spec is the whole reason to be there —
+   choosing a Frame changed nothing on screen at all. */
 function onSetting(){
-  if(align.on){ align.guide = $('#so_frame') ? $('#so_frame').value : ''; computeExtend(); }
+  // First, so the choice survives whatever re-render comes next — including the one
+  // `Align the border` triggers, which is where it used to be lost.
+  rememberSettings();
+  if(!align.meas) return;   // nothing known about this card's spec yet
+  const had = marksOn(), was = align.guide;
+  align.guide = $('#so_frame') ? $('#so_frame').value : '';
+  // A different spec is a different target, and the marks *start* on the target. So an
+  // untouched rectangle follows the new spec rather than sitting at the old one's numbers
+  // — which on a printing that resolved to nothing meant the 8% fallback, reported as
+  // "shaves the over-target top, right, bottom, left" the moment a real spec was picked.
+  // A rectangle somebody has dragged is a reading of this card and is never moved.
+  if(align.guide !== was && marksUntouched()) seedMarks();
+  // Layer down: the panel and the outline over the finished master still describe what a
+  // run would fit against, so both are re-stated and there is no layer to rebuild.
+  if(!align.on){ renderAlignPanel(); drawBand(); return; }
+  if(marksOn() !== had){ const c = card(); if(c) buildAlignLayer(c); }
+  renderAlignPanel();
+  if(marksOn()){ positionLines(); computeExtend(); }
+  else { align.plan = null; drawTarget(); syncRunLabel(); }
 }
 function sourceExtra(){
   return `<hr class="rule" style="margin:.875rem 0">
@@ -2250,7 +3168,6 @@ function toolNote(s){
 /* Every mutation names the side it acts on, so the other side is untouched. */
 async function runStep(cmd, bothSides){
   const c = card();
-  if(!await okCascade(c, cmd)) return;
   const body = {cmd, ids:[c.id], settings:stepSettings(cmd), force:true};
   if(!bothSides && twoSided(c)) body.face = state.face + 1;
   if(cmd === 'border'){
@@ -2263,13 +3180,16 @@ async function runStep(cmd, bothSides){
       toast('Align the border first — open the marks and place them.');
       return;
     }
+    // Only sent when the panel was actually opened: absent means "keep whatever this
+    // card already carries", and `{}` means "back to the defaults" — two different
+    // requests, and the CLI spells the second one `--no-tune`.
+    if(fill.open) body.tune = fill.values;
   }
   await act('/api/step', body, `${cmd} · ${c.id}`);
   afterStep(cmd);
 }
 async function pipe(cmd, key){
   const c = card();
-  if((cmd === 'skip' || cmd === 'reset') && !await okCascade(c, key)) return;
   const body = {cmd, step:key, ids:[c.id]};
   if(twoSided(c)) body.face = state.face + 1;
   await act('/api/step', body, `${cmd} ${key} · ${c.id}`);
@@ -2277,7 +3197,6 @@ async function pipe(cmd, key){
 }
 async function refetch(){
   const c = card();
-  if(!await okCascade(c, PIPE()[0].key)) return;
   const body = {ids:[c.id], game:c.game};
   if(twoSided(c)) body.face = state.face + 1;
   await act('/api/fetch', body, `Fetched ${c.id}`);
@@ -2286,15 +3205,14 @@ async function refetch(){
 async function importOriginal(inp){
   if(!inp.files[0]) return;
   const c = card();
-  if(!await okCascade(c, PIPE()[0].key)){ inp.value = ''; return; }
   const fd = new FormData();
   fd.append('file', inp.files[0]); fd.append('id', c.id);
   fd.append('stage', PIPE()[0].stage); fd.append('game', c.game);
   if(twoSided(c)) fd.append('face', String(state.face + 1));
-  $('#busy').classList.add('on');
+  showBusy('import');
   const r = await fetch('/api/import', {method:'POST', body:fd});
   const j = await r.json();
-  $('#busy').classList.remove('on');
+  hideBusy();
   toast(j.ok ? 'Imported' : 'Failed\n' + tail(j.log || JSON.stringify(j)));
   await refresh(true); afterStep('run');
 }
@@ -2343,6 +3261,9 @@ const align = {
   // which card+side the current marks were placed on, so switching either one
   // starts from a fresh rectangle instead of inheriting someone else's border
   owner:null,
+  // the target the marks were last *seeded* from, so an untouched rectangle can be told
+  // from one somebody read off the picture — see `seedMarks`
+  seeded:null,
   // whether the marks are on the card and draggable. Always starts **off**: the
   // step opens on the target outline, and placing the marks is a thing you
   // choose to do. It is not a mode — the panel and Skip are there either way.
@@ -2357,10 +3278,19 @@ function showMarks(on){ align.show = !!on; renderCard(); }
 /* Back to where the spec says the border should be — the same place the marks
    are first placed, so Reset means "undo my dragging", not "jump to 8%". */
 function resetMarks(){
-  align.blue = targetMarks();
+  seedMarks();
   positionLines(); computeExtend(); syncRunLabel();
 }
-function setSearchRelated(on){ state.search.related = on; }
+/* Put the marks on the current spec's target and remember that is where they came from.
+   Dragging, nudging or typing moves `blue` and not `seeded`, so the two being equal means
+   nobody has read this card yet — which is what lets a *change of spec* re-seat them
+   without ever overwriting a reading. */
+function seedMarks(){
+  align.blue = targetMarks();
+  align.seeded = {...align.blue};
+}
+const marksUntouched = () => !!align.seeded
+  && ['t','r','b','l'].every(k => align.blue[k] === align.seeded[k]);
 
 /* The spec's own inset, as mark positions. A borderless spec is all zeros, which
    is exactly right: the marks would sit on the image edges. */
@@ -2399,7 +3329,8 @@ async function loadSpecFacts(c){
     if(m && !m.error && align.facts === key){
       align.meas = m;
       if(viewerOwner(c) !== drawnFor) return;   // we are looking at something else now
-      renderAlignPanel();
+      // the step panel first, then the align panel — see `paintBorderPanel`
+      paintBorderPanel();
       if(!align.on) drawBand();   // the done view's outline, now that the spec is known
     }
   } catch { /* the panel simply says nothing about the spec */ }
@@ -2434,7 +3365,7 @@ async function startAlign(){
   // the marks start where the spec says the border should be. Not a measurement
   // of this card — the target, stated plainly, which is the honest starting point
   // and the one place a person can drag *from* rather than guess at.
-  if(fresh) align.blue = targetMarks();
+  if(fresh) seedMarks();
   buildAlignLayer(c);
   renderAlignPanel();
   if(marksOn()){ positionLines(); computeExtend(); }
@@ -2447,7 +3378,8 @@ function buildAlignLayer(c){
   $$('.stageimg, .cmp').forEach(el => { el.style.visibility = 'hidden'; });
   $('#allayer')?.remove();
   const layer = document.createElement('div');
-  layer.className = 'alignlayer'; layer.id = 'allayer';
+  layer.className = 'alignlayer';
+  layer.id = 'allayer';
   layer.innerHTML = `
     <img class="al-work" alt="Original scan" src="${viewsrc(c.id, PIPE()[0].stage, state.face)}">
     <div class="al-ghost" id="al_ghost"></div>
@@ -2480,7 +3412,6 @@ function positionLines(){
     const tag = el.querySelector('.al-tag');
     if(tag) tag.textContent = `${el.dataset.e.toUpperCase()} ${(v*100).toFixed(2)}%`;
   });
-  syncEdgeFields();
 }
 function setEdge(e, v){
   const b = align.blue;
@@ -2629,8 +3560,13 @@ const activeGuide = () =>
   (align.meas.guides || []).find(g => g.id === align.guide) || align.meas.guide;
 function computeExtend(){
   if(!align.on || !align.meas) return;
+  // No spec to fit against — `solveFit` reads `guide.inset` and would throw. Nothing to
+  // solve is not an error state here: it is the printing nobody has measured, waiting on
+  // a Frame choice, and `renderAlignPanel` has already said so.
+  const guide = activeGuide();
+  if(!guide){ align.plan = null; syncRunLabel(); return; }
   const stretch = $('#so_stretch') ? $('#so_stretch').checked : false;
-  align.plan = solveFit(align.meas, align.blue, stretch, activeGuide());
+  align.plan = solveFit(align.meas, align.blue, stretch, guide);
   drawGhost();
   renderExtReadout();
   // the Run button is held shut until there is a fit to run, and this is the
@@ -2687,31 +3623,155 @@ function renderExtReadout(){
     ${p.cropped.length ? `<p class="hint mb-0" style="color:var(--hold)">
        Shaves the over-target ${p.cropped.join(', ')}.</p>` : ''}`;
 }
-function syncEdgeFields(){
-  for(const e of ['t','r','b','l']){
-    const el = $('#al_' + e);
-    if(el && document.activeElement !== el) el.value = (align.blue[e] * 100).toFixed(2);
-  }
-}
-/* Which spec is in force, *why*, and the one control that changes it for good.
-   Shown whether or not the marks are up: it is a fact about the card, not about
-   the align tool. A per-run override lives in the step's own Frame setting; a pin
-   is a decision about this card, so it is offered where the card is. */
+/* Which spec is in force, what else applies, and the one control that changes it for
+   good. Shown whether or not the marks are up: it is a fact about the card, not about
+   the align tool. A per-run override lives in the step's own Frame setting; a pin is a
+   decision about this card, so it is offered where the card is.
+
+   **A set can hold more than one border**, and `res.alternatives` is the ones the rules
+   really reach — not "any spec you like", which the Frame setting already offers. When
+   there is more than one, this is a *choice*, so it renders as one: `specChooser`. With
+   only one it is a label, and a one-option radio group is not a choice.
+
+   **It reports what the fit will use, not what the rules resolved**, and those differ in
+   the two cases that matter: a Frame chosen in the step's settings overrides the
+   resolution for the run (so this said the resolved spec while the fit used another), and
+   a printing nobody has measured resolves to *nothing at all* — where this used to render
+   an empty string and say nothing, on the one card that most needed explaining. */
 function whyThisSpec(){
   const res = align.meas && align.meas.resolution;
   if(!res) return '';
+  const over = align.guide
+    ? (align.meas.guides || []).find(g => g.id === align.guide) : null;
+  // A frame chosen for the run wins over whatever resolved, exactly as `--frame` does,
+  // so that is what is reported — and `Pin` turns this run's choice into the card's.
+  if(over) return `
+    <div class="fsone" title="${esc(over.id)}">
+      <span>
+        <span class="fsname">${esc(shortSpecName(over.name))}</span>
+        <span class="fsnum">${esc(specWidths(over))} · chosen for this run</span>
+      </span>
+      ${pinButton(align.meas.pin, 'Keep')}
+    </div>`;
+  // Nothing measured describes this printing. It is a state, not a failure — but it is
+  // the state where a person has to *do* something, so it says what and where. The
+  // `border` CLI says the same sentence and offers the same escape hatch (`--frame`).
+  if(!res.spec) return `
+    <p class="hint mb-0 mt-2" style="color:var(--hold)">${ticks(res.note)}</p>
+    <p class="hint mb-0 mt-1">Pick a <b>Frame spec</b> above to fit against it for this
+      run — then align as usual. <b>Pin</b> keeps it for this card.</p>`;
+  const alts = res.alternatives || [];
+  const problem = res.missing || res.undecided.length
+    ? `<p class="hint mb-0 mt-1" style="color:var(--hold)">${ticks(res.note)}</p>` : '';
+  if(alts.length) return specChooser(res, alts) + problem;
+  // One spec, so nothing to pick between — and therefore **no selection styling**: an
+  // accented frame on the only row would spend the signal that says "this one, not that
+  // one" where there is no other one, which is the whole thing being fixed here. A plain
+  // label instead, carrying what the old bar left out: the spec's *name*. That bar showed
+  // the bare id and put the names on the other specs' buttons, so the one in force was
+  // the only one you could not read.
   return `
-    <div class="d-flex gap-2 align-items-center flex-wrap mt-2">
-      <span class="chip ${res.sure ? 'good' : 'warn'}">${esc(res.via_label)}</span>
-      <span class="hint mono">${esc(res.spec.id)}</span>
-      ${align.meas.pin
-        ? `<button class="btn btn-sm btn-ghost ms-auto" onclick="unpinCard()"
-             title="Back to whatever the rules resolve">Unpin</button>`
-        : `<button class="btn btn-sm btn-ghost ms-auto" onclick="pinCard()"
-             title="Pin this card to the spec selected above, for every later run">Pin this spec</button>`}
-    </div>
-    ${res.missing || res.undecided.length ? `<p class="hint mb-0 mt-1"
-      style="color:var(--hold)">${esc(res.note)}</p>` : ''}`;
+    <div class="fsone" title="${esc(res.spec.id)}">
+      <span>
+        <span class="fsname">${esc(shortSpecName(res.spec.name))}</span>
+        <span class="fsnum">${esc(specWidths(res.spec))} · ${align.meas.pin
+          ? 'pinned to this card' : `matched by ${esc(res.via_label)}`}</span>
+      </span>
+      ${pinButton(align.meas.pin)}
+    </div>${problem}`;
+}
+/* `specs`' notes are one sentence shared with the CLI, and they mark a command the way a
+   terminal does — ``proxdex frames set``. Printed verbatim in a browser those backticks are
+   just punctuation, so they are rendered as the mono type this app already uses for every
+   id and command. Escaped first: this is the same untrusted-ish text as everywhere else,
+   and the only markup allowed out is the span this adds. */
+function ticks(text){
+  return esc(text || '').replace(/`([^`]+)`/g, '<span class="mono">$1</span>');
+}
+/* Every spec in this list belongs to the same game — a spec carries a game and the
+   rules only ever reach its own — so the `Pokémon · ` every name starts with is a
+   shared prefix taking a third of a narrow row. Dropped for display only; the full id
+   is on the row's tooltip and the frames screen shows names whole. */
+function shortSpecName(name){
+  const cut = (name || '').indexOf(' · ');
+  return cut > 0 ? name.slice(cut + 3) : (name || '');
+}
+/* A spec's four border widths, which is what somebody comparing two of them is
+   actually comparing. Opposite edges collapse to one number when they are equal — most
+   specs are symmetric, and `2.56 / 2.56 / 2.56 / 2.56` is four numbers saying one
+   thing — but never when they differ, because an asymmetric spec's *shape* is the whole
+   reason there are two candidates on an e-Card set. */
+function specWidths(spec){
+  const mm = spec.mm || [];
+  if(spec.frameless || !mm.length) return 'no printed frame';
+  const [t, r, b, l] = mm.map(v => v.toFixed(2));
+  const flat = t === b && r === l ? [t, r] : [t, r, b, l];
+  return `${flat.join(' / ')} mm`;
+}
+/* Keep this spec for this card, or stop keeping it. One function, because the label is
+   the only thing that differs between the two places it appears: a lone spec is `Pin`,
+   while the chooser's footer reads `Pin it` — the *it* being the row above. */
+function pinButton(pinned, keep = 'Pin'){
+  return pinned
+    ? `<button class="btn btn-sm btn-ghost" onclick="unpinCard()"
+         title="Back to whatever the rules resolve">Unpin</button>`
+    : `<button class="btn btn-sm btn-ghost" onclick="pinCard()"
+         title="Keep this spec for this card on every later run">${esc(keep)}</button>`;
+}
+/* Every spec that applies, as a radio group. Picking one **pins** it, because the
+   choice is about this card and has to survive the next run — and the offer is
+   symmetric, so the spec you moved off is then just another row and one click back.
+   The rows carry the names and the widths; the row in force carries the via chip that
+   says how it got there, on the row rather than above it. */
+function specChooser(res, alts){
+  // **Sorted by id, not "the winner first".** `resolve` hands back the spec in force
+  // plus the others, so rendering in that order moved whichever row you clicked to the
+  // top the moment you clicked it — a radio group that rearranges under the pointer,
+  // where the thing you just chose is no longer where you chose it. The set of rows is
+  // the same either way (picking swaps which one is the winner), so a key that does not
+  // depend on the choice keeps every row still. Which one is selected is said by the
+  // accent and the radio, which is what a selection should be said by.
+  const rows = [{id:res.spec.id, name:res.spec.name, mm:res.spec.mm,
+                 frameless:res.spec.frameless, via_label:res.via_label, on:true},
+                ...alts.map(a => ({...a, on:false}))]
+    .sort((a, b) => a.id.localeCompare(b.id));
+  // The via is **not** a chip on the row here, unlike the single-spec label: it is the
+  // same value on every row that could be selected (all of these were reached), so as a
+  // per-row badge it competed with the names for a narrow row and said nothing that
+  // distinguished them. It states the group's footing once, below, and each row's own
+  // route is on its tooltip.
+  const opts = rows.map(r => `
+    <label class="fsopt ${r.on ? 'is-on' : ''}"
+      title="${esc(r.id)} — applies via ${esc(r.via_label)}">
+      <input type="radio" name="fspick" class="form-check-input"
+        data-spec="${esc(r.id)}" ${r.on ? 'checked' : ''} onchange="pickSpec(this)">
+      <span>
+        <span class="fsname">${esc(shortSpecName(r.name))}</span>
+        <span class="fsnum">${esc(specWidths(r))}</span>
+      </span>
+    </label>`).join('');
+  return `
+    <p class="hint mb-1 mt-2">${rows.length} borders apply to this printing — pick the
+      one this card has.</p>
+    <div class="fspick">${opts}</div>
+    <div class="fsfoot">
+      <span class="hint">${align.meas.pin ? 'Pinned to your choice.'
+        : `Matched by ${esc(res.via_label)}.`}</span>
+      ${pinButton(align.meas.pin, 'Pin it')}
+    </div>`;
+}
+/* A radio changed, so pin what it names. Reads the id off the element rather than
+   closing over it, which is the same reason every other handler here takes `this`:
+   an inline handler's scope starts at the element, so a bare name can resolve to an
+   HTMLElement property instead of the variable meant. */
+function pickSpec(el){
+  const spec = el && el.dataset ? el.dataset.spec : '';
+  const res = align.meas && align.meas.resolution;
+  // Already in force and not pinned: selecting it is not a change, but *keeping* it
+  // is worth recording, since the rules could resolve differently later.
+  if(!spec) return;
+  if(res && res.spec && res.spec.id === spec && align.meas.pin) return;
+  pinSpec(spec);
 }
 function renderAlignPanel(){
   const p = $('#alpanel'), c = card(); if(!p || !c) return;
@@ -2726,14 +3786,10 @@ function renderAlignPanel(){
     p.innerHTML = `<hr class="rule" style="margin:.875rem 0">
       <div class="eyebrow mb-1">Where the border should be</div>
       ${noSource
-        ? `<p class="hint mb-0">Fetch this side's original first — the border is
-           placed on it.</p>`
+        ? `<p class="hint mb-0">Fetch this side's original first.</p>`
         : (st === 'skipped'
-            ? `<p class="hint mb-0">Border is skipped, so the original stands as the
-               master. Unskip it to place a border.</p>`
-            : `<p class="hint mb-0">The frame spec for this card${
-                st === 'done' ? ', which this master was fitted to' : ', ready to align against'
-              }.</p>`) + whyThisSpec()}
+            ? `<p class="hint mb-0">Skipped — the original stands as the master.</p>`
+            : whyThisSpec())}
       ${openable ? `<div class="d-grid gap-2 mt-2">
         <button class="btn btn-sm btn-outline-primary" onclick="showMarks(true)">${
           st === 'done' ? 'Align it again' : 'Align the border'}</button></div>` : ''}`;
@@ -2742,17 +3798,27 @@ function renderAlignPanel(){
     return;
   }
   const g = activeGuide();
+  // **No spec at all**, which happens whenever nothing measured describes the printing
+  // and no Frame has been chosen for the run — every Pokémon set past the e-Reader era,
+  // so not a corner. This read `g.frameless` on a null `g` and *threw*, which took the
+  // whole panel with it: no explanation, and no `Align the border` button either, so the
+  // card looked un-alignable when the escape hatch was one dropdown away. There is
+  // nothing to place a mark against until a spec is chosen, so the panel says so.
+  if(!g){
+    p.innerHTML = `<hr class="rule" style="margin:.875rem 0">
+      <div class="eyebrow mb-1">Where the border should be</div>
+      ${whyThisSpec()}`;
+    align.plan = null;
+    syncRunLabel();
+    return;
+  }
   // Nothing to place on a borderless print, so the panel says so instead of
   // offering marks that would sit on the image edges and mean nothing.
   if(g.frameless){
     p.innerHTML = `<hr class="rule" style="margin:.875rem 0">
       <div class="eyebrow mb-1">Where the border should be</div>
-      <div class="d-flex gap-2 align-items-start mb-2">
-        <span class="chip faint flex-shrink-0">no border</span>
-        <span class="hint">${esc(g.name)}</span>
-      </div>
-      <p class="hint">There is no printed frame to align to, so this reshapes to the
-        card aspect and nothing else. Run it as it is.</p>
+      <p class="hint mb-0">No printed frame to align to — this reshapes to the card
+        aspect and nothing else. Run it as it is.</p>
       ${whyThisSpec()}`;
     syncRunLabel();
     return;
@@ -2760,14 +3826,8 @@ function renderAlignPanel(){
   if(!marksOn()){
     p.innerHTML = `<hr class="rule" style="margin:.875rem 0">
       <div class="eyebrow mb-1">Where the border should be</div>
-      <div class="d-flex gap-2 align-items-start mb-2">
-        <span class="chip faint flex-shrink-0">this spec</span>
-        <span class="hint">${esc(g.name)}</span>
-      </div>
-      <p class="hint">The <b style="color:var(--mark)">dashed</b> outline is where
-        this card's border belongs. Nothing has measured where it actually sits — that is
-        yours to place, because a border read off the image is wrong in ways no
-        screen shows until the card is cut.</p>
+      <p class="hint mb-2">The <b style="color:var(--mark)">dashed</b> outline is where
+        this card's border belongs. Where it <i>actually</i> sits is yours to place.</p>
       <div class="d-grid gap-2 mb-2">
         <button class="btn btn-sm btn-outline-primary" onclick="showMarks(true)">
           Align the border</button>
@@ -2776,42 +3836,171 @@ function renderAlignPanel(){
     syncRunLabel();
     return;
   }
-  // which spec the marks started on, named. There is no grade to show and no
-  // provenance sentence: a spec is four numbers, and where a shipped one's came from
-  // is written down a card per row in `docs/measuring-frames.md`.
-  const warn = `
-    <div class="d-flex gap-2 align-items-start mt-2">
-      <span class="chip faint flex-shrink-0">${g.frameless ? 'no border' : 'this spec'}</span>
-      <span class="hint">${esc(g.name)}</span>
-    </div>`;
-  const why = whyThisSpec();
+  // The numbers used to be four editable % fields. They are gone: nobody types a
+  // border inset — it is *read off the picture* by dragging, which is the whole
+  // argument for the marks over a detector — and the value under the pointer is on
+  // the loupe while you drag, then in the readout below. Four inputs and their
+  // labels were a third of the panel restating what the marks already say.
   p.innerHTML = `
     <hr class="rule" style="margin:.875rem 0">
     <div class="eyebrow mb-1">Where the border is now</div>
-    <p class="hint">Drag <b style="color:var(--mark)">T R B L</b> onto the card's inner
-      border edge — a loupe follows each one. Arrow keys nudge the selected mark;
-      the <b style="color:var(--mark)">dashed</b> outlines are the trim you'll get and
-      the border it's aiming at. They start on the spec's own numbers, so
-      what you are doing is moving them to where this card's border really is.</p>
-    <div class="edges mb-2">
-      ${['t','r','b','l'].map(e => `<div>
-        <label for="al_${e}">${EDGE_NAME[e]} %</label>
-        <input class="form-control form-control-sm" id="al_${e}" type="number" step="0.05"
-               min="0" max="95" onchange="setEdge('${e}', (+this.value||0)/100)"
-               onfocus="selectEdge('${e}')"></div>`).join('')}
-    </div>
+    <p class="hint mb-2">Drag <b style="color:var(--mark)">T R B L</b> onto the inner
+      border edge; arrow keys nudge.</p>
     <div class="d-flex gap-2 mb-2">
       <button class="btn btn-sm btn-outline-secondary flex-fill" onclick="resetMarks()"
         title="Back to the spec's own numbers">Reset</button>
       <button class="btn btn-sm btn-ghost flex-fill" onclick="showMarks(false)"
         title="Put the marks away and look at the target again">Done</button>
     </div>
-    ${warn}
-    ${why}
+    ${whyThisSpec()}
     <div id="al_read" class="mt-2"></div>`;
   positionLines();
   renderExtReadout();
   syncRunLabel();
+}
+
+/* ---------- Step two: how the added border is filled ----------------------
+   Two steps, because they are two different jobs and mixing them was confusing.
+
+   **Step one is the reading.** Place the marks on the card's own border edge and Run.
+   That uses cardbleed's default fill, which is right on almost every card, and it is
+   recorded (`.marks-bordered`) so it never has to be taken again.
+
+   **Step two is the fill**, and it only exists once step one has been done: the panel
+   then offers cardbleed's thirteen settings, and changing one **re-borders the card
+   there and then** — no Preview button, no separate rendering to reconcile with the
+   real thing. What you are looking at *is* the output, which is why this replaced a
+   preview: a preview is a picture of a fit you have not made, and it has to be
+   invalidated, explained and kept in step with the marks.
+
+   The re-run goes through the ordinary `border` verb, so it invalidates the stages after
+   it exactly as any other re-run does, and the CLI re-uses the stored marks — which is
+   what makes "change one number" a single call rather than a re-alignment. */
+const fill = {open:false, busy:false, err:''};
+
+function fillKnobs(){ return (align.meas && align.meas.knobs) || []; }
+function fillValues(){ return (align.meas && align.meas.tune) || {}; }
+function fillChanged(){ return Object.keys(fillValues()).length; }
+/* Does this card's fit invent any border? Half a pixel, because a fit that needs no
+   widening reports its extensions as float noise (~1e-13) rather than as zero. */
+function fillAdds(){
+  const e = align.plan && align.plan.ext;
+  if(e) return ['top','right','bottom','left'].some(k => e[k] > 0.5);
+  // no live plan (the marks are down, the step is done): fall back to the recorded
+  // reading against the spec, which is the same question about the same numbers
+  const m = align.meas, g = m && (m.guide || {});
+  const rec = m && m.marks;
+  if(!rec || !g.inset) return false;
+  const px = [g.inset[0]*m.h, g.inset[1]*m.w, g.inset[2]*m.h, g.inset[3]*m.w];
+  return [rec.top*m.h, rec.right*m.w, rec.bottom*m.h, rec.left*m.w]
+    .some((v, i) => px[i] - v > 0.5);
+}
+
+/* Where this sits is the point of the second step. It goes directly under the step's
+   own settings and **above** the align section — because on a done border step, tuning
+   the fill is the job you came back for, while re-placing the marks is the step-one
+   thing you rarely return to. Below the align panel and the readout it was 795px down a
+   1000px viewport: you had to scroll to reach it and scroll back to see the card. */
+function fillPanel(){
+  const knobs = fillKnobs();
+  if(!knobs.length) return '';
+  const n = fillChanged(), adds = fillAdds();
+  if(!fill.open){
+    return `<button class="btn btn-sm btn-ghost w-100 mt-2" onclick="toggleFill()">
+      Tune the added border${n ? ` · ${n} changed` : ''}</button>`;
+  }
+  return `
+    <div class="panel p-2 mt-2" style="background:var(--ink)">
+      <div class="d-flex align-items-baseline gap-2 mb-1">
+        <span class="eyebrow">Fill of the added border</span>
+        <button class="btn btn-sm btn-link p-0 ms-auto" style="font-size:.7rem"
+          onclick="toggleFill()">hide</button>
+      </div>
+      ${adds
+        ? `<p class="hint">Change one and the card is <b>re-bordered</b> — what you see
+           is the result, not a preview. The geometry never moves; only the invented
+           border does. Later stages are rebuilt from it, as with any re-run.</p>`
+        : `<p class="hint" style="color:var(--hold)">Nothing is being added to this
+           card's border, so none of these can change the picture — every value gives
+           the same file. What reshapes it here is <b>stretch</b> above.</p>`}
+      ${knobs.map(fillControl).join('')}
+      <div class="d-flex gap-2 mt-2">
+        <button class="btn btn-sm btn-outline-secondary flex-fill" onclick="resetFill()"
+          ${n && !fill.busy ? '' : 'disabled'}>Back to defaults</button>
+      </div>
+      ${fill.err ? `<p class="hint mb-0 mt-2" style="color:var(--hold)">${esc(fill.err)}</p>` : ''}
+    </div>`;
+}
+
+function fillControl(k){
+  const cur = fillValues();
+  const v = cur[k.key] !== undefined ? cur[k.key] : k.default;
+  const changed = cur[k.key] !== undefined;
+  const id = 'fk_' + k.key;
+  const off = fill.busy ? 'disabled' : '';
+  // `onchange` and not `oninput`: this re-runs the border step, so it fires when you
+  // leave the field or pick from the list — not on every keystroke or drag
+  const control = k.kind === 'choice'
+    ? `<select class="form-select form-select-sm" id="${id}" ${off}
+         onchange="setFill('${k.key}', this.value)">${
+         k.choices.map(c => `<option value="${esc(c)}" ${c === String(v) ? 'selected' : ''}
+           >${esc(c)}</option>`).join('')}</select>`
+    : (k.kind === 'auto-int'
+        ? `<input class="form-control form-control-sm" id="${id}" ${off}
+             value="${esc(String(v))}" placeholder="auto"
+             onchange="setFill('${k.key}', this.value)">`
+        : `<input class="form-control form-control-sm" id="${id}" type="number" ${off}
+             min="${k.lo}" max="${k.hi}" step="${k.step}" value="${esc(String(v))}"
+             onchange="setFill('${k.key}', this.value)">`);
+  return `<div class="fillrow ${changed ? 'on' : ''}" title="${esc(k.help)}">
+      <label for="${id}">${esc(k.label)}</label>${control}
+    </div>`;
+}
+
+/* Both halves of the border panel, in the order that works.
+   `renderStepPanel` writes the whole `#steppanel`, which emits an **empty** `#alpanel`
+   — so anything that restates it has to re-render the align panel afterwards or it
+   blanks the marks, the readout and the target outline. That exact ordering has bitten
+   this file before, from the other direction (`repaintProof` before `renderStepPanel`),
+   which is why it is one function and not two calls at each site. */
+function paintBorderPanel(){
+  const c = card(); if(!c) return;
+  renderStepPanel(c, state.step);
+  renderAlignPanel();
+}
+
+function toggleFill(){ fill.open = !fill.open; paintBorderPanel(); }
+
+/* One change → one re-border. The settings live on the card (the server hands them
+   back in `/api/frame`), so this sends the whole set each time rather than a delta:
+   that is also what makes "back to defaults" expressible as `{}`. */
+async function setFill(key, raw){
+  const k = fillKnobs().find(x => x.key === key); if(!k) return;
+  const next = {...fillValues()};
+  const text = String(raw).trim();
+  // a value back at its default is not a setting; dropping it is what keeps the card's
+  // record readable and matches what the server stores
+  if(text === '' || text === String(k.default)) delete next[key];
+  else next[key] = text;
+  await applyFill(next);
+}
+async function resetFill(){ await applyFill({}); }
+
+async function applyFill(values){
+  const c = card(); if(!c || fill.busy) return;
+  fill.busy = true; fill.err = ''; paintBorderPanel();
+  const body = {cmd:'border', ids:[c.id], settings:stepSettings('border'),
+                force:true, tune:values};
+  if(twoSided(c)) body.face = state.face + 1;
+  // the marks are not sent: `border` re-uses the reading it recorded, which is the whole
+  // reason step two is one call rather than a re-alignment
+  const ok = await act('/api/step', body, `border · ${c.id}`);
+  fill.busy = false;
+  if(!ok) fill.err = 'That re-border failed — the log is in the toast.';
+  // the card's own record is what the panel shows, so re-read it rather than trusting
+  // what was just sent
+  align.meas = null; align.facts = null;
+  renderCard();
 }
 
 /* Pin this card to the frame spec the panel is showing — the one thing on this
@@ -2820,7 +4009,13 @@ function renderAlignPanel(){
 async function pinCard(){
   const c = card(); if(!c || !align.meas) return;
   const spec = align.guide || (align.meas.resolution && align.meas.resolution.spec.id);
-  if(!spec) return;
+  if(spec) await pinSpec(spec);
+}
+/* Pick one of the specs that apply. Named rather than reached through `pinCard`'s
+   "whatever is selected", because the alternatives are not selected — they are
+   offered, and clicking one is the act of choosing it. */
+async function pinSpec(spec){
+  const c = card(); if(!c || !spec) return;
   if(!await act('/api/frames/pin', {ids:[c.id], spec}, `Pinned ${c.id} to ${spec}`)) return;
   align.meas = null; align.facts = null;
   renderCard();
@@ -2844,106 +4039,886 @@ function syncRunLabel(){
   btn.textContent = stStatus(c, s.stage) === 'done'
     ? `${s.run_label} again` : s.run_label;
   btn.disabled = !ready;
+  // Two different reasons to be shut, and telling somebody to align a card that has no
+  // spec to align *to* sends them at the wrong control — which is what it did.
+  const noSpec = !!(align.meas && !activeGuide());
   btn.title = ready
     ? (noBorder() ? 'Reshapes to the card aspect — this printing has no frame'
                   : 'Fits to the frame spec using the marks you placed')
-    : 'Align the border first — nothing has measured where it sits';
+    : (noSpec
+        ? 'Choose a frame spec first — nothing measured describes this printing'
+        : 'Align the border first — nothing has measured where it sits');
 }
 
-/* ---------- search -------------------------------------------------------
-   The query lives in the URL (and in state.search), so a search is a shareable
-   link and coming back to it restores both the inputs and the last results —
-   no second round-trip to the card API. */
+/* ---------- finding cards: one query, two screens -------------------------
+   **Browse and Search are the same question asked from two directions**, which is
+   why they share `state.find`, one filter bar, one result grid and one pager.
+   Browsing a set is a query carrying a set and no name; searching is a query
+   carrying a name. That is exactly what `proxdex.browse.Query` says in Python, and
+   /api/search answers both — so there is no second result row to keep in step and
+   no way for the two screens to disagree about what a filter means.
+
+   What is *not* shared is the index: `state.browse` is the set index's own state
+   (which game, which group, a filter over set names), because "what sets exist"
+   is a different question from "which cards match". */
+const FIND = () => state.find;
+const findGame = () => state.find.game || state.meta.default_game;
+const browseGame = () => state.browse.game || state.meta.default_game;
+/* The facet vocabulary and the set index are per game and never change while you
+   look at them, so each is fetched once and held. A game with neither yet renders
+   its controls empty rather than blocking the screen — same call the step panel
+   makes for an absent upscaler. */
+const facetsFor = g => state.facets[g] || null;
+const expFor = g => state.exp[g] || null;
+
+async function loadFacets(game){
+  if(state.facets[game]) return state.facets[game];
+  try{
+    const r = await get('/api/facets?game=' + encodeURIComponent(game));
+    state.facets[game] = r;
+    return r;
+  }catch(e){ return null; }
+}
+async function loadExpansions(game){
+  if(state.exp[game]) return state.exp[game];
+  /* the set index is the one read here that is genuinely slow the first time — one
+     request for the lot, and the server warms 174 logos behind it — so it gets the
+     same strip the result grid does. Its host renders after this call starts, which
+     `paintRead` copes with by looking the host up per tick. */
+  beginRead('results_top', 'read:sets:' + game);
+  try{
+    const r = await get('/api/expansions?game=' + encodeURIComponent(game));
+    endRead(true);
+    if(r && !r.error) state.exp[game] = r;
+    return r;
+  }catch(e){ endRead(false); throw e; }
+}
+/* One expansion by id, out of the index we already hold — a set view must not
+   spend a request to name the set you just clicked. Null until the index has
+   loaded, which is a "not yet" and not a "no such set". */
+function expansionOf(game, setId){
+  const idx = expFor(game); if(!idx) return null;
+  for(const g of idx.groups){
+    const hit = g.expansions.find(e => e.id === setId);
+    if(hit) return hit;
+  }
+  return null;
+}
+
+/* ---------- the filter bar, rendered from /api/facets ---------------------
+   The UI spells no rarity, no type and no sort of its own: the values are the
+   provider's own catalogs and the sorts are the server's enum, exactly as the step
+   panels are built from /api/meta. A facet the provider would not list is simply
+   absent — see proxdex.browse.facets on why an empty dropdown is worse than none. */
+const FACET_FIELD = {set:'set', rarity:'rarity', year:'year', type:'type',
+                     supertype:'supertype', subtype:'subtype', color:'color'};
+function facetControl(f){
+  const cur = FIND()[FACET_FIELD[f.facet]] || '';
+  if(f.multi){
+    // a multi-pick facet travels as a comma list, both in `state.find` and in the
+    // URL, so one string is the whole value and the chips below can remove one
+    const picked = cur.split(',').filter(Boolean);
+    return `<div class="col-6 col-md-auto"><select class="form-select form-select-sm"
+        onchange="addFacet('${f.facet}', this.value); this.selectedIndex = 0">
+        <option value="">${esc(f.label)}…</option>
+        ${f.values.filter(v => !picked.includes(v)).map(v =>
+          `<option value="${esc(v)}">${esc(v)}</option>`).join('')}
+      </select></div>`;
+  }
+  return `<div class="col-6 col-md-auto"><select class="form-select form-select-sm"
+      onchange="setFacet('${f.facet}', this.value)">
+      <option value="">${esc(f.label)}: any</option>
+      ${f.values.map(v =>
+        `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('')}
+    </select></div>`;
+}
+function filterBar({withSet = true} = {}){
+  const fx = facetsFor(findGame());
+  const f = FIND();
+  const sorts = (fx && fx.sorts) || [];
+  return `
+    <div class="row g-2 align-items-center">
+      ${withSet ? `<div class="col-6 col-md-auto"><input class="form-control form-control-sm"
+        style="max-width:9rem" placeholder="set id" value="${esc(f.set)}"
+        onchange="setFacet('set', this.value)"></div>` : ''}
+      <div class="col-6 col-md-auto"><input class="form-control form-control-sm"
+        style="max-width:6rem" placeholder="year" value="${esc(f.year)}"
+        onchange="setFacet('year', this.value)"></div>
+      ${(fx ? fx.facets : []).map(facetControl).join('')}
+      <div class="col-6 col-md-auto"><select class="form-select form-select-sm"
+        onchange="setSort(this.value)">
+        ${sorts.map(s => `<option value="${esc(s.id)}"
+          ${s.id === f.sort ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}
+      </select></div>
+      <div class="col-6 col-md-auto"><button class="btn btn-sm btn-outline-secondary"
+        onclick="toggleDir()" title="Which way the sort runs">${dirLabel()}</button></div>
+      <div class="col-auto ms-auto"><span class="hint">${esc(perPageNote())}</span></div>
+    </div>
+    ${activeChips()}`;
+}
+/* Which way the current sort runs. Unset means the sort's own useful direction —
+   newest first for a date, A-Z for a name — which is the server's rule, served in
+   /api/facets rather than repeated here. */
+function sortDefaultDesc(){
+  const fx = facetsFor(findGame());
+  const s = fx && (fx.sorts || []).find(x => x.id === FIND().sort);
+  return s ? !!s.newest_first : true;
+}
+function dirDesc(){ const d = FIND().desc; return d === null ? sortDefaultDesc() : d; }
+function dirLabel(){ return dirDesc() ? '↓ desc' : '↑ asc'; }
+function perPageNote(){ return `${FIND().per_page} per page`; }
+
+function activeChips(){
+  const f = FIND(), out = [];
+  const add = (facet, value) => out.push(
+    `<span class="qchip"><b>${esc(facet)}</b> ${esc(value)}
+       <button onclick="dropFacet('${facet}', ${JSON.stringify(value)})"
+         title="Remove this filter" aria-label="Remove">×</button></span>`);
+  for(const facet of ['set','rarity','year','supertype','subtype']){
+    if(f[facet]) add(facet, f[facet]);
+  }
+  for(const facet of ['type','color']){
+    (f[facet] || '').split(',').filter(Boolean).forEach(v => add(facet, v));
+  }
+  if(!out.length) return '';
+  return `<div class="qchips mt-2">${out.join('')}
+    <button class="btn btn-sm btn-link p-0 ms-1" style="font-size:.6875rem"
+      onclick="clearFacets()">clear all</button></div>`;
+}
+/* Every filter change re-runs the query from page 1: a filter applied to page 7
+   would land you past the end of a smaller answer, which reads as "no results". */
+function setFacet(facet, value){
+  state.find[FACET_FIELD[facet]] = (value || '').trim();
+  state.find.page = 1;
+  runFind();
+}
+function addFacet(facet, value){
+  if(!value) return;
+  const field = FACET_FIELD[facet];
+  const have = (state.find[field] || '').split(',').filter(Boolean);
+  if(!have.includes(value)) have.push(value);
+  state.find[field] = have.join(',');
+  state.find.page = 1;
+  runFind();
+}
+function dropFacet(facet, value){
+  const field = FACET_FIELD[facet];
+  const have = (state.find[field] || '').split(',').filter(Boolean);
+  state.find[field] = have.length > 1 ? have.filter(v => v !== value).join(',') : '';
+  state.find.page = 1;
+  runFind();
+}
+function clearFacets(){
+  Object.assign(state.find, {rarity:'', year:'', type:'', supertype:'', subtype:'',
+                             color:''});
+  // the set is *not* cleared here: on a set view it is the page you are on, and
+  // dropping it would silently widen the query to every set at once
+  if(state.view !== 'browse') state.find.set = '';
+  state.find.page = 1;
+  runFind();
+}
+function setSort(sort){ state.find.sort = sort; state.find.desc = null;
+                        state.find.page = 1; runFind(); }
+function toggleDir(){ state.find.desc = !dirDesc(); state.find.page = 1; runFind(); }
+function goPage(n){
+  const p = Math.max(1, parseInt(n, 10) || 1);
+  if(p === state.find.page) return;
+  state.find.page = p;
+  runFind();
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+
+/* ---------- the pager ----------------------------------------------------
+   The server counts the *whole* answer, not this page, so the control can offer a
+   last page and say where you are. A provider that will not say how many matched
+   sends total = -1, and then there is no page count to print — Next is offered
+   from a full page alone, which is what /api/search's `has_more` means there. */
+function pager(page){
+  if(!page || (!page.has_more && page.page === 1)) return '';
+  const known = page.total >= 0;
+  const at = known
+    ? `${page.first}–${page.last} of ${page.total}`
+    : `${page.first}–${page.last}`;
+  const of = known && page.pages > 1 ? ` · page ${page.page} of ${page.pages}` : '';
+  return `
+    <div class="pager mt-3">
+      <button class="btn btn-sm btn-outline-secondary" ${page.page <= 1 ? 'disabled' : ''}
+        onclick="goPage(${page.page - 1})">← Prev</button>
+      <span class="at mono">${esc(at)}${esc(of)}</span>
+      <button class="btn btn-sm btn-outline-secondary" ${page.has_more ? '' : 'disabled'}
+        onclick="goPage(${page.page + 1})">Next →</button>
+      ${known && page.pages > 2 ? `
+        <input class="form-control form-control-sm jump mono ms-2" type="number" min="1"
+          max="${page.pages}" value="${page.page}" title="Jump to a page"
+          onchange="goPage(this.value)">
+        <button class="btn btn-sm btn-link p-0" style="font-size:.75rem"
+          onclick="goPage(${page.pages})">last</button>` : ''}
+    </div>`;
+}
+
+/* ---------- the result grid ---------------------------------------------
+   Shared by Search and by a set view, because a hit is a hit. Each carries the
+   library's own answer to "have I got this print?" as a corner tick, and a card
+   already filed is not selectable — there is nothing to add. */
+/* **Whether a card is already filed is asked of the library, not of the response.**
+   The server answers `have` when it draws the page, and that answer is stale the
+   moment you add something — so the grid reads `state.cards`, which every add
+   refreshes. One source of truth, and the tick appears the instant the fetch lands
+   rather than on the next query. */
+const haveCard = id => state.cards.some(c => c.id === id);
+/* **And so is how much of a set you hold.** The server counts it when it draws the
+   index, which is a snapshot: add three cards and every tile still showed the old
+   number until something re-fetched the whole set list. `state.cards` is refreshed by
+   every mutation, so counting it here means the bar and the "n of m in library" line
+   are right the moment a fetch lands — and it costs no request at all. */
+const ownedIn = setId => state.cards.reduce((n, c) => n + (c.set === setId), 0);
+
+function hitsHtml(rows){
+  // whether the query is one set — the tiles then say what differs within it
+  const inSet = !!FIND().set;
+  return rows.map(x => {
+    const kind = x.oversized ? 'oversized'
+      : (x.layout && x.layout !== 'single' ? layoutOf(x.layout)?.label || x.layout : '');
+    const have = haveCard(x.id), picked = state.pick.has(x.id);
+    const busy = state.adding.has(x.id);
+    return `
+      <div class="hit ${have ? 'have' : ''} ${picked ? 'picked' : ''} ${x.oversized ? 'over' : ''}"
+           data-cid="${esc(x.id)}"
+           title="${esc(x.name)} · ${esc(x.id)} · ${esc(x.set)} · ${esc(x.rarity)} · ${esc(x.artist)}${
+             have ? ' — already in your library' : ''}"
+           onclick="pickHit('${esc(x.id)}', event)">
+        <span class="hitshot">
+          ${have ? '<span class="have-tick" title="Already in your library">✓</span>'
+                 : (picked ? '<span class="badge-pick" title="Picked">✓</span>' : '')}
+          <a class="full" target="_blank" rel="noopener" href="${esc(x.image)}"
+             title="Open the full-resolution scan in a new tab"
+             onclick="stopClick(event)">full ↗</a>
+          <img class="skel" loading="lazy" decoding="async" alt="${esc(x.name)}"
+               src="${artsrc(x.thumb || x.image, 'card')}" onload="unskel(this)"
+               onerror="unskel(this);this.style.opacity=.12">
+          ${kind ? `<span class="kindtag">${esc(kind)}</span>` : ''}
+        </span>
+        <div class="hitmeta">
+          <div class="nm">${esc(x.name)}</div>
+          ${/* **Inside a set, the set is not news — and it was the thing getting the
+                room.** Every tile of a set view read `Commander Legends · 2020 · 7…`:
+                two facts identical on all sixty tiles, spending the line, with the
+                collector number — the one thing that tells this printing from the next
+                — truncated off the end of it. So the line is what varies *here*: the
+                number leads inside a set, and the set leads across a search. Three
+                lines either way, because a tile that changed height with the query
+                would ripple through a grid that is finally level. */''}
+          ${inSet
+            ? `<div><span class="mono">${esc(x.number)}</span> · ${esc(x.rarity)}</div>
+               <div>${esc(x.artist)}</div>`
+            : `<div>${setIconImg(x.set_id)}${esc(x.set)} ·
+                 <span class="mono">${esc(x.number)}</span></div>
+               <div>${esc(x.rarity)} · ${esc(x.artist)}</div>`}
+        </div>
+        ${have
+          ? '<span class="addbtn done">✓ In your library</span>'
+          : `<button class="addbtn" ${busy ? 'disabled' : ''}
+               onclick="stopClick(event);addOne('${esc(x.id)}')"
+               title="Download this card now">${busy ? 'Adding…' : '+ Add'}</button>`}
+      </div>`;
+  }).join('');
+}
+
+/* ---------- picking, and adding ------------------------------------------
+   Two ways in, because they are two different intentions and both are asked for
+   constantly: **this one, now** (the button under the card) and **these twelve,
+   when I have finished looking** (click the art, then the tray's one button). The
+   labels say which is which, and neither can be mistaken for the other.
+
+   A card already in the library is neither: there is nothing to add. */
+/* **The basket survives a reload, because everything else on these screens does.**
+   Every other piece of state here is in the URL, and the stated property of this UI is
+   that a reload lands where you were — an in-memory basket would be the one thing that
+   silently didn't. `sessionStorage`, not `localStorage`: it belongs to this tab and
+   this sitting, and a week-old basket you have forgotten picking is worse than none.
+
+   Cards already filed are dropped on the way back in: you may have added them from
+   another tab, and a basket offering to fetch what you already have is noise. */
+/* Keyed by the library it was picked for. Point the UI at another library in the same
+   tab and those picks are somebody else's shopping list — restoring them would offer to
+   fetch cards you never chose here. */
+const pickKey = () => 'proxdex.pick:' + ((state.meta && state.meta.root) || '');
+function savePicks(){
+  try{
+    sessionStorage.setItem(pickKey(), JSON.stringify([...state.pick.values()]));
+  }catch(e){ /* private mode, or a full quota — the basket just won't outlive the tab */ }
+}
+function loadPicks(){
+  try{
+    const rows = JSON.parse(sessionStorage.getItem(pickKey()) || '[]');
+    for(const r of rows) if(r && r.id && !haveCard(r.id)) state.pick.set(r.id, r);
+  }catch(e){ /* nothing to restore */ }
+}
+
+function pickHit(id, ev){
+  // the whole tile is the pick target now, so a click on a control *inside* it — the
+  // Add button, the `full ↗` link — must not also toggle the pick. Both stop the
+  // event themselves; this is the belt to that braces.
+  if(ev && ev.target.closest('button, a')) return;
+  if(ev) ev.preventDefault();
+  if(haveCard(id)) return;
+  if(state.pick.has(id)) state.pick.delete(id);
+  else {
+    const row = rowOf(id);
+    if(row) state.pick.set(id, row);
+  }
+  paintOneHit(id);
+  paintPickBar();
+}
+/* Repaint one tile rather than the grid: picking the tenth card must not make the
+   browser re-decode the other fifty-nine images, which is exactly the flicker the
+   rest of this file is built to avoid. */
+function paintOneHit(id){
+  const el = document.querySelector(`.hit[data-cid="${cssq(id)}"]`);
+  const row = (state.results && state.results.items || []).find(r => r.id === id);
+  if(!el || !row) return;
+  el.outerHTML = hitsHtml([row]);
+}
+/* An id is `<set>-<number>` and a Magic collector number can be `A-123` — safe in a
+   selector, but quoted through the browser's own escaper rather than by hand. */
+const cssq = id => (window.CSS && CSS.escape) ? CSS.escape(id) : id;
+
+function pickAllOnPage(){
+  for(const row of (state.results && state.results.items) || []){
+    if(!haveCard(row.id)) state.pick.set(row.id, row);
+  }
+  paintHits(state.results);
+}
+function clearPicked(){
+  state.pick.clear();
+  if(state.results) paintHits(state.results);
+  paintPickBar();
+}
+function unpick(id){ state.pick.delete(id); paintOneHit(id); paintPickBar(); }
+
+/* **A card is fetched under its *own* game, never the screen's.** The basket outlives
+   the screen, so it can hold a Pokémon card picked in Search and still be open while
+   you browse Magic sets — and `game` from the current screen would then send Scryfall
+   a pokemontcg id. Every row carries its game, so that is what travels. */
+const rowOf = id => (state.results && state.results.items || []).find(r => r.id === id)
+                 || state.pick.get(id) || null;
+const gameOf = id => (rowOf(id) || {}).game || findGame();
+/* **What we already know about a card, so `fetch` need not ask again.** The row on
+   screen came from the provider a moment ago and carries the name, set, rarity and
+   subtypes that a metadata lookup would return — and that lookup is the request that
+   fails when pokemontcg.io is having a bad afternoon.
+
+   **Pokémon only**, and not an oversight: a Magic card's image URL is a uuid path that
+   only Scryfall's own answer carries, so an MTG card genuinely cannot be filed without
+   asking. Sending nothing for those leaves them on the lookup path.
+
+   The server treats every field as bounded, untrusted text (it becomes a folder name)
+   and derives the *picture* from the id itself — so the worst a wrong row can do is
+   mislabel a folder, not file the wrong card. */
+function knownOf(rows){
+  return rows.filter(r => r.game === 'pokemon' && r.name).map(r => ({
+    id: r.id,
+    name: r.name,
+    set_name: r.set || '',
+    rarity: r.rarity && r.rarity !== '—' ? r.rarity : '',
+    subtypes: r.subtypes || '',
+  }));
+}
+
+/* One card, now. The tile says `Adding…` while it runs — a fetch is a download and a
+   network round trip, and a button that looks unpressed for two seconds gets pressed
+   again. */
+async function addOne(id){
+  if(state.adding.has(id)) return;
+  state.adding.add(id);
+  paintOneHit(id);
+  const row = rowOf(id);
+  await act('/api/fetch', {ids:[id], game: gameOf(id),
+                           known: knownOf(row ? [row] : []),
+                           related: !!state.search_related}, `Added ${id}`);
+  state.adding.delete(id);
+  /* **Whether it arrived is asked of the library, not of the exit code.** A batch verb
+     here reports per item and still exits 0 — every one of them does, deliberately, so
+     one bad card does not abandon forty-nine — which means `ok` says "the command ran",
+     not "the card is filed". `state.cards` was just refreshed, so it can be asked
+     directly, and a card that did not arrive stays picked so it can be tried again. */
+  if(haveCard(id)) state.pick.delete(id);
+  else toast(`${id} did not arrive — it is still picked, try again`, 7000);
+  if(state.results) paintHits(state.results);
+  paintPickBar();
+}
+/* Everything picked — **grouped by game**, one call each, which is what
+   `proxdex fetch --game X id id` is. One call for a mixed basket cannot work: the
+   endpoint takes a single game for all its ids, and it is right to, because that is
+   the CLI's shape. */
+async function addPicked(){
+  const rows = [...state.pick.values()];
+  if(!rows.length) return;
+  const byGame = new Map();
+  for(const r of rows){
+    if(!byGame.has(r.game)) byGame.set(r.game, []);
+    byGame.get(r.game).push(r.id);
+  }
+  for(const r of rows) state.adding.add(r.id);
+  paintPickBar();
+  for(const [game, ids] of byGame){
+    await act('/api/fetch',
+              {ids, game, known: knownOf(rows.filter(r => r.game === game)),
+               related: !!state.search_related},
+              `Added ${ids.length} ${game} card${ids.length > 1 ? 's' : ''}`);
+    // **only what actually landed leaves the basket** — asked of the library, since a
+    // batch verb reports per card and still exits 0. What did not arrive stays picked,
+    // which is both the record of what failed and the way to retry it.
+    for(const id of ids) if(haveCard(id)) state.pick.delete(id);
+  }
+  for(const r of rows) state.adding.delete(r.id);
+  const left = state.pick.size;
+  if(left) toast(`${left} did not arrive — still picked, press Add to try again`, 7000);
+  if(state.results) paintHits(state.results);
+  paintPickBar();
+}
+
+/* **The tray is the answer to "where did my selection go".** It is fixed to the
+   bottom of the window and painted from `state.pick`, so it survives turning the
+   page, changing a filter, and switching between Browse and Search — the places the
+   old DOM-read selection silently vanished. It shows the cards themselves, because a
+   count alone does not tell you whether the eight you picked are the eight you
+   meant. */
+function paintPickBar(){
+  savePicks();       // painted and saved together, so the two cannot disagree
+  const host = $('#picktray'); if(!host) return;
+  const rows = [...state.pick.values()], n = rows.length;
+  document.body.classList.toggle('hasbar', n > 0);
+  if(!n){ host.innerHTML = ''; return; }
+  const busy = rows.some(r => state.adding.has(r.id));
+  const shown = rows.slice(-9);
+  return void (host.innerHTML = `<div class="actionbar armed">
+    <span class="picktray">${shown.map(r => `<img src="${artsrc(r.thumb || r.image, 'card')}"
+      alt="${esc(r.name)}"
+      title="${esc(r.name)} · ${esc(r.id)} — click to unpick"
+      onclick="unpick('${esc(r.id)}')" style="cursor:pointer">`).join('')}</span>
+    <b class="mono">${n} picked</b>
+    ${n > shown.length ? `<span class="hint mb-0">(showing the last ${shown.length})</span>` : ''}
+    <span class="hint mb-0 d-none d-md-inline">kept while you page and filter</span>
+    <span class="ms-auto d-flex gap-2 align-items-center flex-wrap">
+      <button class="btn btn-sm btn-ghost" onclick="clearPicked()">Clear</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="pickAllOnPage()">
+        Pick all on this page</button>
+      <button class="btn btn-sm btn-primary" onclick="addPicked()" ${busy ? 'disabled' : ''}>
+        ${busy ? 'Adding…' : `Add ${n} to library`}</button>
+    </span></div>`);
+}
+/* The set's own symbol beside its name, off the index we already loaded — what makes a
+   list of *mixed* prints scannable, which is the Search case. Dropped inside a set view,
+   where every row carries the same symbol and the header already shows it: seven
+   identical glyphs down a column are noise, not information. Absent too when the index
+   has not loaded or the game serves no symbol, and nothing depends on it. */
+function setIconImg(setId){
+  if(FIND().set) return '';
+  const exp = setId ? expansionOf(findGame(), setId) : null;
+  if(!exp || !exp.symbol) return '';
+  return `<img class="seticon ${exp.game === 'mtg' ? 'glyph' : ''}"
+    src="${artsrc(exp.symbol, 'symbol')}" alt="" onerror="this.remove()">`;
+}
+function paintHits(page, boxId){
+  const box = $('#' + (boxId || 'results')); if(!box) return;
+  box.innerHTML = hitsHtml(page.items || []);
+  // a picture the browser already holds is `complete` on insertion, so its plate
+  // comes off now rather than sheening over a card that is already on screen
+  unskelAll(box);
+  const foot = $('#' + (boxId || 'results') + '_pager');
+  if(foot) foot.innerHTML = pager(page);
+  // the screen's own template ships a "Loading…" line, and painting from cache is
+  // not loading — after an add, `render` re-emitted it and nothing took it down
+  if((page.items || []).length) showHint('');
+  paintPickBar();
+}
+
+/* ---------- the ghost grid ------------------------------------------------
+   What a page of results looks like before it arrives. Cells in the grid's own
+   layout, so the old cards are gone the instant you click and nothing shifts when
+   the real ones land — the point being that the page keeps its height rather than
+   collapsing to nothing and springing back.
+
+   **How many is answered honestly or not at all.** Paging inside a query the server
+   has already counted is a case where the number is *known* — a last page of 32 draws
+   32 — and that is the case this was built for. A first search knows nothing, so it
+   draws one screenful rather than a full page of 60: three hits behind sixty ghosts
+   would be a shape nobody promised. `_findKey` is the query minus its page, so
+   "same query, different page" is decided by the request that was actually sent
+   rather than by comparing filter fields by hand. */
+const GHOSTS_UNKNOWN = 12;
+let _findKey = '';
+
+function ghostCount(){
+  const f = FIND(), prev = state.results;
+  const same = prev && _findKey && _findKey === queryKey();
+  if(!same || !prev.items || prev.total < 0) return GHOSTS_UNKNOWN;
+  const per = f.per_page || 60;
+  const left = prev.total - (f.page - 1) * per;
+  return Math.max(1, Math.min(per, left));
+}
+function queryKey(){
+  const p = findParams();
+  p.delete('page');
+  return p.toString();
+}
+function ghostGrid(n){
+  // the real tile's own boxes, emptied — see `.hitghost`. Three meta rows because a
+  // hit has three, and the button, because a tile without one is 28px shorter.
+  const one = `<div class="hit hitghost">
+    <span class="hitshot"><span class="hgshot skelbox"></span></span>
+    <div class="hitmeta">
+      <div class="hgrow nm"><i class="skelbox"></i></div>
+      <div class="hgrow short"><i class="skelbox"></i></div>
+      <div class="hgrow"><i class="skelbox"></i></div>
+    </div>
+    <span class="addbtn"></span></div>`;
+  return one.repeat(Math.max(1, n));
+}
+
+/* ---------- running the query -------------------------------------------- */
+function findParams(){
+  const f = FIND();
+  const p = new URLSearchParams({game: findGame()});
+  if(f.q.trim()) p.set('q', f.q.trim());
+  for(const k of ['set','rarity','year','type','supertype','subtype','color']){
+    if(f[k]) p.set(k, f[k]);
+  }
+  if(f.sort && f.sort !== 'released') p.set('sort', f.sort);
+  if(f.desc !== null && f.desc !== sortDefaultDesc()) p.set('desc', f.desc ? '1' : '0');
+  if(f.page > 1) p.set('page', String(f.page));
+  if(f.per_page !== 60) p.set('per_page', String(f.per_page));
+  return p;
+}
+/* The one place a query is sent. Both screens call it, and it writes the URL as it
+   goes, so every state of either screen is a link you can paste. */
+async function runFind(){
+  syncUrl();
+  const box = $('#results');
+  /* the wait goes where the cards were, not under them. `showHint('')` clears the
+     bottom line the templates ship, because a hint *below* the grid was the whole
+     bug: it said "Searching…" where nobody was looking while the previous page's
+     cards stayed on screen looking current. */
+  showHint('');
+  if(box) box.innerHTML = ghostGrid(ghostCount());
+  if($('#results_pager')) $('#results_pager').innerHTML = '';
+  beginRead('results_top', 'read:' + (FIND().set ? 'browse' : 'search') + ':' + findGame());
+  _findKey = queryKey();
+  const asked = findParams().toString();
+  try{
+    const r = await get('/api/search?' + asked);
+    if(asked !== findParams().toString()) return;   // a later query overtook this one
+    endRead(true);
+    if(r.error){ state.results = null; showHint(r.error); if(box) box.innerHTML = ''; return; }
+    /* **A page past the end is a nearly-right link, not an empty answer.** A pasted
+       URL at page 9 of a query that now has 2 pages would otherwise show a blank
+       grid saying "nothing matched" over 92 cards that did. One corrective request,
+       only in that case, and the guard is that the retry lands inside the range it
+       was just told — so it cannot bounce. */
+    if(!r.items.length && r.total > 0 && r.pages >= 1 && r.page > r.pages){
+      state.find.page = r.pages;
+      return runFind();
+    }
+    state.results = r;
+    paintHits(r);
+    if(r.items.length) showHint('');
+    else { const h = $('#results_hint'); if(h) h.innerHTML = emptyHint(r); }
+  }catch(e){
+    // the ghosts have to go too, or a failed read leaves a grid of cards that will
+    // never arrive sitting under the error
+    endRead(false);
+    state.results = null;
+    if(box) box.innerHTML = '';
+    showHint('Search failed: ' + e);
+  }
+}
+
+/* ---------- Search ------------------------------------------------------- */
 function viewSearch(){
-  const s = state.search;
-  const game = s.game || state.meta.default_game;
+  const f = FIND(), game = findGame();
   const gopts = state.meta.games.map(g =>
     `<option value="${esc(g.id)}" ${g.id === game ? 'selected' : ''}>${esc(g.name)}</option>`).join('');
   const example = state.meta.games.find(g => g.id === game)?.example || '';
   return `
-    <div class="eyebrow mb-2">Find cards</div>
+    <div class="d-flex align-items-baseline gap-2 mb-3 flex-wrap">
+      <div><div class="eyebrow">Find cards by name</div><h5 class="mb-0">Search</h5></div>
+      <span class="hint ms-auto mb-0" style="max-width:30rem">Every word must appear in
+        the name. Ids look like <code class="mono" id="q_example">${esc(example)}</code>.
+        Looking for a whole set instead?
+        <a href="/browse" onclick="return goLink(event,'browse')">Browse by set ↗</a></span>
+    </div>
     <div class="panel p-3 mb-3">
-      <div class="row g-2 align-items-center">
+      <div class="row g-2 align-items-center mb-2">
         <div class="col-12 col-md-3"><select class="form-select form-select-sm" id="f_game"
-          onchange="onGameChange()">${gopts}</select></div>
-        <div class="col-12 col-md-4"><input class="form-control form-control-sm" id="q"
-          placeholder="Card name" value="${esc(s.q)}" onkeydown="if(event.key==='Enter')doSearch()"></div>
-        <div class="col-4 col-md-2"><input class="form-control form-control-sm" id="f_set" placeholder="set" value="${esc(s.set)}"></div>
-        <div class="col-4 col-md-1"><input class="form-control form-control-sm" id="f_rar" placeholder="rarity" value="${esc(s.rarity)}"></div>
-        <div class="col-4 col-md-1"><input class="form-control form-control-sm" id="f_year" placeholder="year" value="${esc(s.year)}"></div>
-        <div class="col-12 col-md-1 d-grid"><button class="btn btn-sm btn-primary" onclick="doSearch()">Search</button></div>
+          onchange="onGameChange(this.value)">${gopts}</select></div>
+        <div class="col-12 col-md-6"><input class="form-control form-control-sm" id="q"
+          placeholder="Card name" value="${esc(f.q)}"
+          onkeydown="if(event.key==='Enter')submitSearch()"></div>
+        <div class="col-12 col-md-3 d-grid"><button class="btn btn-sm btn-primary"
+          onclick="submitSearch()">Search</button></div>
       </div>
+      ${filterBar()}
       <div class="d-flex align-items-center gap-2 mt-2">
-        <span class="hint">Every word must appear in the card name. Ids look like
-          <code class="mono" id="q_example">${esc(example)}</code>. A two-sided card
-          arrives with both sides. Hover a result for <b>full ↗</b> — the
-          provider's own scan, full size, for telling two prints apart.</span>
-        <span class="form-check mb-0 ms-auto">
+        <span class="form-check mb-0">
           <input class="form-check-input" type="checkbox" id="f_related"
-                 ${state.search.related ? 'checked' : ''}
+                 ${state.search_related ? 'checked' : ''}
                  onchange="setSearchRelated(this.checked)">
           <label class="form-check-label" style="font-size:.75rem" for="f_related"
             title="Meld halves, the melded card, the tokens a card makes">
-            with related cards</label>
+            also add the cards these are printed alongside</label>
         </span>
-        <button class="btn btn-sm btn-outline-secondary" onclick="fetchSel()">Add selected</button>
+        <span class="hint mb-0 ms-auto">Click a card to pick it, or
+          <b>+ Add</b> under one to download it now.</span>
       </div>
     </div>
+    <div id="results_top"></div>
     <div id="results" class="results"></div>
-    <p class="hint" id="results_hint">Search a game to see what's out there.</p>`;
+    <div id="results_pager"></div>
+    <p class="hint mt-2" id="results_hint">Search a game to see what's out there.</p>
+    <div id="picktray"></div>`;
 }
-function onGameChange(){
-  const g = state.meta.games.find(x => x.id === $('#f_game').value);
-  if(g) $('#q_example').textContent = g.example;
-  if($('#q').value.trim()) doSearch();
+function submitSearch(){
+  state.find.q = $('#q').value;
+  state.find.page = 1;
+  runFind();
+}
+function onGameChange(game){
+  // a game change invalidates every filter: a Pokémon rarity is not a Magic one,
+  // and carrying "Rare Holo" into Scryfall would return nothing and look broken
+  Object.assign(state.find, {game, rarity:'', type:'', supertype:'', subtype:'',
+                             color:'', page:1});
+  const g = state.meta.games.find(x => x.id === game);
+  if(g && $('#q_example')) $('#q_example').textContent = g.example;
+  loadFacets(game).then(() => { if(state.view === 'search') render(); });
+  loadExpansions(game);
+  if(state.find.q.trim() || state.find.set) runFind();
 }
 function showHint(text){
   const h = $('#results_hint'); if(h) h.textContent = text || '';
 }
-function readSearchForm(){
-  return {
-    q: $('#q').value, game: $('#f_game').value, set: $('#f_set').value,
-    rarity: $('#f_rar').value, year: $('#f_year').value,
-  };
+/* **An empty answer has to say what emptied it.** "Nothing matched. Try fewer filters"
+   is true and useless: `state.find` survives paging, screen switches and a reload, so
+   the filter that killed the query is usually one set on a *different* screen a while
+   ago — browse a set, switch to Search, type a name, and the set is still narrowing.
+   The chips are on screen, but a sentence naming the culprits and a button that drops
+   them is the difference between a mystery and a fact. Reported as HTML, not text, so
+   the button is a control rather than a suggestion. */
+function emptyHint(r){
+  const f = FIND(), narrowing = [];
+  for(const facet of ['set','rarity','year','supertype','subtype']){
+    if(f[facet]) narrowing.push(`${facet} ${f[facet]}`);
+  }
+  for(const facet of ['type','color']){
+    (f[facet] || '').split(',').filter(Boolean).forEach(v => narrowing.push(`${facet} ${v}`));
+  }
+  const game = (state.meta.games.find(g => g.id === findGame()) || {}).name || findGame();
+  const what = f.q.trim() ? `<b class="mono">${esc(f.q.trim())}</b>` : 'that';
+  if(narrowing.length){
+    return `Nothing in ${esc(game)} matched ${what} with
+      <b>${narrowing.map(esc).join('</b>, <b>')}</b>.
+      <button class="btn btn-sm btn-link p-0" style="font-size:inherit"
+        onclick="clearFacets()">Drop ${narrowing.length === 1 ? 'it' : 'them'}</button>`;
+  }
+  if(!r.narrowed) return 'Type a card name, or pick a set.';
+  return `Nothing in ${esc(game)} matched ${what} — try another game.`;
 }
+function setSearchRelated(on){ state.search_related = on; }
 /* A link inside a <label> would otherwise tick the label's checkbox on its way
    out: opening the full scan is not choosing the card. */
 function stopClick(ev){ ev.stopPropagation(); }
 
-function paintResults(rows){
-  const box = $('#results'); if(!box) return;
-  box.innerHTML = rows.map(x => `
-      <label class="hit ${x.have ? 'have' : ''}">
-        <input class="form-check-input" type="checkbox" value="${esc(x.id)}" ${x.have ? 'disabled' : ''}>
-        <a class="full" target="_blank" rel="noopener" href="${esc(x.image)}"
-           title="Open the full-resolution scan in a new tab"
-           onclick="stopClick(event)">full ↗</a>
-        <img loading="lazy" alt="${esc(x.name)}" src="${esc(x.image)}" onerror="this.style.opacity=.12">
-        <div class="hitmeta"><b>${esc(x.name)}</b><br>${esc(x.set)} · ${esc(x.year)} ·
-          <span class="mono">${esc(x.number)}</span><br>
-          ${esc(x.rarity)} · ${esc(x.artist)}${x.have ? ' · in library' : ''}</div>
-      </label>`).join('');
+
+/* ---------- Browse: the set index ---------------------------------------
+   Two screens under one route. /browse is the index — every set of one game,
+   grouped the way that game groups them. /browse/<set> is one set's cards, which
+   is the shared query above with a set in it. */
+function viewBrowse(){
+  return state.browse.set ? viewBrowseSet() : viewBrowseIndex();
 }
-async function doSearch(){
-  state.search = readSearchForm();
-  syncUrl();          // the URL mirrors the query without re-rendering the form
-  const p = new URLSearchParams(Object.entries(state.search).filter(([,v]) => v));
-  $('#results').innerHTML = '';
-  showHint('Searching…');
-  try{
-    const r = await get('/api/search?' + p);
-    if(!Array.isArray(r)){ state.results = null; showHint(r.error || 'No results.'); return; }
-    state.results = r;
-    showHint(r.length ? '' : 'No matches. Try fewer words, or switch game.');
-    paintResults(r);
-  } catch(e){ state.results = null; showHint('Search failed: ' + e); }
+function browseHeader(){
+  const game = browseGame();
+  return state.meta.games.map(g =>
+    `<button class="btn btn-sm ${g.id === game ? 'btn-primary' : 'btn-outline-secondary'}"
+      onclick="setBrowseGame('${esc(g.id)}')">${esc(g.name)}</button>`).join('');
 }
-async function fetchSel(){
-  const ids = $$('#results input:checked').map(c => c.value);
-  if(!ids.length){ toast('Select some cards first.'); return; }
-  await act('/api/fetch', {ids, game: $('#f_game').value, related: state.search.related},
-    `Added ${ids.length} card(s)`);
+function viewBrowseIndex(){
+  const game = browseGame(), idx = expFor(game);
+  if(!idx) return `
+    <div class="eyebrow mb-2">Browse</div>
+    <div class="d-flex gap-2 mb-3">${browseHeader()}</div>
+    <div id="results_top"></div>
+    <p class="hint">Loading the set list…</p>
+    <div id="picktray"></div>`;
+  if(idx.error) return `
+    <div class="eyebrow mb-2">Browse</div>
+    <div class="d-flex gap-2 mb-3">${browseHeader()}</div>
+    <div class="panel p-3"><div style="color:var(--hold)">${esc(idx.error)}</div></div>
+    <div id="picktray"></div>`;
+  const q = state.browse.q.trim().toLowerCase();
+  const groups = idx.groups
+    .map(g => ({...g, expansions: g.expansions.filter(e =>
+        (!q || e.name.toLowerCase().includes(q) || e.id.includes(q))
+        && (!state.browse.owned || ownedIn(e.id)))}))
+    .filter(g => g.expansions.length
+                 && (!state.browse.group || g.key === state.browse.group));
+  const shown = groups.reduce((n, g) => n + g.expansions.length, 0);
+  return `
+    <div class="d-flex align-items-baseline gap-2 mb-3 flex-wrap">
+      <div><div class="eyebrow">Every set, grouped by ${esc(idx.grouping_label.toLowerCase())}</div>
+        <h5 class="mb-0">Browse</h5></div>
+      <span class="hint ms-auto mb-0">${idx.sets} sets · you hold
+        ${state.cards.length} ${state.cards.length === 1 ? 'card' : 'cards'}. Pick one
+        to see what is in it, or
+        <a href="/search" onclick="return goLink(event,'search')">search by name ↗</a></span>
+    </div>
+    <div class="panel p-3 mb-3">
+      <div class="row g-2 align-items-center">
+        <div class="col-12 col-md-auto d-flex gap-2">${browseHeader()}</div>
+        <div class="col-12 col-md-4"><input class="form-control form-control-sm"
+          placeholder="Filter sets by name or id" value="${esc(state.browse.q)}"
+          oninput="setBrowseFilter(this.value)"></div>
+        <div class="col-auto"><span class="form-check mb-0">
+          <input class="form-check-input" type="checkbox" id="b_owned"
+            ${state.browse.owned ? 'checked' : ''} onchange="setBrowseOwned(this.checked)">
+          <label class="form-check-label" style="font-size:.75rem" for="b_owned">
+            only sets I have cards from</label></span></div>
+        <div class="col-auto ms-auto"><span class="hint">${shown} shown</span></div>
+      </div>
+      <div class="groupjump mt-2">
+        <button class="${state.browse.group ? '' : 'on'}"
+          onclick="setBrowseGroup('')">All ${esc(idx.grouping === 'era' ? 'series' : 'kinds')}</button>
+        ${idx.groups.map(g => `<button class="${state.browse.group === g.key ? 'on' : ''}"
+          onclick="setBrowseGroup('${esc(g.key)}')">${esc(g.label)}
+          <span style="opacity:.6">${g.sets}</span></button>`).join('')}
+      </div>
+    </div>
+    ${shown ? groups.map(groupHtml).join('') : '<p class="hint">No sets match that filter.</p>'}
+    <div id="picktray"></div>`;
 }
+const groupOwned = g => g.expansions.reduce((n, e) => n + ownedIn(e.id), 0);
+function groupHtml(g){
+  return `
+    <div class="grouphead">
+      <h6>${esc(g.label)}</h6>
+      <span class="hint">${g.expansions.length} sets · ${g.cards} cards${g.span ? ' · ' + esc(g.span) : ''}</span>
+      ${groupOwned(g) ? `<span class="pill done ms-auto">${groupOwned(g)} in library</span>` : ''}
+    </div>
+    <div class="expgrid">${g.expansions.map(setTile).join('')}</div>`;
+}
+function setTile(e){
+  // the logo where there is one, the symbol where there is not: Scryfall serves no
+  // wordmark, so a Magic tile stands on its symbol and must not reserve space for
+  // an image that will never load
+  const art = e.logo
+    ? `<img class="skel" loading="lazy" decoding="async" src="${artsrc(e.logo, 'logo')}"
+         alt="${esc(e.name)}" onload="unskel(this)" onerror="this.remove()">`
+    : (e.symbol
+        ? `<img class="sym skel ${e.game === 'mtg' ? 'glyph' : ''}" loading="lazy"
+             decoding="async" src="${artsrc(e.symbol, 'symbol')}" alt=""
+             onload="unskel(this)" onerror="this.remove()">`
+        : '');
+  const owned = ownedIn(e.id);
+  const pct = e.total ? Math.min(100, Math.round(100 * owned / e.total)) : 0;
+  return `
+    <button class="settile" onclick="openSet('${esc(e.id)}')"
+            title="${esc(e.name)} · ${esc(e.id)}">
+      <span class="setlogo">${art}</span>
+      <span class="sname">${esc(e.name)}</span>
+      <span class="smeta"><span class="mono">${esc(e.id)}</span>
+        <span>${e.total || '—'} cards</span>
+        <span class="ms-auto">${esc(e.year || '—')}</span></span>
+      ${owned ? `<span class="setbar"><i style="width:${pct}%"></i></span>
+        <span class="smeta" style="color:var(--proof)">${owned} of ${e.total} in your library</span>`
+       : ''}
+      ${e.digital ? '<span class="smeta" style="color:var(--hold)">digital only — never printed</span>' : ''}
+    </button>`;
+}
+
+/* ---------- Browse: one set's cards ------------------------------------- */
+function viewBrowseSet(){
+  const game = browseGame(), setId = state.browse.set;
+  const e = expansionOf(game, setId);
+  const owned = ownedIn(setId);
+  const held = e && e.total ? Math.min(100, Math.round(100 * owned / e.total)) : 0;
+  return `
+    <div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
+      <button class="btn btn-sm btn-outline-secondary"
+        onclick="openSet('')">← All sets</button>
+      ${e ? `<span class="setlogo head">
+          ${e.logo ? `<img src="${artsrc(e.logo, 'logo')}" alt="" onerror="this.remove()">`
+                   : (e.symbol ? `<img class="sym ${e.game === 'mtg' ? 'glyph' : ''}"
+                        src="${artsrc(e.symbol, 'symbol')}" alt=""
+                        onerror="this.remove()">` : '')}
+        </span>
+        <div><div class="eyebrow">${esc(e.group_label)}</div>
+          <h5 class="mb-0">${esc(e.name)}</h5></div>
+        <span class="hint"><span class="mono">${esc(e.id)}</span> · ${e.total} cards ·
+          ${esc(e.released || 'unreleased')}</span>
+        ${owned ? `<span class="pill done">${owned} of ${e.total} in library</span>` : ''}`
+      : `<div><div class="eyebrow">Set</div><h5 class="mb-0 mono">${esc(setId)}</h5></div>`}
+      <span class="hint mb-0 ms-auto">Click a card to pick it, or <b>+ Add</b> under
+        one to download it now.</span>
+    </div>
+    ${e && owned ? `<div class="setbar mb-3"><i style="width:${held}%"></i></div>` : ''}
+    <div class="panel p-3 mb-3">
+      <div class="row g-2 align-items-center mb-2">
+        <div class="col-12 col-md-6"><input class="form-control form-control-sm"
+          placeholder="Card name within this set" value="${esc(FIND().q)}"
+          onkeydown="if(event.key==='Enter')submitSetSearch(this.value)"
+          onchange="submitSetSearch(this.value)"></div>
+        <div class="col-12 col-md-6 hint">Filters, sort and paging are the same ones
+          <code class="mono">proxdex browse ${esc(setId)}</code> takes.</div>
+      </div>
+      ${filterBar({withSet:false})}
+    </div>
+    <div id="results_top"></div>
+    <div id="results" class="results"></div>
+    <div id="results_pager"></div>
+    <!-- the loading state lives in the strip above the grid; this line is for an empty
+         answer or an error, which are things to read *after* looking. No backticks in
+         a comment inside a template literal: one ends the literal. -->
+    <p class="hint mt-2" id="results_hint"></p>
+    <div id="picktray"></div>`;
+}
+function submitSetSearch(text){
+  state.find.q = text; state.find.page = 1; runFind();
+}
+/* Opening a set is a navigation, not a filter change: it gets its own URL, its own
+   history entry and its own scroll position. `''` goes back to the index. */
+function openSet(setId){
+  Object.assign(state.find, {set:setId, q:'', page:1, sort:setId ? 'number' : 'released',
+                             desc:null});
+  navigate({view:'browse', browse:{...state.browse, set:setId}});
+}
+function setBrowseGame(game){
+  state.browse = {...state.browse, game, group:''};
+  state.find.game = game;
+  loadFacets(game); loadExpansions(game).then(() => {
+    if(state.view === 'browse') render();
+  });
+  navigate({view:'browse'}, {replace:true});
+}
+function setBrowseGroup(key){
+  state.browse.group = key;
+  render();
+}
+function setBrowseOwned(on){ state.browse.owned = on; render(); }
+/* Typing in the set filter re-renders the index rather than re-fetching it: the
+   whole list is already here, and 1047 tiles is a render, not a request. */
+let _browseFilterAt = 0;
+function setBrowseFilter(text){
+  state.browse.q = text;
+  const at = ++_browseFilterAt;
+  setTimeout(() => { if(at === _browseFilterAt && state.view === 'browse') render(); }, 90);
+}
+/* An in-app link that is also a real href: middle-click and "open in new tab" work,
+   and a plain click routes without a reload. */
+function goLink(ev, view){
+  if(ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button) return true;
+  ev.preventDefault(); go(view); return false;
+}
+
 
 /* ---------- import wizard -------------------------------------------------
    `proxdex import` for a whole folder: pick the files, review what each one
@@ -2985,9 +4960,50 @@ function renderImport(){
         </div>
       </div>
       <div id="imprev"></div>
+      <div id="imphelp">${impHelp()}</div>
     </div>`;
   armDrop();
   paintImport();
+}
+
+/* **What the screen said before you had dropped anything: nothing.** You found out
+   what a filename had to look like *after* choosing 200 files and reading a table of
+   amber rows — which is the wrong order, because renaming them is easier before. So
+   the flow and the naming rule are stated up front, and they disappear once there
+   are real rows to look at instead. */
+function impHelp(){
+  if(IMP().rows.length) return '';
+  const ex = state.meta.games.find(g => g.id === state.meta.default_game);
+  const id = (ex && ex.example) || 'base1-4';
+  return `
+    <div class="row g-3">
+      <div class="col-12 col-lg-7"><div class="panel p-3 h-100">
+        <div class="eyebrow mb-2">How it goes</div>
+        <ol class="hint mb-0" style="padding-left:1.1rem">
+          <li><b>Drop the files.</b> A whole folder is fine — an Upscayl output
+            folder is the usual one. Anything that is not a card image is left alone.</li>
+          <li><b>Check the table.</b> proxdex reads each file's card, stage and side
+            from its <i>name</i> and shows what it would become — nothing is uploaded
+            to draw that, and nothing is written yet.</li>
+          <li><b>Fix what is marked, then Import.</b> Amber rows are the ones it will
+            not guess at. Set an id per row, or over every row at once.</li>
+        </ol>
+      </div></div>
+      <div class="col-12 col-lg-5"><div class="panel p-3 h-100">
+        <div class="eyebrow mb-2">What a name tells it</div>
+        <table class="hint mb-2" style="width:100%">
+          <tr><td class="mono">${esc(id)}.png</td><td>the card, filed as its original</td></tr>
+          <tr><td class="mono">${esc(id)}_1_original.png</td><td>proxdex's own name —
+            reads back exactly</td></tr>
+          <tr><td class="mono">${esc(id)}…_upscayl.png</td><td><span class="mono">upscayl</span>
+            in the name means the upscaled stage</td></tr>
+          <tr><td class="mono">${esc(id)}…_f2.png</td><td><span class="mono">_f2</span>
+            is the second side of a two-sided card</td></tr>
+        </table>
+        <p class="hint mb-0">A name it cannot read is not a failure — it becomes a row
+          waiting for you to say which card it is.</p>
+      </div></div>
+    </div>`;
 }
 
 /* A dropped *folder* arrives as directory entries, not files, so it has to be
@@ -3043,9 +5059,48 @@ function impAdd(files){
   IMP().done = null;
   planImport();
 }
+/* **A set code plus the number already in the filename.** The one bulk edit that was
+   missing: a scan folder is full of `4.png` and `12.png`, and typing `base1-4`,
+   `base1-12` … by hand is the whole cost of importing them. It only touches rows that
+   have no id yet and whose name carries a number — a row it cannot build an id for is
+   left exactly as it was rather than given a wrong one, which is the same call
+   `imports.plan` makes about a guessed id. */
+const _NUM = /(\d+[a-z]?)(?=\.[^.]+$|_|$)/i;
+function impNumbered(){
+  const pre = IMP().prefix.trim();
+  if(!pre) return [];
+  return IMP().rows.filter(r => !r.id && _NUM.test(r.name));
+}
+function impPrefix(text){
+  IMP().prefix = text;
+  // only the button's own label and disabled state depend on this — a full repaint
+  // would replace the input under the cursor and drop focus mid-word
+  const btn = $('#imp_apply');
+  if(!btn) return;
+  const n = impNumbered().length;
+  btn.textContent = `Apply to ${n}`;
+  btn.disabled = !(text.trim() && n);
+}
+function impApplyPrefix(){
+  const pre = IMP().prefix.trim().replace(/-+$/, '');
+  if(!pre) return;
+  let n = 0;
+  for(const row of IMP().rows){
+    if(row.id) continue;
+    const m = _NUM.exec(row.name);
+    if(!m) continue;
+    row.id = `${pre}-${m[1]}`;
+    n++;
+  }
+  toast(n ? `Set an id on ${n} row(s)` : 'No filename carried a number to use');
+  planImport();
+}
+function impOnlyBlocked(on){ IMP().only_blocked = on; paintImport(); }
+
 function impClear(){
   for(const r of IMP().rows) URL.revokeObjectURL(r.url);
-  Object.assign(IMP(), {rows:[], plan:null, ignored:0, find:null, done:null, at:0});
+  Object.assign(IMP(), {rows:[], plan:null, ignored:0, find:null, done:null, at:0,
+                        results:undefined, only_blocked:false});
   renderImport();
 }
 function impDrop(i){
@@ -3053,6 +5108,21 @@ function impDrop(i){
   if(gone) URL.revokeObjectURL(gone.url);
   if(IMP().find === i) IMP().find = null;
   planImport();
+}
+/* Every row that landed, out of the list. Called after a run — see `runImport` for
+   why. The object URLs are revoked like `impDrop` does (each one holds the file's
+   bytes alive in the browser, and a folder of two hundred scans is not small), and
+   `find` is cleared rather than re-indexed: it is a row *index* into the list about to
+   be rewritten, so the only safe answer is to close the finder. */
+function dropFiled(){
+  const keep = [];
+  for(const row of IMP().rows){
+    if(row.result && row.result.ok) URL.revokeObjectURL(row.url);
+    else keep.push(row);
+  }
+  if(keep.length === IMP().rows.length) return;
+  IMP().rows = keep;
+  IMP().find = null;
 }
 
 /* Every edit re-asks the server what the run would do. Debounced, because it is
@@ -3105,6 +5175,7 @@ function impOnExisting(value){ IMP().on_existing = value; planImport(); }
 
 function paintImport(){
   const host = $('#imprev'); if(!host) return;
+  const help = $('#imphelp'); if(help) help.innerHTML = impHelp();
   const rows = IMP().rows, plan = IMP().plan;
   if(!rows.length){
     host.innerHTML = IMP().ignored
@@ -3121,7 +5192,9 @@ function paintImport(){
           <th></th><th>file</th><th>card</th><th>stage</th><th>side</th>
           <th>becomes</th><th></th>
         </tr></thead>
-        <tbody>${rows.map((r, i) => impRow(r, i, at[i], stages)).join('')}</tbody>
+        <tbody>${rows.map((r, i) => [r, i, at[i]])
+          .filter(([, , a]) => !IMP().only_blocked || !a || dispClass(a.disposition) === 'stop')
+          .map(([r, i, a]) => impRow(r, i, a, stages)).join('')}</tbody>
       </table>
     </div>
     ${IMP().find === null ? '' : impFinder(IMP().find)}
@@ -3171,6 +5244,25 @@ function impBar(){
           <option value="">side…</option><option value="1">front</option><option value="2">back</option></select>
         ${IMP().ignored ? `<span class="hint ms-auto mb-0">${IMP().ignored} non-image
           file(s) were left alone.</span>` : ''}
+      </div>
+      <div class="d-flex gap-2 align-items-center flex-wrap mt-2">
+        <span class="eyebrow">give the unnamed ones an id</span>
+        <input class="form-control form-control-sm" style="width:7rem" id="imp_prefix"
+               placeholder="set, e.g. base1" value="${esc(IMP().prefix)}"
+               oninput="impPrefix(this.value)"
+               onkeydown="if(event.key==='Enter')impApplyPrefix()">
+        <button class="btn btn-sm btn-outline-secondary" id="imp_apply" onclick="impApplyPrefix()"
+          ${IMP().prefix.trim() && impNumbered().length ? '' : 'disabled'}
+          title="Builds &lt;set&gt;-&lt;number&gt; for every row whose filename carries a number">
+          Apply to ${impNumbered().length}</button>
+        <span class="hint mb-0">Uses the number already in each filename, so
+          <span class="mono">4.png</span> under <span class="mono">base1</span> becomes
+          <span class="mono">base1-4</span>. Rows with no number are left for you.</span>
+        ${plan && plan.blocked ? `<span class="form-check mb-0 ms-auto">
+          <input class="form-check-input" type="checkbox" id="imp_only"
+            ${IMP().only_blocked ? 'checked' : ''} onchange="impOnlyBlocked(this.checked)">
+          <label class="form-check-label" style="font-size:.75rem" for="imp_only">
+            show only the ${plan.blocked} that need a look</label></span>` : ''}
       </div>
       ${plan && plan.discards ? `<p class="hint mb-0 mt-2" style="color:var(--hold)">
         ⚠ ${plan.discards} later-stage image(s) go stale and are removed — they were
@@ -3229,7 +5321,7 @@ function impRow(row, i, at, stages){
    into a confirmed id the import may create a folder for. */
 function impFind(i){
   IMP().find = i;
-  IMP().results = null;
+  IMP().results = undefined;
   // the query lives in state, not in the input: every repaint rebuilds the
   // panel, and a value only the DOM knew would be wiped by the first one
   IMP().q = impQuery(IMP().rows[i].name);
@@ -3265,22 +5357,29 @@ function impFinder(i){
                onkeydown="if(event.key==='Enter')doImpSearch()">
         <button class="btn btn-sm btn-outline-secondary" onclick="doImpSearch()">Search</button>
       </div>
-      ${hits === null ? '<p class="hint mb-0">Searching…</p>' : hits.length
-        ? `<div class="results">${hits.slice(0, 24).map(x => `
+      ${hits === undefined ? '<p class="hint mb-0">Searching…</p>'
+        : hits === null ? `<p class="hint mb-0" style="color:var(--bad)">That search did
+            not come back in a shape this panel understands — the console log will say
+            why. The Search screen uses the same query.</p>`
+        : hits.length
+        ? `<div class="results">${hits.slice(0, IMP_HITS).map(x => `
             <button class="hit" style="border:0;background:none;padding:0;text-align:left"
                     onclick="impChoose(${i}, '${esc(x.id)}', '${esc(x.game)}')">
-              <img loading="lazy" alt="${esc(x.name)}" src="${esc(x.image)}">
+              <img loading="lazy" decoding="async" alt="${esc(x.name)}"
+                   src="${artsrc(x.thumb || x.image, 'card')}">
               <div class="hitmeta"><b>${esc(x.name)}</b><br>${esc(x.set)} ·
                 <span class="mono">${esc(x.id)}</span>${x.have ? ' · in library' : ''}</div>
             </button>`).join('')}</div>`
         : '<p class="hint mb-0">No matches. Try fewer words, or the other game.</p>'}
     </div>`;
 }
-function impFindClose(){ IMP().find = null; IMP().results = null; paintImport(); }
+function impFindClose(){ IMP().find = null; IMP().results = undefined; paintImport(); }
 /* Two searches can be in flight — the one the panel opened with, and the one you
    typed over it — and the first is the slower query often enough to matter. Only
    the newest may write the results, or an empty first answer lands on top of a
    good second one and the panel says "no matches" about a card it found. */
+/* How many hits the finder draws — and now also how many it asks for. */
+const IMP_HITS = 24;
 let _impSeq = 0;
 async function doImpSearch(){
   const g = $('#impgame');
@@ -3288,13 +5387,26 @@ async function doImpSearch(){
   const game = g ? g.value : (row ? row.game : '') || '';
   const mine = ++_impSeq;
   if(!IMP().q.trim()){ IMP().results = []; paintImport(); return; }
-  IMP().results = null;
+  IMP().results = undefined;
   paintImport();
   let found;
   try{
-    const r = await get('/api/search?' + new URLSearchParams({q:IMP().q.trim(), game}));
-    found = Array.isArray(r) ? r : [];
-  } catch(e){ found = []; }
+    /* `items`, because `/api/search` answers with a **page envelope** and not a bare
+       list. It used to be a list, and this read `Array.isArray(r) ? r : []` — which
+       after the Browse/Search unification made the envelope the shape, was always
+       false. So the finder returned nothing for *every* query, silently, for as long
+       as the envelope has existed: the panel said "No matches" and there was no error
+       anywhere to notice. A reader that treats an unexpected shape as "no results" is
+       indistinguishable from a working one that found nothing, which is exactly why
+       this hid — so the `null` below is a *third* state and the panel says so. */
+    const r = await get('/api/search?' + new URLSearchParams({
+      q: IMP().q.trim(), game,
+      // the panel draws at most 24, so asking for the default 60 warmed the art of 36
+      // cards nobody sees
+      per_page: String(IMP_HITS),
+    }));
+    found = Array.isArray(r?.items) ? r.items : null;
+  } catch(e){ found = null; }
   if(mine !== _impSeq) return;      // a newer search has already answered
   IMP().results = found;
   paintImport();
@@ -3302,7 +5414,7 @@ async function doImpSearch(){
 function impChoose(i, id, game){
   const row = IMP().rows[i];
   row.id = id; row.game = game;
-  IMP().find = null; IMP().results = null;
+  IMP().find = null; IMP().results = undefined;
   planImport();
 }
 
@@ -3339,8 +5451,26 @@ async function runImport(){
     paintImport();
   }
   IMP().running = false;
-  IMP().done = {filed, failed: queue.length - filed,
-                cards: [...new Set(queue.map(q => q.at.id))]};
+  // the cards that really got a file, not everything attempted — the panel says
+  // "n card(s) touched", and a card whose only file failed was not touched
+  IMP().done = {
+    filed,
+    failed: queue.length - filed,
+    cards: [...new Set(queue.filter(q => q.row.result?.ok).map(q => q.at.id))],
+  };
+  /* **A filed row leaves the list**, because the list is what is still *to* import.
+     Left in, it re-planned as `replace` (the destination now exists and the default
+     `on_existing` is overwrite), so the button went straight back to offering the same
+     count — the same files, ready to be imported over themselves. That is how a
+     duplicate import happens, and after two folders there was no way to tell what had
+     already gone in without reading the log.
+
+     Only the ones that really landed go. A **failed** row stays with its error visible,
+     which is the whole point of keeping it — you fix the id and run again — and so do
+     blocked and skipped rows, which were never imported at all. The "Just imported"
+     panel below still names every card touched, so nothing about the run is lost by
+     the rows disappearing. */
+  dropFiled();
   // the library changed under us: the contact sheet, the stage tallies and every
   // card's rev all move, so this is a real reload rather than a repaint
   await refresh(true);
@@ -3386,7 +5516,7 @@ function impDone(){
    frame generation is a claim about data you cannot see, so it is shown card by
    card before anybody trusts it. */
 const framesUi = {tab:'specs', reg:null, game:'', preview:null, busy:false,
-                  editing:null};
+                  editing:null, coverage:null, covAll:false, covBusy:false};
 
 async function renderFrames(){
   if(!framesUi.reg){
@@ -3394,7 +5524,8 @@ async function renderFrames(){
     try{ framesUi.reg = await get('/api/frames'); }
     catch(e){ $('#main').innerHTML = `<p class="hint">Could not read frame specs: ${esc(''+e)}</p>`; return; }
   }
-  const tabs = [['specs','Specs'],['rules','Rules'],['warnings','Warnings']];
+  const tabs = [['specs','Specs'],['rules','Rules'],['coverage','Coverage'],
+                ['warnings','Warnings']];
   $('#main').innerHTML = `
     <div class="d-flex align-items-baseline gap-2 mb-3 flex-wrap">
       <div><div class="eyebrow">border widths</div><h5 class="mb-0">Frame specs</h5></div>
@@ -3416,8 +5547,145 @@ function paintFrames(){
   const host = $('#framesbody'); if(!host) return;
   const reg = framesUi.reg || {specs:[], rules:[], matches:[], mine:[]};
   if(framesUi.tab === 'rules'){ host.innerHTML = rulesPanel(reg); return; }
+  if(framesUi.tab === 'coverage'){ host.innerHTML = coveragePanel(); loadCoverage(); return; }
   if(framesUi.tab === 'warnings'){ host.innerHTML = warningsPanel(reg); return; }
   host.innerHTML = specsPanel(reg);
+}
+
+/* ---------- coverage ----------
+   *Warnings* is about the cards you hold; this is about the ones you could — so it
+   reads the providers' set lists rather than the library, and it is what says whether
+   there is anything left to measure at all.
+
+   **Each game is asked the question its own border followed** (`frames.keyed`), and
+   that asymmetry is the whole design rather than an inconsistency to tidy away.
+   Pokémon's yellow border ran for known runs of sets, so a row is a set and every set
+   of the game is asked about. MTG's changed with the printing's *frame generation* — a
+   modern set holds retro-frame cards beside modern ones — so a row is a generation, and
+   there is deliberately **no per-set verdict**: inventing one is precisely what the
+   deleted coverage report did, and it called 1046 sets unmeasured while every card in
+   them resolved exactly. The count in the headline is therefore in the game's own unit
+   (`Coverage.primary`), which is why MTG reads "5 of 5 frame generations" and not "12 of
+   12" — its four set rows are exceptions *to* a generation, listed but not the unit.
+
+   The note under each headline comes from the server, not from here: a reader who does
+   not know MTG resolves per printing will read five rows as five sets and conclude the
+   opposite of the truth, so the reason travels with the number and says the same
+   sentence the CLI prints. */
+/* a cell that must stay one line — a fixed table layout does not clip on its own, so
+   two spec ids ran straight through the next column. Inline rather than a class: this
+   is one stylesheet with no scoping, and a plain word like `.trunc` is exactly how the
+   set index's `.setgrid` came to collide with the settings screen's. */
+const CLIP = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+
+async function loadCoverage(){
+  if(framesUi.coverage || framesUi.covBusy) return;
+  framesUi.covBusy = true;
+  try{ framesUi.coverage = await get('/api/frames/coverage'); }
+  catch(e){ framesUi.coverage = {error:'' + e}; }
+  framesUi.covBusy = false;
+  if(framesUi.tab === 'coverage') paintFrames();
+}
+function toggleCoverageAll(el){ framesUi.covAll = el.checked; paintFrames(); }
+function reloadCoverage(){ framesUi.coverage = null; paintFrames(); }
+
+function coveragePanel(){
+  const cov = framesUi.coverage;
+  const head = `<div class="panel p-3 mb-3">
+    <div class="d-flex gap-2 align-items-baseline flex-wrap mb-2">
+      <div class="eyebrow">What has been measured</div>
+      <div class="ms-auto d-flex gap-3 align-items-center">
+        <div class="form-check mb-0">
+          <input class="form-check-input" type="checkbox" id="cov_all"
+            ${framesUi.covAll ? 'checked' : ''} onchange="toggleCoverageAll(this)">
+          <label class="form-check-label" style="font-size:.8125rem" for="cov_all">
+            Show what is covered too</label>
+        </div>
+        <button class="btn btn-sm btn-ghost" onclick="reloadCoverage()">Refresh</button>
+      </div>
+    </div>
+    <p class="hint mb-0">A printing with no measured spec <b>refuses to be bordered</b> —
+      that is the honest answer, since the alternative is reshaping a card to numbers
+      nobody took. So this is the list of what to go and measure, and
+      <span class="mono">docs/measuring-frames.md</span> says how. Each game is asked the
+      question its own border followed: a row is a <b>set</b> for Pokémon and a
+      <b>frame generation</b> for Magic, whose border changed with the printing rather
+      than the set.</p>
+  </div>`;
+  if(!cov) return head + '<p class="hint">Reading the set lists…</p>';
+  if(cov.error) return head + `<p class="hint">Could not read the set lists: ${esc(cov.error)}</p>`;
+  /* the preview lives on this tab too: it is the answer to "what would this set
+     actually resolve to?", and a Preview button that painted nothing where you clicked
+     it is worse than no button. One `framesUi.preview`, rendered wherever a set is
+     listed, so the two tabs cannot show different answers for the same set. */
+  return head + (cov.games || []).map(coverageGame).join('')
+    + (framesUi.busy ? '<p class="hint">Reading that set&rsquo;s cards…</p>' : '')
+    + previewPanel();
+}
+
+function coverageGame(g){
+  const name = ((state.meta.games || []).find(x => x.id === g.game) || {}).name || g.game;
+  if(g.error) return `<div class="panel p-3 mb-3">
+    <div class="eyebrow mb-2">${esc(name)}</div>
+    <p class="hint mb-0">${esc(g.error)}</p></div>`;
+  const bands = (g.bands || []).map(b => coverageBand(b, g.game)).filter(Boolean).join('');
+  return `<div class="panel p-3 mb-3">
+    <div class="d-flex gap-2 align-items-baseline flex-wrap mb-1">
+      <h6 class="mb-0">${esc(name)}</h6>
+      <span class="chip ${g.complete ? 'good' : 'warn'}">${g.covered} of ${g.total}
+        ${esc(g.key === 'set' ? 'sets' : 'frame generations')} covered</span>
+      ${g.owned_gaps ? `<span class="chip warn">${g.owned_gaps} card(s) you hold cannot
+        be bordered</span>` : ''}
+    </div>
+    <p class="hint">${esc(g.note)}</p>
+    ${bands || '<p class="hint mb-0">Nothing outstanding — every row is covered.</p>'}
+  </div>`;
+}
+
+function coverageBand(b, game){
+  const rows = framesUi.covAll ? (b.rows || []) : (b.rows || []).filter(r => !r.covered);
+  if(!rows.length) return '';
+  /* the band's name is a heading rather than a column, because it is a sentence
+     ("Sets keyed away from their generation") and as a head over short ids it wrapped
+     to three lines and dragged every other column out with it */
+  return `<div class="mb-3">
+    <div class="d-flex gap-2 align-items-baseline mb-1">
+      <div class="eyebrow">${esc(b.label)}</div>
+      <span class="faint" style="font-size:.75rem">${b.covered} of ${b.total} covered</span>
+    </div>
+    <div class="tblwrap"><table class="tbl" style="table-layout:fixed">
+      <!-- fixed widths, because a game is a dozen of these tables stacked: sized to
+           their own content, every band put Set/Name/Year at a different x and the
+           whole screen read as misaligned rather than as one list -->
+      <colgroup><col style="width:8rem"><col><col style="width:4.5rem">
+        <col style="width:4rem"><col style="width:17rem"><col style="width:13rem">
+        <col style="width:6rem"></colgroup>
+      <thead><tr><th>${esc(rows[0].key === 'set' ? 'Set' : 'Frame')}</th><th>Name</th>
+        <th>Year</th><th>Held</th><th>Spec</th><th>From</th><th></th></tr></thead>
+      <tbody>${rows.map(r => {
+        const specs = r.answers.map(a => a.spec).join(', ');
+        /* one via, said once. Both e-Card specs are reached the same way, so the
+           per-answer list read "its era/frame, its era/frame" — a repetition that
+           looks like two different facts. */
+        const vias = [...new Set(r.answers.map(a =>
+          a.via_label + (a.rule ? ' (' + a.rule + ')' : '')))].join(', ');
+        return `<tr>
+        <td class="mono">${esc(r.subject)}</td>
+        <td style="${CLIP}" title="${esc(r.name)}">${esc(r.name)}</td>
+        <td class="faint mono">${esc(r.released.slice(0, 4))}</td>
+        <td class="mono">${r.owned || ''}</td>
+        <td class="mono" style="${CLIP}" title="${esc(specs)}">${r.covered
+          ? esc(specs)
+          : '<span class="chip warn">no spec</span>'}</td>
+        <td class="faint" style="${CLIP}" title="${esc(vias)}">${esc(vias)}</td>
+        <!-- Preview only where there is something to judge. On an uncovered set every
+             card resolves to nothing, which the row already says, so the button would
+             spend a provider request to repeat it 150 times over. -->
+        <td class="text-end">${r.covered && r.key === 'set' ? `<button
+          class="btn btn-sm btn-ghost"
+          onclick="previewSet('${esc(r.subject)}','${esc(game)}')">Preview</button>` : ''}</td>
+      </tr>`;}).join('')}</tbody></table></div>
+  </div>`;
 }
 
 /* Every spec, its numbers in millimetres (a border is a physical width — nobody
@@ -4028,10 +6296,10 @@ async function uploadBack(inp){
   if(!inp.files[0]) return;
   const fd = new FormData();
   fd.append('file', inp.files[0]); fd.append('game', $('#bk_game').value);
-  $('#busy').classList.add('on');
+  showBusy('back');
   const r = await fetch('/api/back/upload', {method:'POST', body:fd});
   const j = await r.json();
-  $('#busy').classList.remove('on');
+  hideBusy();
   toast(j.ok ? 'Card back set' : 'Failed\n' + tail(j.log || JSON.stringify(j)));
 }
 /* ---------- the sheet builder --------------------------------------------
@@ -4073,7 +6341,7 @@ function renderSheet(){
       <span class="hint ms-auto mb-0">Cards are scaled to trim, corrected for the
         medium, then given cut bleed outside the trim.</span>
     </div>
-    <div class="sheetgrid">
+    <div class="sheetpage">
       <div class="vstack gap-3">
         <div class="panel p-3">
           <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
@@ -4574,7 +6842,7 @@ function calibrationPanel(p){
   for(let row = 0; row < rows; row++) for(let col = 0; col < cols; col++){
     const r = used.get(`${col},${row}`);
     const next = !r && p.next_slot[0] === col && p.next_slot[1] === row;
-    cells.push(`<div class="slot ${r ? 'used' : ''} ${next ? 'next' : ''} ${
+    cells.push(`<div class="calslot ${r ? 'used' : ''} ${next ? 'next' : ''} ${
       r && !r.enabled ? 'muted' : ''}"
       title="${r ? `round ${r.n}, off by mean ${r.error.mean.toFixed(1)} RGB${
         r.enabled ? '' : ' — switched off, but the ink is still on the paper'}`
@@ -4746,14 +7014,14 @@ async function addRound(){
   fd.append('file', inp.files[0]);
   if(slot) fd.append('slot', slot); else fd.append('whole', 'true');
   fd.append('note', $('#pf_note').value || '');
-  $('#busy').classList.add('on');
+  showBusy('calibrate');
   let j = {ok:false, log:''};
   try{
     const r = await fetch(`/api/calibrate/add/${encodeURIComponent(state.profile)}`,
                           {method:'POST', body:fd});
     j = await r.json();
   } catch(e){ j = {ok:false, log:String(e)}; }
-  $('#busy').classList.remove('on');
+  hideBusy();
   toast(j.ok ? tail(j.log) : 'Failed\n' + tail(j.log || JSON.stringify(j)), j.ok ? 9000 : 14000);
   reloadProfiles();
 }
@@ -4863,6 +7131,8 @@ function showLibPath(root){
 syncBarHeight();   // before the first paint: everything sticky pins to it
 refresh().then(() => {
   Object.assign(state, routeFromUrl());
+  // after `refresh`, so `haveCard` can drop anything filed since the basket was saved
+  loadPicks();
   history.replaceState(routeState(), '', currentUrl());
   render();
   showLibPath(state.meta.root);

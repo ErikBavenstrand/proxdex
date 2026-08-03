@@ -16,12 +16,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from threading import Lock
 from typing import (
     Annotated,
     Any,
+    Final,
     Literal,
+    Self,
     get_args,
     get_origin,
     get_type_hints,
@@ -38,6 +43,9 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
 
 from proxdex import (
+    art,
+    bleed,
+    browse,
     calibrate,
     doctor,
     frames,
@@ -47,6 +55,7 @@ from proxdex import (
     media,
     net,
     profiles,
+    progress,
     report,
     scratch,
     sources,
@@ -55,9 +64,9 @@ from proxdex import (
 )
 from proxdex import sheet as sheet_mod
 from proxdex.config import Config, Faces, Orientation, PageSize
-from proxdex.errors import ConfigError, ProxdexError
+from proxdex.errors import ConfigError, FileError, ProxdexError
 from proxdex.games import GameId
-from proxdex.library import FRONT, STAGE_BY_LABEL, Card, Library, Step
+from proxdex.library import FRONT, STAGE_BY_LABEL, Card, Library, Stage, Step
 
 _STAGES = steps.STAGES
 _BEST = steps.BEST
@@ -75,6 +84,7 @@ _SPA_ROUTES = (
     "library",
     "card",
     "search",
+    "browse",
     "import",
     "settings",
     "sheet",
@@ -157,6 +167,32 @@ class StepBody(Body):
     inner: Edges | None = None
     #: plain per-edge growth in mm, for the no-fit path
     grow: Edges | None = None
+    #: how the *added* border is filled — cardbleed's synthesis settings, validated
+    #: against `bleed.KNOBS` before they become `--tune` flags. `None` means "leave
+    #: whatever this card already has"; `{}` means "back to the defaults", which is a
+    #: different request and has to be tellable from it.
+    tune: dict[str, SettingValue] | None = None
+
+
+class KnownCard(Body):
+    """A card's description as the client already read it, so `fetch` need not ask.
+
+    **Every field is bounded and pattern-checked**, because these reach the CLI as
+    argv and become folder names on disk. Nothing here can be trusted to be *true* —
+    a client could send any name for any id — so it is deliberately limited to what
+    is cosmetic or already reported: the name and set name become folder names, and
+    the traits feed frame rules that report themselves (a wrong rarity resolves to a
+    spec the align panel names, and `frames check` lists it). What it cannot do is
+    fake a *picture*: the image URL is derived by the server from the id, and
+    :func:`proxdex.sources.download` refuses the image host's placeholder — so an id
+    that does not exist fails rather than filing a grey card.
+    """
+
+    id: CardId
+    name: str = Field(min_length=1, max_length=120)
+    set_name: str = Field(default="", max_length=120)
+    rarity: str = Field(default="", max_length=60)
+    subtypes: str = Field(default="", max_length=120)
 
 
 class FetchBody(Body):
@@ -166,6 +202,11 @@ class FetchBody(Body):
     #: also fetch the cards these are printed alongside — both meld halves and
     #: the melded card, the tokens they make
     related: bool = False
+    #: what the client already knows about these cards, from the search row it drew
+    #: them from. **Pokémon only** — a Magic card's image URL is a uuid path only
+    #: Scryfall's answer carries, so it has to be looked up. Ids not listed here are
+    #: looked up as before.
+    known: list[KnownCard] = Field(default_factory=list, max_length=512)
 
 
 class FlipBody(Body):
@@ -478,20 +519,177 @@ def _derived(
     return Response(body, media_type="image/jpeg", headers=headers)
 
 
+# ---- what is running ---------------------------------------------------------
+@dataclass(frozen=True, slots=True)
+class _Job:
+    """One CLI subprocess the browser may be waiting on."""
+
+    #: the verb, for a label — "fetch", "upscale", "sheet"
+    command: str
+    #: where that process is writing its count (see :mod:`proxdex.progress`)
+    path: Path
+    at: float
+
+
+_jobs: list[_Job] = []
+_jobs_lock: Final = Lock()
+
+
+class _Watched:
+    """Registers a job for the length of a ``run_cli`` call.
+
+    A context manager rather than bookkeeping at both ends, because a command that
+    raises must still leave the list empty — a job that never clears would leave
+    the UI showing a bar for work that stopped.
+    """
+
+    def __init__(self, args: list[str]) -> None:
+        self.job = _Job(args[0] if args else "", scratch.file(".json"), time.time())
+        # absent means "nothing said yet", which `progress.read` answers as None;
+        # an empty file would be a parse failure saying the same thing less clearly
+        self.job.path.unlink(missing_ok=True)
+
+    def __enter__(self) -> _Job:
+        with _jobs_lock:
+            _jobs.append(self.job)
+        return self.job
+
+    def __exit__(self, *_: object) -> None:
+        with _jobs_lock:
+            if self.job in _jobs:
+                _jobs.remove(self.job)
+        self.job.path.unlink(missing_ok=True)
+
+
+class _Counted:
+    """One job for a *request* that spends several CLI calls, counting them itself.
+
+    `/api/fetch` makes one call per card whose description the client already had, so a
+    tray of four Pokémon cards was **four jobs of one item each**. One item is not a
+    position (:attr:`proxdex.progress.Report.positional`), so every one of them fell
+    back to the sweep, and the browser showed an indeterminate bar with a note
+    flickering between four card ids — for work that knew exactly how many cards it was
+    filing. The count was there; it was just cut into pieces too small to have one.
+
+    So the count belongs to the **request**, which is the thing that knows the total,
+    and the inner calls run unwatched (``run_cli(..., watch=False)``): two jobs for one
+    wait is what put the uncounted one on screen, since `/api/progress` shows the
+    newest. This writes through the same :class:`proxdex.progress.Sink` a command uses,
+    so the browser cannot tell — and does not need to — whether the count came from a
+    subprocess or from here.
+    """
+
+    def __init__(self, command: str, verb: str, total: int) -> None:
+        self.job = _Job(command, scratch.file(".json"), time.time())
+        self.job.path.unlink(missing_ok=True)
+        self._sink = progress.Sink(self.job.path)
+        self._verb, self._total = verb, total
+
+    def __enter__(self) -> Self:
+        with _jobs_lock:
+            _jobs.append(self.job)
+        self._sink.start(self._verb, self._total)
+        return self
+
+    def at(self, note: str) -> None:
+        """Which item is being worked on, not yet finished."""
+        self._sink.at(note)
+
+    def advance(self, by: int = 1, note: str = "") -> None:
+        """One (or several) items finished. ``by`` is more than one where a single CLI
+        call really does cover several cards — the batch leg of a mixed fetch — since
+        stepping through them one at a time would be a position nobody measured."""
+        for _ in range(max(1, by)):
+            self._sink.advance(note)
+
+    def __exit__(self, *_: object) -> None:
+        with _jobs_lock:
+            if self.job in _jobs:
+                _jobs.remove(self.job)
+        self._sink.finish()
+
+
+def _running() -> list[_Job]:
+    """The jobs in flight, newest first."""
+    with _jobs_lock:
+        return sorted(_jobs, key=lambda j: j.at, reverse=True)
+
+
 def create_app(lib: Library) -> FastAPI:
     app = FastAPI(title="proxdex", docs_url=None, redoc_url=None)
     # the shell and the JSON payloads compress well; images are already coded
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     cfg_path = lib.root / "proxdex.toml"
 
-    def run_cli(args: list[str]) -> dict[str, Any]:
-        proc = subprocess.run(
-            [sys.executable, "-m", "proxdex", "--root", str(lib.root), *args],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+    def run_cli(args: list[str], *, watch: bool = True) -> dict[str, Any]:
+        """Run the real CLI, and let the browser watch it.
+
+        Every mutation goes through here, so this is the one place a job has to be
+        registered: the command reports its own count into a file
+        (``$PROXDEX_PROGRESS``, see :mod:`proxdex.progress`) and
+        :func:`api_progress` reads it while this call is still blocking. Nothing is
+        parsed out of the log, and a command that reports nothing is simply a job
+        with no count — which is the truth about it.
+
+        ``watch=False`` is for a call already inside a :class:`_Counted` request, and it
+        does two things that go together: no job is registered, and the child is spawned
+        **without** ``$PROXDEX_PROGRESS``, so its sink is the no-op it is for a person
+        at a terminal. Otherwise one wait would have two jobs and the browser would show
+        the newest — the one-item call that has no position in it.
+        """
+        env = dict(os.environ)
+        if not watch:
+            env.pop(progress.ENV, None)
+            proc = subprocess.run(
+                [sys.executable, "-m", "proxdex", "--root", str(lib.root), *args],
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+            )
+            return {"ok": proc.returncode == 0, "log": proc.stdout + proc.stderr}
+        with _Watched(args) as job:
+            proc = subprocess.run(
+                [sys.executable, "-m", "proxdex", "--root", str(lib.root), *args],
+                capture_output=True,
+                text=True,
+                check=False,
+                env={**env, progress.ENV: str(job.path)},
+            )
         return {"ok": proc.returncode == 0, "log": proc.stdout + proc.stderr}
+
+    @app.get("/api/progress")
+    def api_progress() -> dict[str, Any]:
+        """How far along whatever is running has got — newest job first.
+
+        No job id, deliberately. This is a single-user console on localhost and
+        every mutation happens behind one overlay, so "what is running" is a
+        question about the server rather than about a request. It also means a
+        second tab watching an upscale somebody started in the first one sees it,
+        which is better than a spinner that knows nothing.
+        """
+        running = _running()
+        newest = running[0] if running else None
+        if newest is None:
+            return {"running": False, "jobs": 0}
+        report = progress.read(newest.path)
+        out: dict[str, Any] = {
+            "running": True,
+            "jobs": len(running),
+            "command": newest.command,
+            "elapsed": round(time.time() - newest.at, 2),
+        }
+        if report is not None:
+            out |= report.json()
+            # Both decided in one place (`progress.Report`) rather than by each
+            # reader's own arithmetic — and `remaining` is measured on the command's
+            # own clock, so the second or two this subprocess spent importing and
+            # reading the library is not counted as part of the per-item rate.
+            out["positional"] = report.positional
+            left = report.remaining
+            if left is not None:
+                out["left"] = round(left, 1)
+        return out
 
     # ---- pages / static ----------------------------------------------------
     # the vendored component library (Bootstrap, MIT) ships with the package, so
@@ -771,6 +969,35 @@ def create_app(lib: Library) -> FastAPI:
             card.stage_path(st, face), headers={"Cache-Control": _cache_control(rev)}
         )
 
+    @app.get("/api/art")
+    def api_art(request: Request, u: str, size: art.Size) -> Response:
+        """A provider's picture, downscaled to the size it is drawn at and kept.
+
+        Browse's cost was never its JSON: a set index pulled 24.7 MB of logo PNGs
+        into a slot 2.25rem tall and a 60-card page pulled 45 MB of full-size
+        scans into 190px tiles, every visit. See :mod:`proxdex.art` — including
+        why the host is checked against a list rather than taken on trust.
+
+        The URL names one picture at one size, so the answer is immutable and the
+        browser is told so; a mismatched ``If-None-Match`` still costs only a
+        read from the cache directory.
+        """
+        try:
+            picture = art.load(u, size, Config.load(lib.root))
+        except FileError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except (net.NetworkError, requests.RequestException, OSError, ValueError):
+            # a picture that will not arrive is a picture: the tile's `onerror`
+            # drops it and the card is still identified by its text
+            return Response(status_code=502)
+        headers = {
+            "ETag": picture.etag,
+            "Cache-Control": "private, max-age=31536000, immutable",
+        }
+        if request.headers.get("if-none-match") == picture.etag:
+            return Response(status_code=304, headers=headers)
+        return Response(picture.body, media_type=picture.media_type, headers=headers)
+
     @app.get("/api/details/{cid}")
     def api_details(cid: str) -> dict[str, Any]:
         """Everything the card's API says about it — facts, links, raw JSON.
@@ -867,6 +1094,14 @@ def create_app(lib: Library) -> FastAPI:
             # align panel has to say out loud about it
             "resolution": found.json(),
             "pin": card.pin,
+            # the fill settings this card already carries, so the Advanced section
+            # opens on what it was last bordered with rather than on the defaults
+            "tune": bleed.Tuning.from_pairs(card.tune(Stage.BORDERED, face)).json(),
+            "knobs": [k.json() for k in bleed.KNOBS],
+            # the reading this card's master was fitted from, so a *done* step can
+            # answer "is any border being invented here" with the marks down — and so
+            # the panel knows a re-fill is even possible
+            "marks": _edges_json(card.marks(Stage.BORDERED, face)),
         }
 
     # ---- frame specs -------------------------------------------------------
@@ -923,6 +1158,34 @@ def create_app(lib: Library) -> FastAPI:
             return {"error": str(exc), "set": set_id, "rows": []}
         return found.json()
 
+    @app.get("/api/frames/coverage")
+    def api_frames_coverage() -> dict[str, Any]:
+        """What has a measured frame spec and what nobody has read yet, per game.
+
+        Its own route rather than part of `/api/frames`, because it costs a provider
+        request per game (the set list, cached a day) and the other three tabs must
+        not wait on one. Both games in one answer: "have we covered everything?" is a
+        question about the whole of what proxdex can border, and asking it a game at a
+        time is how a gap in the one you were not looking at stays invisible.
+        """
+        cfg = Config.load(lib.root)
+        reg = specs.load(lib.root)
+        held = browse.owned([card.set_id for card in lib.cards()])
+        out: list[dict[str, Any]] = []
+        for game in GameId:
+            try:
+                out.append(inventory.coverage(game, cfg, reg, held).json())
+            except (requests.RequestException, ProxdexError) as exc:
+                # one game's provider being down must not blank the other's answer —
+                # the same reason a facet whose catalog request failed is dropped
+                out.append(
+                    {
+                        "game": game.value,
+                        "error": f"could not list this game's sets (try again): {exc}",
+                    }
+                )
+        return {"games": out}
+
     @app.post("/api/frames/spec")
     def api_frames_spec(body: SpecBody) -> Any:
         """Add or correct a spec. One verb, `frames set`, and the CLI is what
@@ -960,53 +1223,210 @@ def create_app(lib: Library) -> FastAPI:
     # ---- search / acquire --------------------------------------------------
     @app.get("/api/search")
     def api_search(
-        q: str,
+        q: str = "",
         game: str | None = None,
         set_filter: Annotated[str | None, Query(alias="set")] = None,
         rarity: str | None = None,
         year: str | None = None,
-        limit: int = 60,
+        type_: Annotated[str | None, Query(alias="type")] = None,
+        supertype: str | None = None,
+        subtype: str | None = None,
+        color: str | None = None,
+        sort: str | None = None,
+        desc: bool | None = None,
+        page: int = 1,
+        per_page: int = browse.PER_PAGE,
     ) -> Any:
+        """One page of the cards matching a query — searching *and* browsing.
+
+        The same endpoint answers both, because they are the same question:
+        browsing a set is a query carrying a set and no text (see
+        :class:`proxdex.browse.Query`). ``type`` and ``color`` take a
+        comma-separated list, which is how a multi-pick filter travels in a URL.
+        """
         cfg = Config.load(lib.root)
         want = games.coerce(game, cfg.library_game)
+        wanted = browse.Query(
+            game=want,
+            text=q,
+            set_id=set_filter or "",
+            rarity=rarity or "",
+            year=year or "",
+            types=_csv(type_),
+            supertype=supertype or "",
+            subtype=subtype or "",
+            colors=tuple(c.upper() for c in _csv(color)),
+            # an unknown sort is the default rather than a 422: this arrives from
+            # an address bar somebody may have edited, and a browse screen that
+            # will not draw is a worse answer than one sorted by date
+            sort=browse.parse_sort(sort) or browse.Sort.RELEASED,
+            desc=desc,
+            page=page,
+            per_page=per_page,
+        )
         try:
-            found = sources.search(
-                q,
-                cfg,
-                want,
-                set_filter=set_filter,
-                rarity=rarity,
-                year=year,
-                limit=limit,
-            )
+            found = sources.search_page(wanted, cfg)
         except (requests.RequestException, ProxdexError) as exc:
             return {"error": f"search failed (try again): {exc}"}
-        return [
-            {
-                "id": r.id,
-                "name": r.name,
-                "game": r.game.value,
-                "set": r.set_name,
-                "year": r.year,
-                "number": f"{r.number}/{r.printed_total}"
-                if r.printed_total
-                else r.number,
-                "rarity": r.rarity,
-                "artist": r.artist,
-                "image": r.image_url,
-                "have": lib.find(r.id) is not None,
-            }
-            for r in found
-        ]
+        # the whole page's pictures, six at a time, while the browser lazily asks
+        # for the ones on screen — the two share one fetch each (see art.load)
+        art.warm((r.thumb for r in found.items), art.Size.CARD, cfg)
+        return {
+            **found.json(),
+            "query": wanted.params(),
+            "narrowed": wanted.narrowed,
+            "items": [_hit_json(r) for r in found.items],
+        }
+
+    def _hit_json(r: sources.SearchResult) -> dict[str, Any]:
+        """One search hit. ``have`` is the library's own answer, per row — the
+        notice that stops you re-fetching a card you already filed."""
+        return {
+            "id": r.id,
+            "name": r.name,
+            "game": r.game.value,
+            "set": r.set_name,
+            "set_id": r.set_id,
+            "year": r.year,
+            "number": f"{r.number}/{r.printed_total}" if r.printed_total else r.number,
+            "rarity": r.rarity,
+            "artist": r.artist,
+            # two pictures, because they answer two things: `image` is the
+            # full-resolution scan the `full ↗` link offers (and what `fetch` would
+            # file), `thumb` is the small one the tile draws. Equal where the provider
+            # publishes only one size.
+            "image": r.image_url,
+            "thumb": r.thumb,
+            # the traits a frame rule matches on, so a client adding this card can
+            # hand them straight back instead of costing a second metadata request
+            "subtypes": r.traits.get("subtypes", ""),
+            # what this printing is, so a hit can be badged before it is fetched
+            "layout": r.layout.value,
+            "oversized": r.oversized,
+            "have": lib.find(r.id) is not None,
+        }
+
+    @app.get("/api/expansions")
+    def api_expansions(game: str | None = None) -> Any:
+        """Every set of one game, grouped the way that game groups them, with how
+        many cards of each the library already holds.
+
+        The counts are local and free (they come off the card folders), which is
+        what makes the index worth opening: the interesting fact about a set you
+        are browsing is how much of it you already have.
+        """
+        cfg = Config.load(lib.root)
+        want = games.coerce(game, cfg.library_game)
+        held = browse.owned([card.set_id for card in lib.cards()])
+        try:
+            found = browse.groups(want, cfg)
+        except (requests.RequestException, ProxdexError) as exc:
+            return {"error": f"could not list sets (try again): {exc}"}
+        # start on the art while the browser is still drawing the tiles: it will
+        # ask for six at a time, and there are ~174 of them
+        art.warm((e.logo_url for g in found for e in g.expansions), art.Size.LOGO, cfg)
+        art.warm(
+            (e.symbol_url for g in found for e in g.expansions), art.Size.SYMBOL, cfg
+        )
+        return {
+            **browse.meta(want),
+            "groups": [g.json(held) for g in found],
+            "sets": sum(len(g.expansions) for g in found),
+            "owned": sum(held.values()),
+        }
+
+    @app.get("/api/facets")
+    def api_facets(game: str | None = None) -> Any:
+        """What this game can be filtered by, and the values each filter offers.
+
+        Served rather than spelled in JS for the reason ``/api/meta`` serves the
+        step schema: the vocabulary is the provider's, it differs per game, and a
+        copy in the UI would be a second list to keep in step. A facet whose
+        catalog request failed is simply absent — see
+        :func:`proxdex.browse.facets`.
+        """
+        cfg = Config.load(lib.root)
+        want = games.coerce(game, cfg.library_game)
+        return {
+            **browse.meta(want),
+            "facets": [f.json() for f in browse.facets(want, cfg)],
+        }
 
     @app.post("/api/fetch")
     def api_fetch(body: FetchBody) -> dict[str, Any]:
-        args = ["fetch", *body.ids, *_side(body.face)]
+        """Download cards by id — one batch call, plus one call per card whose
+        description the client already had.
+
+        A card sent with its `known` description needs **no metadata request at all**,
+        which matters because that request is the one that fails when pokemontcg.io is
+        having a bad afternoon: the browser had just drawn the card's name, set and
+        rarity from a search response, and `fetch` was asking for all of it again.
+        Those go one at a time, because a description belongs to one card — and the
+        batch keeps its single call, so nothing is slower for the ordinary case.
+
+        **The count is the request's, not each call's** (:class:`_Counted`). Split
+        across one-card calls it was a total of 1 every time, which has no position in
+        it, so a four-card add drew a sweep. With nothing described there is nothing to
+        count here
+        and the batch reports its own progress exactly as before.
+        """
+        described = {k.id: k for k in body.known}
+        plain = [cid for cid in body.ids if cid not in described]
+        if not described:
+            return _fetch_batch(body, plain)
+        logs: list[str] = []
+        ok = True
+        with _Counted("fetch", "fetching", len(body.ids)) as job:
+            for cid in body.ids:
+                if cid not in described:
+                    continue
+                k = described[cid]
+                args = [
+                    "fetch",
+                    cid,
+                    *_side(body.face),
+                    "--game",
+                    GameId.POKEMON.value,
+                    "--name",
+                    k.name,
+                ]
+                for flag, value in (
+                    ("--set-name", k.set_name),
+                    ("--rarity", k.rarity),
+                    ("--subtypes", k.subtypes),
+                ):
+                    if value:
+                        args += [flag, value]
+                if body.related:
+                    args.append("--related")
+                job.at(cid)
+                out = run_cli(args, watch=False)
+                job.advance(note=cid)
+                logs.append(str(out.get("log", "")))
+                ok = ok and out.get("ok") is not False
+            if plain:
+                # one call for the lot, so it lands as one advance of len(plain): the
+                # cards inside it finish at times this process does not see, and
+                # stepping the bar through them would be a position nobody measured
+                job.at(f"{len(plain)} more")
+                out = _fetch_batch(body, plain, watch=False)
+                job.advance(by=len(plain))
+                logs.append(str(out.get("log", "")))
+                ok = ok and out.get("ok") is not False
+        return {"ok": ok, "log": "\n".join(x for x in logs if x)}
+
+    def _fetch_batch(
+        body: FetchBody, ids: list[str], *, watch: bool = True
+    ) -> dict[str, Any]:
+        """The ids nobody described — one call, and the CLI counts them itself."""
+        if not ids:
+            return {"ok": True, "log": ""}
+        args = ["fetch", *ids, *_side(body.face)]
         if body.game is not None:
             args += ["--game", body.game.value]
         if body.related:
             args.append("--related")
-        return run_cli(args)
+        return run_cli(args, watch=watch)
 
     @app.post("/api/import/plan")
     def api_import_plan(body: ImportPlanBody) -> dict[str, Any]:
@@ -1072,6 +1492,19 @@ def create_app(lib: Library) -> FastAPI:
             elif body.grow is not None:  # plain per-edge growth, no fit
                 for edge, val in body.grow:
                     args += [f"--{edge}", f"{val:g}"]
+            if body.tune is not None:
+                try:
+                    tuning = bleed.Tuning.parse(body.tune)
+                except FileError as exc:
+                    return _bad(str(exc))
+                # an empty tuning is a real request — "use the defaults" — and the CLI
+                # spells that `--no-tune`, not an absent flag (which means "keep what
+                # the card has")
+                args += (
+                    [f for pair in tuning.spelled() for f in ("--tune", pair)]
+                    if not tuning.empty
+                    else ["--no-tune"]
+                )
         if body.force:
             args.append("--force")
         return run_cli(args)
@@ -1470,6 +1903,33 @@ def _apply_overrides(cfg: Config, body: SheetBody) -> None:
 def _side(face: int | None) -> list[str]:
     """``--face N``, or nothing at all when the request means "every side"."""
     return ["--face", str(face)] if face is not None else []
+
+
+def _edges_json(
+    marks: tuple[float, float, float, float] | None,
+) -> dict[str, float] | None:
+    """Four per-edge fractions as the ``{top, right, bottom, left}`` shape every other
+    edge quadruple in this API uses; ``None`` when nothing was recorded."""
+    if marks is None:
+        return None
+    top, right, bottom, left = marks
+    return {"top": top, "right": right, "bottom": bottom, "left": left}
+
+
+def _side_index(face: int | None) -> int:
+    """A request's 1-based side as the 0-based index the library uses; the front
+    when the request named none."""
+    return FRONT if face is None else face - 1
+
+
+def _csv(value: str | None) -> tuple[str, ...]:
+    """A comma-separated query parameter as a tuple, blanks dropped.
+
+    How a multi-pick filter travels in a URL — ``?type=Fire,Water`` — so the
+    address bar stays readable and shareable, which is the whole reason the search
+    screen keeps its query there.
+    """
+    return tuple(part.strip() for part in (value or "").split(",") if part.strip())
 
 
 def _bad(log: str) -> JSONResponse:

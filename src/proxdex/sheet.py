@@ -27,7 +27,7 @@ from typing import Any, cast
 import img2pdf
 from PIL import Image, ImageDraw
 
-from proxdex import games, scratch, steps
+from proxdex import games, progress, scratch, steps
 from proxdex.config import (
     Config,
     DuplexFlip,
@@ -266,13 +266,11 @@ def plan(cards: Sequence[tuple[Card, int]], cfg: Config) -> Run:
     for card, count in zip(ready, copies, strict=True):
         trim = trim_mm(card, cfg)
         per_trim[trim] = per_trim.get(trim, 0) + count
-    # duplex prints a back page behind every front page
-    sides = 2 if cfg.sheet_faces is Faces.DUPLEX else 1
     groups: list[Group] = []
     for trim, count in per_trim.items():
         grid = grid_for(cfg, trim)
-        sheets = -(-count // (grid[0] * grid[1]))  # ceil
-        groups.append(Group(trim=trim, cards=count, grid=grid, pages=sheets * sides))
+        pages = pages_for(count, grid[0] * grid[1], cfg.sheet_faces)
+        groups.append(Group(trim=trim, cards=count, grid=grid, pages=pages))
     return Run(
         ready=tuple(ready),
         copies=tuple(copies),
@@ -453,6 +451,22 @@ def _by_trim(cells: list[Cell]) -> dict[Trim, list[Cell]]:
     return groups
 
 
+def pages_for(count: int, per_page: int, faces: Faces) -> int:
+    """How many pages ``count`` cards of one trim fill — the *one* place this is
+    worked out, so the count :func:`plan` promises and the one the imposition
+    actually writes cannot drift apart."""
+    sides = 2 if faces is Faces.DUPLEX else 1
+    return -(-count // per_page) * sides  # ceil
+
+
+def page_count(cells: list[Cell], cfg: Config) -> int:
+    """How many pages these cells will fill, imposing nothing."""
+    return sum(
+        pages_for(len(group), _geometry(cfg, trim).per_page, cfg.sheet_faces)
+        for trim, group in _by_trim(cells).items()
+    )
+
+
 def _iter_pages(cells: list[Cell], cfg: Config) -> Iterator[Image.Image]:
     """Impose per ``sheet_faces``; duplex interleaves front + mirrored back."""
     faces = cfg.sheet_faces
@@ -470,24 +484,39 @@ def _iter_pages(cells: list[Cell], cfg: Config) -> Iterator[Image.Image]:
                 yield _render(backs, cfg, g, is_back=True)
 
 
-def _pages_to_pdf(pages: Iterator[Image.Image], dst: Path, cfg: Config) -> int:
+def _pages_to_pdf(
+    pages: Iterator[Image.Image],
+    dst: Path,
+    cfg: Config,
+    total: int = progress.UNKNOWN,
+) -> int:
     """Write pages losslessly via img2pdf, one page raster in memory at a time.
 
     Each page is dumped to a temp PNG (Flate/lossless, DPI-tagged) then embedded
     by img2pdf without re-encoding — so print output is never JPEG-degraded, and
     huge high-DPI pages don't all sit in RAM at once.
+
+    Progress is reported from *here* rather than from the generator, because this
+    is where both halves of the wait happen: rendering the pages, and then the
+    embed, which on a real run is seconds of its own. Reported from the generator
+    it read as a bar that filled to the last page and then fell back to a spinner.
     """
+    sink = progress.Sink()
+    sink.start("Imposing", total)
     tmp: list[str] = []
     try:
         for page in pages:
             path = scratch.file(".png")
             page.save(path, "PNG", dpi=(cfg.sheet_dpi, cfg.sheet_dpi))
             tmp.append(str(path))
+            sink.advance(f"page {len(tmp)}")
         if not tmp:
             raise ValueError("no pages to write")
+        sink.at("writing the PDF")
         dst.write_bytes(cast(bytes, img2pdf.convert(tmp)))
         return len(tmp)
     finally:
+        sink.finish()
         for path in tmp:
             with contextlib.suppress(OSError):
                 Path(path).unlink()
@@ -499,7 +528,9 @@ def impose_to_pdf(cells: list[Cell], cfg: Config, dst: Path) -> int:
     Cards of one trim size share pages; a size that is not the configured trim
     (an oversized card) gets pages of its own, at its own size.
     """
-    return _pages_to_pdf(_iter_pages(cells, cfg), dst, cfg)
+    return _pages_to_pdf(
+        _iter_pages(cells, cfg), dst, cfg, total=page_count(cells, cfg)
+    )
 
 
 def labelled_page(

@@ -147,6 +147,12 @@ class Config:
         label="Pokémon image URL",
         help="Where Pokémon card scans are downloaded from. {id} is the card id.",
     )
+    scrydex_thumb_url: str = setting(
+        "https://images.scrydex.com/pokemon/{id}/small",
+        label="Pokémon thumbnail URL",
+        help="Where the small scan behind a search or browse tile comes from. "
+        "Never what gets filed — that is always the full image above.",
+    )
     api_url: str = setting(
         "https://api.pokemontcg.io/v2/cards/{id}",
         label="Pokémon data API",

@@ -19,7 +19,7 @@ extension) and [Upscayl](https://upscayl.org) (upscaling), and imposes the
 print sheet itself — so it owns the whole path to paper.
 
 Think of it as **author a master, then reproduce it**: the four card stages
-produce a device-independent, trim-size master (what the card *should* look
+produce a device-independent, trim-size master (what the card _should_ look
 like); the `sheet` step reproduces it faithfully on a specific printer + medium
 (colour-correct + add bleed outside the trim).
 
@@ -28,12 +28,12 @@ like); the `sheet` step reproduces it faithfully on a specific printer + medium
 Each card's stored file is the **actual trim-size card** — no bleed. Four
 stages, one file per stage:
 
-| # | stage      | produced by                               | command |
-|---|------------|-------------------------------------------|---------|
-| 1 | `original` | downloaded from the game's image source   | `search` / `fetch` |
-| 2 | `bordered` | thin frame expanded to trim (optional)    | `border` |
-| 3 | `upscaled` | Upscayl — *after* the border fix          | `upscale` / `import` |
-| 4 | `edited`   | one uniform look — the **master**         | `grade` |
+| #   | stage      | produced by                             | command              |
+| --- | ---------- | --------------------------------------- | -------------------- |
+| 1   | `original` | downloaded from the game's image source | `search` / `fetch`   |
+| 2   | `bordered` | thin frame expanded to trim (optional)  | `border`             |
+| 3   | `upscaled` | Upscayl — _after_ the border fix        | `upscale` / `import` |
+| 4   | `edited`   | one uniform look — the **master**       | `grade`              |
 
 **Every step is one you run or skip — nothing is automatic.** Steps 2–4 each
 carry their own state: `pending` → `done` (you ran it) or `skipped` (you
@@ -53,7 +53,7 @@ surviving.
 ### Special printings
 
 Almost every card is one picture on one side of one 63×88mm card. Providers name
-two dozen *layouts* — saga, adventure, prototype, leveler, battle — but nearly all
+two dozen _layouts_ — saga, adventure, prototype, leveler, battle — but nearly all
 of them differ in rules text, not in ink, so proxdex records only what changes
 what goes on paper: **one side, two sides, or half of a meld pair**, plus whether
 the card is **oversized**. `proxdex ls` shows it in a Kind column, `proxdex show`
@@ -66,7 +66,7 @@ sides**, and `fetch` downloads both. Each side runs the pipeline on its own — 
 different picture and needs its own border fit — so every step, skip and reset
 takes `--face 1` (front) or `--face 2` (back). Without it they act on both.
 
-Which side goes on the *paper* is your call, because a transform card has two
+Which side goes on the _paper_ is your call, because a transform card has two
 real fronts and no back of its own:
 
 ```bash
@@ -114,9 +114,9 @@ library of ordinary cards sees the layout it always did. A card's size is never
 silently changed to fit the sheet.
 
 **Cut bleed and medium colour-correction are not baked into the card** — they're
-applied at `sheet` time, extended *outside* the trim, so the master stays a
+applied at `sheet` time, extended _outside_ the trim, so the master stays a
 clean, resizable, device-neutral card. **Where do effects go?** Author the look
-in `grade` (after upscaling, WYSIWYG); frame expansion goes *before* upscale in
+in `grade` (after upscaling, WYSIWYG); frame expansion goes _before_ upscale in
 `border`; bleed + medium reproduction happen in `sheet`. See
 [uniform prints](#uniform-prints).
 
@@ -164,7 +164,7 @@ uv tool install .              # from a local checkout
 uv tool upgrade proxdex        # later
 ```
 
-**macOS, Linux and Windows**, on Python 3.11–3.13. CI runs the suite *and* a real
+**macOS, Linux and Windows**, on Python 3.11–3.13. CI runs the suite _and_ a real
 library end to end — init, import, border fit, imposed PDF — on all three, because
 the defects that only appear on one platform live in that path and not in a unit
 test. One caveat, inherited rather than ours: on **Linux arm64** (a Pi, Graviton,
@@ -174,7 +174,7 @@ install from wheels with no compiler.
 
 `cardbleed` ships as a dependency, so it's bundled in proxdex's own venv — no
 separate install, and proxdex finds it there even though it isn't on your PATH.
-It is pinned `>=0.4.1`: cardbleed runs *inside* proxdex's process and prints to
+It is pinned `>=0.4.1`: cardbleed runs _inside_ proxdex's process and prints to
 proxdex's stdout, and 0.4.1 is the first release whose own output survives a
 stream that cannot encode it.
 
@@ -185,7 +185,7 @@ desktop application, and no `pip`/`uv` install can supply it:
 
 - **Upscayl is not a Python package.** It is an Electron app whose engine,
   `upscayl-bin`, is a native Vulkan binary. It is not published on PyPI, so there
-  is nothing for an extra to depend on. (There *is* an `upscayl` name on PyPI —
+  is nothing for an extra to depend on. (There _is_ an `upscayl` name on PyPI —
   version `0.0.0a1`, described as "A small example package". It is unrelated.
   proxdex does not depend on it and neither should you.)
 - **So there is no `proxdex[upscale]` extra**, deliberately. An extra can only
@@ -203,11 +203,11 @@ brew install --cask upscayl      # macOS
 proxdex then finds it by itself on all three platforms, in Upscayl's own install
 layout — the engine at `resources/bin`, the models at `resources/models`:
 
-| | looked for at |
-|---|---|
-| macOS | `/Applications/Upscayl.app/Contents/Resources/…` (and `~/Applications`) |
+|         | looked for at                                                                                        |
+| ------- | ---------------------------------------------------------------------------------------------------- |
+| macOS   | `/Applications/Upscayl.app/Contents/Resources/…` (and `~/Applications`)                              |
 | Windows | `%ProgramFiles%\Upscayl\resources\…`, and `%LOCALAPPDATA%\Programs\Upscayl\…` for a per-user install |
-| Linux | `/opt/Upscayl/resources/…` (the `.deb` and `.rpm` both land there) |
+| Linux   | `/opt/Upscayl/resources/…` (the `.deb` and `.rpm` both land there)                                   |
 
 Some installs have no fixed home and cannot be guessed: Upscayl's Windows
 installer lets you choose the directory, its portable zip unpacks wherever you
@@ -219,7 +219,7 @@ upscayl_bin    = "D:/Apps/Upscayl/resources/bin/upscayl-bin.exe"
 upscayl_models = "D:/Apps/Upscayl/resources/models"
 ```
 
-Keep the binary *in its own folder* — on Windows it needs the `vcomp140.dll`
+Keep the binary _in its own folder_ — on Windows it needs the `vcomp140.dll`
 shipped beside it, so copying just the `.exe` out will not work.
 
 `proxdex where` tells you what this machine has, and when it finds nothing it
@@ -233,7 +233,7 @@ upscaler  upscayl ✓ /Applications/Upscayl.app/Contents/Resources/bin/upscayl-b
 and it is affected honestly: `proxdex upscale` refuses up front with what to
 install (not per card, halfway through a batch), and in the web UI its Run button
 is disabled with the same sentence and the Skip button beside it. Nothing else
-changes — the *stage* still exists, an upscaled image a card already holds is
+changes — the _stage_ still exists, an upscaled image a card already holds is
 still shown and still printed, and `proxdex skip upscale` is a first-class choice
 that leaves the earlier stage as the master.
 
@@ -247,7 +247,7 @@ pip-installable one. Today there is exactly one backend, and it is Upscayl.
 The **tool** is installed once; your **library** (cards, config, batches) is
 just a folder. proxdex locates it, git-style:
 
-1. `--root DIR` (accepted before *or* after the command), else
+1. `--root DIR` (accepted before _or_ after the command), else
 2. the nearest `proxdex.toml` searching up from the current directory, else
 3. `$PROXDEX_ROOT` (set this in your shell profile to run from anywhere):
 
@@ -268,6 +268,8 @@ run `index` by hand).
 cd ~/Documents/Proxies
 proxdex init                   # one-time: create the library here
 
+proxdex sets                   # every set of the game, grouped as the game groups them
+proxdex browse base1           # page through one set, ✓ on the cards you already have
 proxdex search entei ex        # find a card by name, pick which print to fetch
 proxdex fetch ex3-90 ex6-105   # or download directly by id
 
@@ -282,6 +284,7 @@ proxdex printed dark-deck      # mark the batch printed
 
 proxdex ls                     # every card, side, stage progress, printed?
 proxdex ls --only ready --sort recent   # same filters the contact sheet offers
+proxdex ls --per-page 40 --page 2       # a long library, by the page
 proxdex show ex3-90            # everything the card's API says, plus local state
 ```
 
@@ -334,7 +337,7 @@ proxdex doctor                 # stored images that aren't what proxdex writes n
 
 ### `doctor` — the files you already have
 
-proxdex learns things about how a stage image has to be *stored*, and a library
+proxdex learns things about how a stage image has to be _stored_, and a library
 filled last year does not benefit from a fix applied at the front door. `doctor`
 reads the header of every stored image and names what a current proxdex would have
 written differently: a die-cut corner left transparent (it prints as whatever was
@@ -350,7 +353,7 @@ proxdex doctor ex3-90          # or scope it to some cards
 
 A repair rewrites only the file it names and leaves every later stage alone — the
 picture does not change, so nothing derived from it went stale. A wrong aspect is
-*not* repaired: re-fitting a border needs to know where the border is, which is a
+_not_ repaired: re-fitting a border needs to know where the border is, which is a
 decision, so `doctor` names the step to re-run instead. The same check is the
 settings screen's **stored images** panel in the web UI.
 
@@ -367,16 +370,16 @@ proxdex fetch neo-136              # tries the default game, then the rest
 proxdex fetch --game mtg 4ed-100   # or say it outright
 ```
 
-| | Pokémon | Magic: The Gathering |
-|---|---|---|
-| id | `ex3-90` | `neo-136` |
-| metadata | pokemontcg.io | Scryfall |
-| image | scrydex | Scryfall PNG (745×1040) |
-| card back | no API — supply a scan | Scryfall's standard back |
-| frame spec | per era (WOTC measured) | one spec, uniform on all edges |
-| borderless | not exposed by the API | detected from the printing |
-| sides | always one | one or two (transform, modal, reversible) |
-| related cards | — | meld halves + result, tokens (`fetch --related`) |
+|               | Pokémon                 | Magic: The Gathering                             |
+| ------------- | ----------------------- | ------------------------------------------------ |
+| id            | `ex3-90`                | `neo-136`                                        |
+| metadata      | pokemontcg.io           | Scryfall                                         |
+| image         | scrydex                 | Scryfall PNG (745×1040)                          |
+| card back     | no API — supply a scan  | Scryfall's standard back                         |
+| frame spec    | per era (WOTC measured) | one spec, uniform on all edges                   |
+| borderless    | not exposed by the API  | detected from the printing                       |
+| sides         | always one              | one or two (transform, modal, reversible)        |
+| related cards | —                       | meld halves + result, tokens (`fetch --related`) |
 
 ### Web UI
 
@@ -399,51 +402,112 @@ machine (localhost only):
   in the chrome around the card rather than dimmed over it. Two-sided cards get a
   side tab strip and a control for which side prints on the front.
   `←`/`→` cards, `↑`/`↓` steps, `F` flips side, `C` cycles compare.
-- **Border tool** — the four align marks are live whenever Border is focused, and
-  they land on a **measurement of the card's own border** the first time you open
-  the tool, with a chip saying whether every edge read cleanly (Measure it does it
-  again on demand). Drag one and a **loupe** shows the source pixels at 6× with
+- **Border tool** — focusing Border draws the card **untouched**, with a dashed
+  outline over it showing where this printing's border _should_ be, from its frame
+  spec. Nothing has measured where it actually sits: that is yours to place, because
+  a border read off the image is wrong in ways no screen shows until the card is cut
+  (see [Border correction](#border-correction-frame-expansion)). From there you
+  **Skip**, or press **Align the border** to bring up four draggable marks starting at
+  the spec's own numbers. Drag one and a **loupe** shows the source pixels at 6× with
   the mark on a crosshair; arrow keys nudge it, or type the inset as a percentage.
-  A cyan ghost
-  outlines the trim the fit will produce and shades the border it is aiming at,
-  so you can see the result before running it. The frame spec — and how much it
-  is trusted — is a setting like any other.
-- **Search** — pick a game, query with filters, preview art, add selected, with
-  or without the cards they're printed alongside. Hover a hit for `full ↗` — the
-  provider's own scan at full size, for telling two prints apart.
+  Run stays disabled until the marks are up and a fit solves — a reshape with no idea
+  where the border is has nothing to reshape against. A borderless printing needs no
+  marks at all, so it says so and Run is live immediately. The dashed lines are what
+  the fit is aiming at and the solid ones are what you drag; once the step has run,
+  the outline stays over its **output**, which is the cheapest check there is that the
+  fit landed.
+- **Browse** — every set of a game as a grid of its own logos, under the game's own
+  grouping (a Pokémon series, a Magic `set_type`), with a bar on each tile showing how
+  much of that set you already hold. Open one and it is a paged card grid with the
+  set's symbol beside every print, a green **✓** on the ones already filed, and the
+  same filter bar Search has. This is the screen for when you know the set and not
+  the name, which is most of the time.
+- **Adding cards, two ways** — because they are two intentions. **`+ Add`** under a
+  card downloads that one now, and the button becomes `✓ In your library` the moment
+  it lands. Or **click the artwork** to pick cards — a picked card takes the accent on
+  its own frame and a badge you can read across the grid, and a tray at the foot of
+  the window shows the thumbnails of everything picked with one **`Add N to library`**.
+  **The tray outlives the page you picked on**: it survives turning the page, changing
+  a filter, switching between Browse and Search, and a reload. It can hold both games
+  at once, and each card is fetched under its own.
+- **Search** — pick a game, query by name with filters served from the provider's own
+  catalogs (rarities, types, subtypes; colours for Magic), sorted and paged, add
+  selected, with or without the cards they're printed alongside. Hover a hit for
+  `full ↗` — the provider's own scan at full size, for telling two prints apart.
+  Every filter is a removable chip, and the whole query lives in the URL.
 - **Import wizard** — drop a folder of scans or an Upscayl output and review it
   one row per file before anything is sent: the card it goes to, the stage, the
   side, and what it would do — a new stage, a replacement, a slot two files want,
   a name with no id in it. The review is `import --dry-run` computed on the
   server from the **filenames alone**, so a two-hundred-file folder previews
   without uploading a byte; the thumbnails are the browser's own copies. A row
-  with no id gets a **Find…** search to name the card, `already there` chooses
-  replace-or-keep for the run, and the files then go one request at a time so a
-  failure belongs to one named file instead of the folder.
+  with no id gets a **Find…** search to name the card, or an id for **every**
+  unnamed row at once from a set code plus the number already in each filename
+  (`4.png` under `base1` → `base1-4`; a name with no number is left for you).
+  `already there` chooses replace-or-keep for the run, a checkbox narrows the table
+  to just the rows that need a decision, and the files then go one request at a time
+  so a failure belongs to one named file instead of the folder. Before you have
+  dropped anything the screen states the three steps and **what a filename tells
+  it** — which is knowable up front, and much cheaper to act on before you have
+  chosen two hundred files.
 - **Card data sheet** — every field the provider returns, its outbound links, and
   what the card is **printed alongside** — a meld partner, the melded card, the
   tokens it makes — each addable in one click.
 - **Settings** — a real form: every setting carries its label, explanation, unit
   and default, all read from the code itself, with the raw TOML key kept visible.
   Nothing is written until you save, and the save bar only exists while something
-  differs. Card backs, the frame specs (and which of your sets ride on an
-  estimate) and the calibration loop live here too.
+  differs. Card backs, the frame specs (with the warnings `frames check` reports) and
+  the calibration loop live here too.
 - **Make sheet** — the whole library or just what you selected, with a per-card
   side choice for two-sided cards, made where the consequence is. If the batch
   mixes card sizes it says so up front, with how many of each fit a page. The
   PDF it writes is linked the moment it exists — the browser's version of
-  `sheet --open`, which opens the file on whatever machine you *typed* it on.
+  `sheet --open`, which opens the file on whatever machine you _typed_ it on.
   **Mark printed** and **rebuild index** from the toolbar.
+- **The border is two steps, and the second one is the fill.** Step one is the reading:
+  place the marks and Run, with cardbleed's defaults. That reading is recorded, so it
+  never has to be taken again. Step two appears once the step is done — cardbleed's
+  thirteen fill settings, right under the step's own controls, and **changing one
+  re-borders the card there and then**. What you are looking at is the output, not a
+  preview; the geometry never moves, only the invented border, and the later stages are
+  rebuilt as with any re-run. What you settle on is kept on the card. Where nothing is
+  being added — the marks already on the spec — the panel **says so** rather than
+  offering controls that cannot change the picture.
+- **Waiting tells you what it is waiting for.** A batch of cards or the pages of a
+  PDF shows a **real bar** — the running command's own count, `3 of 12`, with the card
+  or page it is on. The long single jobs that nothing can count (one card through
+  Upscayl) show elapsed time and, once you have run that command twice, `~41s
+typical` — the median of _your_ last runs, labelled as the estimate it is, never
+  dressed up as a bar position. A plain read is quicker than a dialog deserves and
+  gets a hairline at the top of the window instead.
 
 `?` shows every keyboard shortcut; `G` then `L`/`S`/`,` jumps between screens.
 
 Every screen has its own URL — `/library`, `/card/ex3-90/upscale`,
-`/card/isd-51/border?side=2`, `/search?q=charizard`, `/settings` — so **back and
-forward work**, a card (and a side) is bookmarkable, and a reload lands where you
-were (scroll included). Switching views does no round-trip at all: the library,
-search results and settings are held client-side, and images are served under a
-version stamp so the browser caches them permanently and never refetches one it
-already has.
+`/card/isd-51/border?side=2`, `/browse?game=mtg`, `/browse/base1?sort=number&page=2`,
+`/search?q=charizard&rarity=Rare+Holo`, `/settings` — so **back and forward work**, a
+card (and a side) is bookmarkable, and a reload lands where you were (scroll
+included). A set you are browsing is a _path_, because it is a page you navigated to;
+the filters beside it are parameters, because they narrow that page rather than
+replacing it. Switching views does no round-trip at all: the library, search results,
+the set index and settings are held client-side, and images are served under a version
+stamp so the browser caches them permanently and never refetches one it already has.
+
+**Set logos and card scans come through the server, shrunk and kept.** The providers
+serve a set's wordmark at 1000px and a card at full scan size, and the set index draws
+174 of the former in a slot 2.25rem tall: 24.7 MB, and 45 MB for one 60-card page,
+every visit. proxdex fetches each once, resizes it to the size it is actually drawn at
+and keeps it in the cache directory — so the first screen of the index is 215 KB
+instead of 4.2 MB, and the second visit does no network at all. `proxdex where` counts
+what is held and `--clear-cache` drops it.
+
+**A result tile also asks for a smaller picture in the first place**, since shrinking on
+arrival only helps the browser — the server was still pulling the full scan to fill its
+cache. A tile takes Pokémon's `/small` (245px, ~30 KB against 825 KB) and Magic's
+`image_uris.normal` (488×680, ~120 KB against a median 1657 KB), which took a cold
+60-card page from 3.5s to **0.7s**. Only the full scan is ever _filed_ — the thumbnail
+never becomes a master — and a card's `full ↗` link still opens the provider's original,
+which is what it is for.
 
 The whole pipeline — its order, each step's label and skippability, and each
 step's settings schema with this library's defaults — is served from Python. The
@@ -469,7 +533,7 @@ colour management OFF** so a calibration holds.
 
 - **Copies and per-run overrides.** `ID:4` prints a playset, `--copies N` applies
   to the whole run, and `--faces/--page/--orientation/--cols/--rows/--bleed/--dpi/
-  --guides/--profile` change this run without touching the library's settings.
+--guides/--profile` change this run without touching the library's settings.
   `--dry-run` reports the page plan and writes nothing.
 - **Any input size → exact card size.** Whatever resolution a card is, it's
   scaled to **its own** physical size at sheet DPI — the configured dimensions
@@ -514,9 +578,50 @@ API** (the back is one image, owned by TPC) — supply your own high-res scan.
 
 ### Finding cards
 
-Don't know the id? `proxdex search` queries the game's API by name — every word
-must appear in the card name — and shows each match's set, release year,
-collector number, rarity and artist so you can tell prints apart:
+There are two ways in, and they answer different questions. **Search** needs a
+name. **Browse** does not — which matters, because most of the time what you know
+is the set.
+
+#### Browsing by set
+
+`proxdex sets` lists every set of a game, grouped the way that game groups them,
+and says how many of each set your library already holds:
+
+```
+$ proxdex sets --game pokemon --group "Mega"
+
+Mega Evolution 6 sets · 979 cards · 2025-2026
+Set     Name               Cards    Released  Yours
+me5     Pitch Black          120  2026-07-17      ·
+me4     Chaos Rising         122  2026-05-22      ·
+...
+```
+
+The grouping is the _game's own_, not proxdex's, and the two are different kinds
+of fact: a Pokémon **series** is an era, so the newest leads; a Magic
+**`set_type`** (Expansion, Core, Commander, Masters, …) is a kind of product,
+which has no date order, so those follow a fixed list. `--group`, `--match` and
+`--owned` narrow the list; `--json` gives you the whole thing as data.
+
+Then `proxdex browse <set>` pages through one set, with a `✓` on every card
+already in your library:
+
+```
+$ proxdex browse base1 --sort number --per-page 8
+Base base1 · 102 cards · 1999-01-09 · Base  1/102 in your library
+#     ID       Name       Set   Year    No.  Rarity     Artist
+1     base1-1  Alakazam   Base  1999  1/102  Rare Holo  Ken Sugimori
+...
+4  ✓  base1-4  Charizard  Base  1999  4/102  Rare Holo  Mitsuhiro Arita
+...
+1-5 of 102 · page 1 of 21 · ✓ 1 already in your library · --page 2 for more
+```
+
+#### Searching by name
+
+`proxdex search` queries the game's API by name — every word must appear in the
+card name — and shows each match's set, release year, collector number, rarity
+and artist so you can tell prints apart:
 
 ```
 $ proxdex search entei ex
@@ -527,11 +632,33 @@ $ proxdex search entei ex
 Fetch which? [numbers/ranges/ids · 'all' · blank to cancel]: 1
 ```
 
-Type `1`, `1,3`, `1-3`, an id, or `all`. Narrow with `--set base1`,
-`--rarity holo`, `--year 2004`; skip the prompt with `--select 1,3` or
+Type `1`, `1,3`, `1-3`, an id, or `all`. Skip the prompt with `--select 1,3` or
 `--fetch`; add `--open` to preview the first 12 result images in your browser.
 (The web UI's equivalent is a `full ↗` link on each hit — a browser cannot ask
 the machine running the server to open anything, and should not.)
+
+#### The filters are the same on both
+
+`search` and `browse` take one set of filters, because **browsing a set is a
+search with a set and no name** — one code path, one result row, one pager:
+
+| flag                                                       | means                                             |
+| ---------------------------------------------------------- | ------------------------------------------------- |
+| `--set base1`                                              | one set (`browse`'s argument does this)           |
+| `--rarity 'Rare Holo'`                                     | one rarity, as the game spells it                 |
+| `--year 2004`                                              | released that year                                |
+| `--type Fire`                                              | Pokémon energy type / Magic card type; repeatable |
+| `--supertype Trainer` · `--subtype VMAX`                   | Pokémon only                                      |
+| `--color R --color G`                                      | Magic only; **any** of them matches               |
+| `--sort released\|name\|number\|rarity` + `--asc`/`--desc` | ordering                                          |
+| `--page N` · `--per-page N`                                | paging                                            |
+
+**Every filter is pushed to the provider**, so the count in the footer is the
+whole answer's and not this page's — `1-5 of 102`, with a real page count and a
+real last page. An earlier version fetched a hundred rows and sieved them
+locally, which could only ever report "100 results" for a set of 553 and re-fetched
+the same hundred for page 2. Ask for a page past the end and it says so, and names
+the last real one, rather than reporting no matches over an answer that has plenty.
 
 ### Upscaling
 
@@ -573,66 +700,139 @@ a whole output folder files itself.
 Some scans are cut into the card's printed frame, so its border is too thin.
 `proxdex border` expands the frame up to the real thing — **before upscaling** —
 using cardbleed to continue the existing pattern rather than smear pixels. This
-is *frame* correction, distinct from *cut bleed* (which `sheet` adds outside
+is _frame_ correction, distinct from _cut bleed_ (which `sheet` adds outside
 the trim).
 
 You say where the border currently sits with
-`--inner-top/-right/-bottom/-left` (fractions of the image; the UI's align tool
-does this by dragging), and the card's **frame spec** supplies the target
-widths. Add `--stretch` to un-distort the art so the borders land exactly.
+`--inner-top/-right/-bottom/-left` (fractions of the image; the UI's align marks do
+this by dragging), and the card's **frame spec** supplies the target widths. The art is
+un-distorted so the borders land exactly on spec — that is the point of the step, so it
+is on by default; `--no-stretch` gets as close as the source allows instead.
 
-`--auto` measures those four numbers off the image instead. Each edge is scanned
-inward over 64 lines until the picture stops looking like the border — and every
-line decides that from its *own* pixels just inside the cut edge, because a card's
-frame is often not one colour at all: a silver full-art border is a gradient, an
-ex-era border is a sheen, and a single colour read for the whole ring needs a
-tolerance wide enough to swallow the art along with the variation. The answer is
-the depth the most lines agree on. It is a *pre-placement*, not a decision: every
-edge reports the share of its lines that agreed, and an edge they disagreed about
-is named rather than passed off as measured.
+**There is no `--auto`, and removing it was the point.** There was: it scanned each
+edge inward and pre-placed the marks for you. It shipped, and it was wrong in three
+ways that no screen showed — each found only by comparing it against a reading taken by
+hand:
 
-```
-$ proxdex border --auto base1-4
-  ⌖ base1-4: border ends at T2.06 R2.67 B2.06 L3.17% — every edge measured cleanly.
-✓ base1-4: fit → 628×877px  T3.92 R5.00 B3.92 L5.00%  (Pokémon · WOTC vintage, stretch)
+- On a Beta Sol Ring (stone frame at luminance 37 against a black border at 27) it
+  walked straight past the real edge to the light text box: 37-41px where the border
+  ends at 23px, **65% too far**.
+- On `dft-501` it crossed a black keyline, a thin yellow line and a second black
+  keyline, answering 56px where the flat yellow band ends at 50px.
+- On `sld-912`, which is **full-bleed**, it found a border anyway — the dark art read
+  as one at T4.04 R6.45%, and the fit then cropped into the picture on all four edges.
 
-$ proxdex border --auto --dry-run inr-14
-  ⌖ inr-14: border ends at about T3.51 R4.03 B3.56 L3.90%. The top scan lines
-    disagreed — a decorated frame or art touching the border — so check that mark.
-```
+Each of those produces four plausible numbers, and a plausible number presented as a
+measurement is worse than no number at all: it looks finished. So proxdex asks where
+the border is instead of inventing it, and the measurements that replaced the detector
+are one row per card in [`docs/measuring-frames.md`](docs/measuring-frames.md), taken
+by hand. Do not expect it back.
 
-In the UI the marks land on that measurement the first time you open the border
-tool on a card, with a chip saying whether it was clean, and you nudge from
-there. `--dry-run` measures and writes nothing.
+### Only measured specs ship
 
-Specs differ by game and era, and proxdex is honest about which it has actually
-measured:
+Twelve do, and every millimetre in them was read off a real card by hand:
 
 ```
 $ proxdex frames
-Spec             Game                  Border T/R/B/L (mm)        Confidence
-pokemon-wotc     Pokémon               3.45 / 3.15 / 3.45 / 3.15  measured
-pokemon-generic  Pokémon               3.45 / 3.15 / 3.45 / 3.15  estimated
-mtg-bordered     Magic: The Gathering  3.00 / 3.00 / 3.00 / 3.00  estimated
-borderless       any                   0.00 / 0.00 / 0.00 / 0.00  measured
+Spec                Name                                                        Game                  Border T/R/B/L (mm)        Card
+pokemon-wotc        Pokémon · WOTC vintage (Base-Neo Destiny)                   Pokémon               3.45 / 3.15 / 3.45 / 3.15
+pokemon-ecard       Pokémon · e-Card (Expedition-Skyridge)                      Pokémon               3.12 / 3.24 / 6.76 / 7.16
+mtg-1993            MTG · 1993 frame (Arabian Nights-4th Edition)               Magic: The Gathering  2.74 / 2.47 / 2.74 / 2.47
+mtg-1993-alpha      MTG · 1993 frame (Alpha, Beta, Collectors' Edition)         Magic: The Gathering  2.74 / 1.96 / 2.74 / 1.96
+mtg-1993-unlimited  MTG · 1993 frame (Unlimited, Revised)                       Magic: The Gathering  3.63 / 2.98 / 3.63 / 2.98
+mtg-1997            MTG · 1997 frame (Mirage-7th Edition)                       Magic: The Gathering  3.42 / 3.07 / 3.42 / 3.07
+mtg-2003            MTG · 2003 frame (8th Edition-M14, and the `future` frame)  Magic: The Gathering  2.99 / 2.98 / 2.99 / 2.98
+mtg-m15             MTG · M15 frame (Magic 2015-present)                        Magic: The Gathering  2.56 / 2.56 / 2.56 / 2.56
+mtg-yellow-band     MTG · yellow box-topper band                                Magic: The Gathering  3.76 / 4.27 / 3.76 / 4.27
+mtg-oversized       MTG · oversized plane or scheme (89×127mm)                  Magic: The Gathering  2.98 / 2.99 / 2.98 / 2.99  oversized
+mtg-vanguard        MTG · oversized Vanguard                                    Magic: The Gathering  5.30 / 4.03 / 5.30 / 4.03  oversized
+borderless          Borderless (no printed frame)                               any                   0.00 / 0.00 / 0.00 / 0.00
 ```
 
-It also lists which specs the sets *in your library* resolve to. A set with no
-measured spec still works — the fit just runs against an estimate — and both
-the CLI and the UI say so rather than pretending. Pokémon frames have a
-**thicker bottom** (set symbol, ©) and change by era; MTG's frame is uniform on
-all four edges across every bordered set, so one spec covers it.
+There is **no confidence column**, and that was a correction rather than a
+simplification. There were three levels, and one of them — "read off the publisher's
+scans" — rested on a false premise: **a scan carries its own crop.** Trimmed 0.3mm
+inside the real cut edge, every border read from it is 0.3mm narrow, every card in the
+sample agrees with every other, and nothing in the image says so. Grading that
+"trusted" dressed up a guess. So the account of where a number came from lives where it
+cannot be rendered as a verdict: a comment above each spec in `frames.py`, and a row
+per card in `docs/measuring-frames.md`.
 
-A borderless or full-art print has no frame to match, and a modern set mixes
-both under one set code — so the *set* can't answer this but the printing can.
-proxdex reads it from the provider at fetch time (Scryfall's `border_color` and
-`full_art`) and records it in the card's own `.frame` marker, so the border step
-reshapes it to the card aspect and nothing else. `proxdex frames` shows which
-cards resolve that way, and `--frame` still overrides by hand:
+**A printing with no measured spec resolves to nothing, and `border` refuses it** —
+rather than fitting it to another era's numbers, which looks perfect and is wrong:
+
+```
+$ proxdex border sv1-1
+SKIPPED sv1-1: no frame spec has been measured for this printing (sv1, Pokémon).
+Measure a card and record it with `proxdex frames set`, assign it, or pass
+--frame to fit against a spec for this run.
+```
+
+`proxdex frames check` lists every card in that position, along with the other three
+faults it reports: a `frames/*.json` that will not parse, a pin or rule naming a spec
+that is gone, and a trait rule on a card whose traits were never recorded.
+
+`proxdex frames coverage` is the same question about cards you do *not* own yet — what
+has nobody measured at all — and it asks each game the question **its own border
+followed**. Pokémon's ran for known runs of sets, so a row is a set:
+
+```
+$ proxdex frames coverage --game pokemon
+○ Pokémon — 21 of 174 sets covered
+
+Scarlet & Violet — 0 of 18 covered
+Set       Name              Year  Held  Spec           From
+sv10      Destined Rivals   2025  —     none measured  —
+sv9       Journey Together  2025  —     none measured  —
+…
+```
+
+Magic's changed with the printing's *frame generation* — a modern set holds retro-frame
+cards beside modern ones — so a row is a generation and there is deliberately no per-set
+verdict, which comes out `✓ 5 of 5 frame generations covered`. Pokémon from **Diamond &
+Pearl onward** (2007-05) is the real gap today; the e-Card sets closed with hand readings,
+and the whole ex series answers — though only its first five sets were actually read, with
+`ex5`–`ex16` **inheriting** that era's plain border rather than being measured, which
+`docs/measuring-frames.md` records as inherited.
+
+**The e-Reader specs are the ones whose four numbers differ, and that is the card's
+doing.** Expedition, Aquapolis and Skyridge carry the Nintendo e-Reader dot-code strip
+down the left edge and along the bottom, so those two are roughly twice the other two —
+and the other two, at 3.12 and 3.24mm, are WOTC's border almost exactly. Collapsing
+opposite edges the way every other spec here does would have split the difference on all
+four, asking ~2.5mm too much border on two edges and too little on the others, and it
+would have looked right on screen because the overlay is drawn in fractions too.
+
+The strip then **moved**: across Ruby & Sapphire, Sandstorm, Dragon, Team Magma vs Team
+Aqua and the promos beside them (`ex1`–`ex4`, `np`) it runs along the bottom alone, and
+some cards in those sets carry no dot code at all and have a plain square border. So
+those five sets resolve to **two** specs, nothing in the metadata says which a given card
+is, and `border` names both and lets you pick — the same offer the e-Card sets get.
+
+### Which spec a card gets, and why
+
+Seven things can decide it, and `border` says which one did: `--frame` for this run, the
+card's own pin, the _printing_ (the provider said borderless), one of your rules, a
+set default, the shipped baseline for its era or frame generation, or nothing at all.
+Add your own with `frames set`, and rules in `frames/rules.json` match on a number
+range, an id list, or a trait the provider recorded — so one set can need more than one
+spec without anybody choosing per card.
+
+A borderless or full-art print has no frame to match, and a modern set mixes both under
+one set code — so the _set_ cannot answer this but the printing can. proxdex reads it
+from the provider at fetch (Scryfall's `border_color` and the art-series layout) and
+records it in the card's own `.frame` marker, so the border step reshapes it to the card
+aspect and nothing else. `--frame borderless` is the whole fix for a print whose
+metadata is wrong about its own border:
 
 ```bash
-proxdex border neo-136 --frame borderless --auto
+proxdex border neo-136 --frame borderless
+proxdex border neo-136 --frame mtg-m15 --save    # and pin it to the card for good
 ```
+
+Changing a spec's numbers invalidates nothing on its own — a master fitted to the old
+ones still looks perfect. So `border` records what it fitted to beside the file, and
+`proxdex doctor` reports a master whose spec has moved since.
 
 ## Uniform prints
 
@@ -667,7 +867,7 @@ out olive, and a neutral grey inside a yellow-bordered card graded to **deep
 blue** while the same grey in a black-bordered card blew out to white. Both were
 measured; both are gone.
 
-Matching the *medium* is a real problem, but a print-time one — the paper and ink
+Matching the _medium_ is a real problem, but a print-time one — the paper and ink
 are the same for every card on the sheet. That is what a print profile is for.
 
 ## Print profiles (one per medium you own)
@@ -690,7 +890,7 @@ Write the notes down. Six months later they are the only way to reproduce a prin
 
 **Nothing ships pre-filled.** There is one built-in name, `none`, and it is the
 identity — no correction at all. A new profile starts there too. proxdex has no
-numbers to offer for *your* paper: "foil needs saturation 1.38" was true of exactly
+numbers to offer for _your_ paper: "foil needs saturation 1.38" was true of exactly
 one setup that nobody reading this owns, so a recipe like that is a guess wearing a
 label. Every real profile is one you made, one of two ways.
 
@@ -723,7 +923,7 @@ inline before/after, and a strip to print.
 
 ## Calibrating a medium (a loop, on one sheet of paper)
 
-With a scanner, proxdex *measures* the correction instead of guessing it. The
+With a scanner, proxdex _measures_ the correction instead of guessing it. The
 loop is designed to be walked several times on **one sheet**: each round prints
 the chart into a different slot of a 2×3 grid, so six rounds fit an A4 page.
 
@@ -742,7 +942,7 @@ proxdex calibrate enable  --round 3          # …and put it back
 Every round is **kept**, and the correction is refitted over all of them at once,
 so each round makes it truer rather than replacing what you measured last time.
 Round 1 prints the raw target, which measures how far off the medium is; every
-round after prints the target *through* what is known so far, which samples the
+round after prints the target _through_ what is known so far, which samples the
 space where your cards actually live. Against a simulated press it converges
 `16.1 → 2.2 → 1.6 → 1.5 → 1.4` mean RGB.
 
@@ -757,7 +957,7 @@ changes.
 is not 255, ink is not 0, and a saturated blue at mid-lightness can need more cyan
 than exists — so those patches are named and excluded rather than averaged in,
 which would leave a floor that can never fall. Reachability is measured by
-inverting your print's own response, and it is a property of the *medium*, so every
+inverting your print's own response, and it is a property of the _medium_, so every
 round is scored over the same patches: the trend moves when the print improves, not
 when the patch set does.
 
@@ -765,15 +965,15 @@ when the patch set does.
 cube's interior.** Two decisions there are worth knowing, because both were
 measured rather than assumed:
 
-- *The lattice is pulled inside the printable box on purpose.* Paper is not 255
+- _The lattice is pulled inside the printable box on purpose._ Paper is not 255
   and ink is not 0, so a patch at pure red or pure white measures nothing — it
   clips, and gets dropped from the fit. The chart proxdex shipped through 0.5.0
   spent 24 of its 36 patches that way, leaving ~12 usable samples to fit a
   10-parameter model. Same press, same code: the old chart settled at 2.31 mean
   RGB, this one at **1.36**.
-- *Denser is not better.* Patch area is the budget. At six charts per A4 these are
+- _Denser is not better._ Patch area is the budget. At six charts per A4 these are
   5.1 mm of ink with 1.1 mm gutters — 121 px across on a 600 dpi scan. Push to 228
-  patches and accuracy gets *worse*; a 512-patch near-continuous chart was worse
+  patches and accuracy gets _worse_; a 512-patch near-continuous chart was worse
   than the 36-patch one it would replace, because read noise and neighbour bleed
   grow faster than coverage helps. A continuous gradient is worse again: there is
   no flat area to average, and 1% of geometric error becomes a correlated 2.3
@@ -781,7 +981,7 @@ measured rather than assumed:
   would justify, also lost to the polynomial at every density tested.)
 
 **Rounds are never deleted.** A bad one — a misfeed, a scan with the scanner's
-auto-correction left on — is *switched off*: the correction refits without it, and
+auto-correction left on — is _switched off_: the correction refits without it, and
 switching it back on restores exactly what it was doing. That is the only way to
 see with and without. `proxdex profile show` also gives each round a **pull**: how
 far the correction moves if that round is left out. A round pulling much harder
@@ -795,7 +995,7 @@ the stored masters stay neutral — switching media is a different `--profile`, 
 a re-grade.
 
 **Honest limits.** The scanner is the measuring device, so this makes prints true
-*as your scanner sees them* — excellent for proxies, not colorimetric. Some
+_as your scanner sees them_ — excellent for proxies, not colorimetric. Some
 target colours are simply outside a medium's gamut: paper is not 255 and ink is
 not 0, so those patches can never be hit, and proxdex says how many rather than
 folding them into an average that could never reach zero. And you **must** turn
@@ -883,7 +1083,7 @@ uv tool install .
 carries the `[ui]` extra, an import that a core module needs but that is declared under
 `[ui]` works perfectly in a checkout and dies for everyone else. That is not
 hypothetical: `tomlkit` shipped that way for two releases — green on six CI jobs across
-three platforms — and a plain `pip install proxdex` wrote the print PDF and *then* died
+three platforms — and a plain `pip install proxdex` wrote the print PDF and _then_ died
 with `ModuleNotFoundError`. Two things guard it now, and both are worth knowing about
 before you add a dependency:
 

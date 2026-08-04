@@ -196,7 +196,20 @@ class TestHowLongIsLeft:
     def test_the_start_of_the_count_travels(self, tmp_path: Path) -> None:
         """It has to reach the reader, and it is the start of the *counting* — a CLI
         subprocess spends a second or two importing before it knows what it is
-        counting, and a rate measured over that is slower than the work is."""
+        counting, and a rate measured over that is slower than the work is.
+
+        **What is asserted here is the round trip, not a forecast.** This used to end
+        with ``got.remaining is not None``, which raced the clock: `start` and
+        `advance` are two consecutive calls, and on Windows ``time.time()`` advances
+        in ~15.6ms steps, so both landed in the same tick and ``at == started``
+        exactly. `remaining` then correctly refused to divide by a zero elapsed and
+        the test failed the code for being right — which is what
+        `test_a_clock_that_has_not_moved_says_nothing` above *pins as correct*, one
+        method up. Whether a rate is offered is a question about arithmetic and is
+        answered by the `Report(...)` cases either side of this, at timestamps nobody
+        has to hope for; what only a real sink can show is that `started` survives
+        being written and read back.
+        """
         target = tmp_path / "p.json"
         sink = Sink(target)
         sink.start("Imposing", 4)
@@ -205,7 +218,7 @@ class TestHowLongIsLeft:
         assert got is not None
         assert got.started > 0
         assert got.at >= got.started
-        assert got.remaining is not None
+        assert (got.verb, got.done, got.total, got.note) == ("Imposing", 1, 4, "page 1")
 
     def test_a_fraction_never_exceeds_one(self) -> None:
         """A count can overrun its total — a verb that retried an item, say — and a

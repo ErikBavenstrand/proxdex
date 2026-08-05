@@ -29,7 +29,7 @@ from pathlib import Path
 from proxdex import games
 from proxdex.config import MARKER, Config
 from proxdex.errors import LibraryError
-from proxdex.games import GameId, Layout
+from proxdex.games import Layout
 
 ENV_ROOT = "PROXDEX_ROOT"
 #: which TCG a card (or a whole set folder) belongs to — filesystem state, like
@@ -217,9 +217,17 @@ def _write_marker(path: Path, value: str | None) -> None:
         path.unlink(missing_ok=True)
 
 
-def read_game(folder: Path, default: GameId = games.DEFAULT) -> GameId:
+def read_game(folder: Path, default: str = games.DEFAULT) -> str:
     """The game a card or set folder belongs to: its own marker, then its set
-    folder's, then ``default`` (libraries predating markers are all one game)."""
+    folder's, then ``default`` (libraries predating markers are all one game).
+
+    A game id is **an open set and therefore a plain string**, so everything that
+    compares one uses ``==``. That is not a style choice: while the ids were a
+    closed ``StrEnum`` every member was an interned singleton and ``is`` worked, so
+    the comparisons in :meth:`Library.set_dir` read fine and would have started
+    answering ``False`` for every custom game the moment the id came from a file
+    instead. Silently: a card would simply never find the set folder it belongs to.
+    """
     for candidate in (folder, folder.parent):
         marker = candidate / GAME_MARKER
         if marker.is_file():
@@ -236,12 +244,10 @@ class Card:
     id: str  # canonical TCG id, e.g. "ex3-90" (pokemon) or "neo-136" (mtg)
     dir: Path
     set_id: str  # "ex3"
-    game: GameId = games.DEFAULT
+    game: str = games.DEFAULT
 
-    def write_game(self, game: GameId) -> None:
-        (self.dir / GAME_MARKER).write_text(
-            game.value + "\n", encoding="utf-8", newline="\n"
-        )
+    def write_game(self, game: str) -> None:
+        (self.dir / GAME_MARKER).write_text(game + "\n", encoding="utf-8", newline="\n")
         self.game = game
 
     @property
@@ -577,10 +583,10 @@ class Library:
     """A proxdex library rooted at a directory containing ``proxdex.toml``."""
 
     root: Path
-    _game: GameId | None = field(default=None, repr=False)
+    _game: str | None = field(default=None, repr=False)
 
     @property
-    def default_game(self) -> GameId:
+    def default_game(self) -> str:
         """The game an unmarked folder belongs to — ``[library] game``."""
         if self._game is None:
             self._game = Config.load(self.root).library_game
@@ -630,7 +636,7 @@ class Library:
                 return self._card(d)
         return None
 
-    def set_dir(self, set_id: str, set_name: str, game: GameId = games.DEFAULT) -> Path:
+    def set_dir(self, set_id: str, set_name: str, game: str = games.DEFAULT) -> Path:
         """The folder for a set, created if needed.
 
         Set codes are only unique *within* a game (MTG's ``neo`` is not
@@ -638,13 +644,13 @@ class Library:
         same game; otherwise the game is appended to keep the two apart.
         """
         for d in sorted(self.cards_dir.glob(f"{set_id}-*")):
-            if d.is_dir() and read_game(d, self.default_game) is game:
+            if d.is_dir() and read_game(d, self.default_game) == game:
                 return d
         d = self.cards_dir / f"{set_id}-{slugify(set_name)}"
-        if d.exists() and read_game(d, self.default_game) is not game:
-            d = self.cards_dir / f"{set_id}-{slugify(set_name)}-{game.value}"
+        if d.exists() and read_game(d, self.default_game) != game:
+            d = self.cards_dir / f"{set_id}-{slugify(set_name)}-{game}"
         d.mkdir(parents=True, exist_ok=True)
-        (d / GAME_MARKER).write_text(game.value + "\n", encoding="utf-8", newline="\n")
+        (d / GAME_MARKER).write_text(game + "\n", encoding="utf-8", newline="\n")
         return d
 
     def select(self, ids: tuple[str, ...]) -> list[Card]:

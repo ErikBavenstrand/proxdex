@@ -78,7 +78,11 @@ until it reaches paper or a pasted link:
   the align ghost), and a wrong answer that is invisible until two cards are cut and
   laid side by side. It pins the order all seven `Via`s are tried in, that a number
   range never crosses a `TG` prefix, and the two questions it must refuse to guess
-  at — a trait rule with no traits, and a pin whose spec was removed.
+  at — a trait rule with no traits, and a pin whose spec was removed. Plus the two
+  things a *whole-game* rule has to do (resolve for a set nobody ever mentioned, and
+  beat the shipped baseline) and the promise the shipped-rules table makes: every row
+  names a spec a fresh library has, nothing is stored, and the override each row offers
+  is the one that wins.
 - `tests/test_coverage.py` — `inventory.assess`, because **the number is the whole
   report**: "21 of 174 sets covered" decides whether there is an afternoon of measuring
   left, and nothing on screen can contradict it. It pins the thing the deleted coverage
@@ -124,6 +128,65 @@ until it reaches paper or a pasted link:
   replaced; and **an unknown total stays unknown** (`fraction` is `None`, never a
   guess), which is the same rule as every other number here. The reader is total,
   because it reads a file something else is mid-write on.
+- `tests/test_games.py` — a game a library defines, and it earns its place because
+  making the game id an **open set** moved a whole class of decision out of the type
+  system, where each one is invisible until a card is on paper or a request goes to
+  the wrong host. It pins the thing that would have been worst: a provider-less game
+  must **never** fall through to Scryfall, and every provider must answer every
+  question (`sources.TABLES`), which is the completeness the old `if/else` claimed by
+  accident of there being two games. Plus the landmine the open ids introduced —
+  ids compared by **value**, since `is` worked on interned enum members and would
+  silently have stopped finding a custom game's set folder — that a stored game may
+  not shadow a shipped one (`pokemon.json` winning would strip every Pokémon card of
+  its provider *and* its frame specs, symptom: `border` refuses cards that worked
+  yesterday), that the reader over hand-edited JSON is total, that an **undeclared
+  set is refused at import** (nothing else would ever object to `tfcc-9`), and that a
+  count nobody typed stays 0-means-unknown like every other number here.
+- `tests/test_run_overrides.py` — `Config.run_options`, because it replaced **four**
+  hand-written lists that had already drifted: nineteen of the twenty-seven settings a
+  print run read then were configurable and overridable from nowhere (thirty-four now,
+  which is the point — the list grows by adding `run=Run.SHEET` to one line). It pins the three
+  things that are invisible until a sheet comes off a printer wrong — that every flag
+  keeps the spelling it had (a derivation that renamed `--bleed` breaks every script
+  ever written against it), that `SheetBody.argv()` spells flags the CLI really
+  registered *and* that the whole set parses as one command line, and that a run never
+  writes `proxdex.toml`. Its own sample generator is part of the point: a value that
+  happened to equal the default made "the override applied" and "nothing happened"
+  the same assertion, which is exactly what it did to `sheet_cols` on the first run.
+  It also pins the defect that shape *hid*: an override arrives as **text** from every
+  surface that can send one, and `_coerce` was storing `"8"` on a `float` field, so
+  `sheet_cols = "4"` made `cols * rows` the string `"444"` and a page count a
+  `TypeError` at the PDF rather than a refusal at the boundary — asserted over every
+  numeric and boolean option, plus that `"false"` may never become `True`.
+- `tests/test_paper.py` — whether the grid fits the paper, and it earns its place because
+  **nothing checked and both shipped defaults were wrong**: A4's grid ran 0.51mm off the
+  right edge of every sheet and Letter's bottom row of *cards* hung 4.81mm off the paper,
+  neither with a word said. It is pure arithmetic, which is the whole reason it survived
+  — the renderer draws where it is told and the page clips the rest, and what is clipped
+  first is the bleed nobody looks at. It pins that the defaults fit **their own paper**
+  (with room, and symmetrically), that the 1.5mm bleed is what makes three columns close
+  on A4 at an honest margin, that what does not fit is reported with the numbers and a
+  way out, that a suggested bleed really fits and is withheld when bleed cannot help, and
+  that a per-edge margin shifts the grid rather than being described and ignored. Plus a
+  table over **every paper × orientation**, because a default that fits A4 portrait and
+  nothing else would have looked exactly like a pass.
+- `tests/test_guides.py` — the cut guides, and it earns its place because **a guide is
+  only ever wrong on paper**: it is drawn exactly where it was told to be, so no screen
+  can show that the place is not where the card landed. **Two of the things it pins were
+  defects it found**, both in the shipped defaults and both putting ink on every card: a
+  guide must follow the ink offset (at both drawing sites, asserted as a whole-raster
+  translation) and `outside` must mean away from the card. Each sits beside its opposite,
+  which is what makes it readable — a registration mark must *not* follow the offset, or
+  it reports every printer as perfect; `full` *must* paint over the cards, since it is the
+  only way to ask for that. Then the three reaches, probed at the same three points (the
+  margin, the gutter, the paper edge) so they can differ only in how far an arm runs, with
+  the `join`-vs-`fixed` case set up at a gap wide enough to tell them apart — at the
+  default they coincide and a test there would prove nothing. Plus: no reach may put ink
+  on a card, only cells holding a card are marked, the two sides resolve separately with
+  unset meaning "the fronts", `none` on the backs is **not** the same as unset (a
+  distinction a plain string field could not have held), and the one thing an optional
+  setting has to survive that no other does — being written back to unset, which in TOML
+  means deleting the key.
 - `tests/test_deps.py` — that every non-stdlib import is a *declared* dependency,
   or is guarded by a `try/except ModuleNotFoundError` that says how to install it.
   It reads `pyproject.toml` rather than trying the import, because in the
@@ -275,15 +338,82 @@ the result, tokens) — a "combo piece" is as loose as a set's checklist card, s
 those are named and left alone. `details` carries them; `proxdex show` and the
 card page list them with what you already have.
 
-**Games (`games.py`).** `GameId` is `pokemon | mtg`; a `Game` carries the id
-shape, nominal trim size, metadata source and whether a card back can be
-downloaded at all. **Set codes alone cannot tell you the game** (MTG's `neo`
-vs Pokémon's `neo1`), so it is filesystem state: a `.game` file written into
-the card *and* set folder at creation, read back by `library.read_game()`,
-falling back to `[library] game`. `Library.set_dir` appends the game to the
-folder name if two games ever collide on a set code. Adding a game = a `Game`
-+ a provider in `sources.py` + a `FrameGuide`; nothing else should need to
-change.
+**Games (`games.py`).** A `Game` carries the id shape, the metadata source and
+whether a card back can be downloaded at all. **Set codes alone cannot tell you the
+game** (MTG's `neo` vs Pokémon's `neo1`), so it is filesystem state: a `.game` file
+written into the card *and* set folder at creation, read back by
+`library.read_game()`, falling back to `[library] game`. `Library.set_dir` appends
+the game to the folder name if two games ever collide on a set code.
+
+**A game id is an open set, exactly as a frame spec id is.** `GameId` survives as
+the closed set of ids **code** names — the two built-ins, which have providers, id
+shapes and shipped frame specs written against them — while a game id in general is a
+plain validated string and `<root>/games/<id>.json` is where a library's own lives.
+`games.Registry` is the per-library answer to "what games are there", the same shape
+`specs.Registry` has, and total for the same reasons: `get` answers `None` and
+`name_of` falls back to the id, because both are asked in order to draw a screen or
+fill a table cell long before anyone has checked that a marker still means something.
+Adding a *built-in* game is still a `Game` + a provider in `sources.py` + a
+`FrameGuide`; adding one of **your own** needs no code at all.
+
+**A custom game has no provider, and that is a fact with teeth.** There is nothing to
+look a card up in, so `fetch`, `search`, `browse` and the card data sheet refuse for
+it and `import` is the whole intake path (`proxdex game add`, then `game set add`,
+then `frames set` to measure its border). Everything downstream of the original image
+never knew which API answered, so all of it — border, upscale, grade, sheet, doctor,
+coverage — works unchanged. Verified end to end on a throwaway library: a card
+imported, bordered against a hand-measured spec, and imposed to a PDF.
+
+**The dangerous version of this was a dispatch with an `else`.** With two games every
+provider branch read `if pokemon: … else: <the Magic one>`, total *only by accident of
+the count* — and a third game's id reaching that `else` asks Scryfall about a card it
+has never heard of. Scryfall's answer for an unknown id is a 404 that reads exactly
+like a mistyped Magic card, so the report would name the wrong problem; a
+*coincidental* hit would file a Magic scan under a custom game's id and nothing would
+ever mention it again. So the provider is a **value on the game** (`ProviderId`,
+`None` for a custom one), `games.require_provider` is the single place a game becomes
+an API (`sources.provider` **is** that function, not a copy — two copies is the split
+that lets one grow an `else` back), and every dispatch is a total `dict` keyed by
+provider. `sources.TABLES` and `tests/test_games.py` assert the completeness the
+`if/else` used to claim implicitly: a provider missing a row is a `KeyError` at the
+call rather than a silent Magic lookup.
+
+**`==`, never `is`, and this is a landmine rather than a style note.** While the ids
+were a `StrEnum` every one was an interned singleton, so the identity comparisons in
+`Library.set_dir` worked and read perfectly well — and would have started answering
+`False` for every custom game the moment an id came out of a file, silently filing
+each card outside the set folder it belongs to. Pinned by
+`tests/test_games.py::TestIdsAreComparedByValue` — **and the first sweep of it missed
+one**, which is the argument for the test class rather than for a careful reading:
+`cli._matches` compared `card.game is not game`, so **`ls --game` answered "no cards
+match" for every game**, the two built-in ones included, since a `str` read off disk is
+never the object click parsed. It needed a filed card of a known game to see at all.
+The pin now drives `ls` through `CliRunner`, because the filter is the answer a person
+gets and not a private function a test should reach into.
+
+**A custom game's sets are declared, not discovered** (`games.SetSpec`, `game set
+add/rm`). With sets inferred from whatever folders exist, a typo in an `import` id
+silently becomes a new set holding one card, and nothing can list a set before its
+first card is filed. Declared, `imports.plan` refuses the typo before a byte moves
+(`Disposition.UNKNOWN_SET`, which only a provider-less game can reach), the set folder
+gets a real name, and `frames coverage` has a row to put a spec against — which is why
+`inventory.coverage` takes a `games.Game` and reads `browse.declared(game)` for a
+custom one instead of making a request. `Game.example` is derived from the first
+declared set, because a card id is `<set>-<number>` and a game-level example cannot be
+one (a fresh game read `e.g. lorcana-1`, which nothing would accept).
+
+**`[library] game` is a name, so it can dangle** — the same shape `[print] profile`
+has, and answered the same way. It was a `GameId` and is now a plain `str`, because
+the set of legal values lives in a library that is not open at load time: coercing an
+unknown one into an enum would either raise on a game that exists or silently rewrite
+it to Pokémon. So `games.dangling(root, cfg)` is one pure function and `proxdex where`
+/ `game list` / `/api/games` report it, exactly as `profiles.dangling` is. For the same
+reason `--game` is **not** a `click.Choice` (`cli._game`, and `cli._provided` for the
+verbs that need an API — its refusal names `import` rather than the host nobody asked),
+and `/api/config` injects `library.game`'s options from the registry, since
+`_field_options` can no longer read them off an enum. A `.game` marker naming a deleted
+game is likewise **kept, not coerced**: it describes a real card that really is not
+Pokémon, so it resolves no spec and `border` refuses it, which is the honest failure.
 
 **The step registry (`steps.py`) is the single declaration of the pipeline.**
 One ordered list of `StepSpec`s: key, stage, label, blurb, skippability, and each
@@ -999,7 +1129,10 @@ Four things make it honest rather than a wall of sliders:
   stretch instead. Nearly shipped the other way: three modes were compared by eye on a
   scaled screenshot and *read* as different. On a perfectly **flat** border they make no
   difference either, which is why a synthetic flat card is the wrong thing to test a fill
-  with — grain is what they disagree about.
+  with — grain is what they disagree about. And where a **zero target** invents nothing,
+  the synthesis is skipped outright rather than merely reported as pointless — it was
+  editing the outermost pixels of every full-bleed card (see `bleed.by_resize` under the
+  cardbleed integration below).
 - **A tuning is a decision, so it is kept**: `.tune-bordered[_f2]`, `key=value` per line,
   like `.pin` and unlike the derived `.fit`. Only the non-defaults are stored, so the
   record reads `mode=smart` rather than restating thirteen. `--no-tune` returns to the
@@ -1115,6 +1248,16 @@ figure, but a caliper reading is one card off one print run inside a ±0.5mm cut
 tolerance, and pinning proxdex to somebody's off-cut is worse than using the number both
 publishers state.
 
+**A custom game prints at this size too, and that is a decision rather than an
+oversight.** The trim is a property of the *library* (`[card] card_w_mm`), not of the
+game: one sheet of paper carries one grid, so a library mixing two card sizes would be
+imposing two runs, and a game whose cards are a different size is therefore a different
+*library* with its own `proxdex.toml`. It also keeps a spec's millimetres meaningful,
+since they are fractions of the card being printed. `Game` did carry `card_w_mm`/
+`card_h_mm` — **dead fields nothing read, and wrong** (63.0×88.0 against the real
+63.5×88.9) — so they are deleted rather than left looking like a size a game file
+controls.
+
 It is **one** number for a reason. It was briefly two — the trim at 63×88 and a separate
 "real card" at 63.5×88.9 that specs' millimetres were fractions of, on the sound reasoning
 that a caliper reading is a fraction of the true card. The reasoning was right and the split
@@ -1157,12 +1300,56 @@ right card edges in every set that ever printed one; enumerating those sets woul
 a list that goes stale each release. So `set_id == ""` means "this game"
 (`Rule.is_global`), and `Registry.for_set` returns **four bands, most specific
 first** — this set's exceptions, the game's exceptions, this set's default, the
-game's default — as a *stable* sort, so file order still decides within a band. Two
-things that had to be got right: `assign` refuses a whole-set rule with no set (it
-would claim every card of the game, which is what the game's fallback spec already
-is), and the one-default-per-set replacement compares the **set id** rather than
-calling `covers`, which a global rule answers `True` to for every set and which
-would therefore have deleted every default in the file.
+game's default — as a *stable* sort, so file order still decides within a band. The
+one-default-per-set replacement compares the **set id** rather than calling `covers`,
+which a global rule answers `True` to for every set and which would therefore have
+deleted every default in the file.
+
+**And with `Match.SET` that is one border for a whole game, which `assign` used to
+refuse.** The refusal said such a rule "would claim every card of the game, which is
+what the game's own default spec already is", and *both halves of that stopped being
+true*: the per-game fallback spec was deleted (an unmeasured printing resolves to
+`Via.NONE` and refuses to be bordered rather than being reshaped to somebody else's
+numbers), and a game a **library defines** has one border and any number of sets
+declared over time — one printer, one stock, one border. So the refusal left the
+commonest case for a custom game to be written out one set at a time and silently
+unanswered on the next set added, with no way at all to say the true thing. Nothing
+else needed changing for it, which is the sign it was the right change: `for_set`
+already sorted a game-wide default into its last band, and `inventory._answers_for_set`
+/ `_generation_row` already counted one as coverage for every set *and* every
+generation of the game (`frames coverage` goes to "2 of 2 sets covered" off one rule).
+`Via.SET_DEFAULT`'s label is therefore **"a whole-set rule"** and not "the set's
+default" — the same band now holds both, and a card of a set nobody named reading
+"matched by the set's default" sends you hunting for a per-set rule that does not exist.
+
+**The shipped baseline is shown as the rules it is, and not materialized
+(`specs.Shipped`, `shipped_rules`).** `frames.BASELINE` decides the border of thirteen
+Pokémon sets and five MTG frame generations, and it was the one input to a fit that no
+screen showed: the specs are listed, a library's own rules are listed, a resolution
+names its `Via` — so an empty Rules tab read as "nothing decides these borders" while
+`pokemon-wotc` was bordering every Base Set card. Now `frames rules` prints two tables
+and the Rules tab shows two panels, the second one read-only with an **Override** per
+row. Four decisions in it:
+
+- **Shown, not copied into `frames/rules.json`.** A materialized copy would be frozen
+  at the version that wrote it — a library initialised today would never learn the era
+  measured in the next release, which is worse than not having the rows — and every
+  library would open on thirteen rows nobody wrote. Same relationship a stored
+  `frames/<id>.json` has with a shipped **spec**, where correcting the numbers is the
+  expected path rather than a special case.
+- **Override writes an ordinary rule**, because every rule is tried before the baseline.
+  `Shipped.match` is the kind that overrides that row — `set` for a set-keyed row, a
+  game-wide `frame` rule for a generation-keyed one — and `tests/test_frames.py` pins
+  that the offered override really does win, since a button promising an edit that loses
+  is worse than no button. The row it overrode stays *offered* as an alternative, so the
+  choice remains visible.
+- **One row per `BASELINE` entry, not per set.** `pokemon-wotc` covers thirteen sets and
+  is one measurement; thirteen rows would print one fact thirteen times. A set row
+  covering several sets therefore cannot fill the set field in for you, and says which
+  sets it covers instead of guessing one.
+- **In `BASELINE`'s own order**, which is `baselines`' order — so the first row a reader
+  sees for a set is the spec their card is really fitted to, and the two e-Card rows do
+  not read as two contradictory claims.
 
 **An empty `effects` value is an answer, not a gap.** 93,190 of Magic's 116,233
 printings carry no frame treatment at all, so `Match.EFFECT` reads a missing or empty
@@ -1607,6 +1794,50 @@ because the overlay is drawn in fractions too. `doctor`'s aspect check and
 `/api/frame` (the align ghost, whose `solveFit` mirrors `solve_fit` against
 whatever size it is handed) ask the same function, so all four agree per card.
 
+**Where a fit invents nothing, cardbleed is not asked to fill it — because it fills
+anyway (`bleed.by_resize`, `reshape_only`).** A spec of 0 on all four edges is a card
+with no border: a full-bleed printing, or a game of your own whose cards carry none.
+With the stretch on, that fit is pure geometry — `solve_fit` shaves the marks away, adds
+nothing, and the trim comes out at the marked art's own stretched size — so the whole
+operation is crop-to-the-marks, resize-to-the-trim. cardbleed ran its **synthesis pass
+regardless**, and that pass rewrites the outermost pixels whether or not it has any area
+to cover. Measured on a card whose art reaches all four edges (marks 0, target 0/0/0/0,
+stretch on): the size and aspect were right, and the output matched a pure resize
+everywhere *except* the top rows and left columns, where **109 pixels differed by up to a
+full 255 levels** — a smeared line down two edges of every card. Flat test colour hides
+it completely, which is why `tests/test_bleed_tuning.py` uses a gradient with marked outer
+rows and asserts the difference from Pillow's own resize is **0**.
+
+Three things about it are deliberate:
+
+- **The stretch stays the caller's choice.** It was briefly forced on for a zero target
+  and taken straight back out: with the stretch *off*, a zero target genuinely does need
+  border invented to reach the trim aspect, and that is a decision about one card — the
+  checkbox and `--stretch/--no-stretch` decide, exactly as everywhere else. Ticked you
+  get a resize and no invented pixel; unticked you get the extension. Both states are in
+  the parity table.
+- **The policy is downstream of the geometry**, so `fit_plan`, the CLI readout, the
+  align ghost and the JS `solveFit` all describe the same fit — only *how the file is
+  written* differs. Putting it in `solveFit` would have made the two sides disagree the
+  moment one of them lost the line.
+- **Gated on `FrameGuide.frameless`, not on `extends` alone.** A *bordered* card whose
+  marks already exceed its target also invents nothing and could take this path, but
+  there cardbleed is additionally squaring die-cut corners, which is real work on a real
+  border — changing those pixels is a separate decision. `reshape_only` also leaves the
+  image mode alone, so a scan with transparent corners still reaches
+  `cli._flatten_filed` and is filled from the card's own border as any other file is.
+
+**A reading that cannot be fitted is a `FileError`, not a traceback.** `grow` already
+converted cardbleed's own `FileError`; `fit_plan` did not, so `border --inner-top 4`
+for a *fraction* meant as `0.04` — an ordinary slip, since those are how a measurement
+reaches the CLI — ended the program in thirty lines of stack at "border marks leave no
+inner frame". It is now reported, that card skipped, the batch carried on, with the
+units named in the message. It takes a `what=` (the card id) for the reason
+`sources._get` does: `cli._each` prints the message verbatim, so a skip that does not
+name its card leaves you unable to tell which of fifty to look at. The UI cannot send
+this at all — Run stays shut until a fit solves — which is exactly why the CLI was the
+path where it showed.
+
 **Sheet / production (`sheet.py`, `sheet` command).** Cut bleed and medium
 colour-correction are **not baked into the card** — they're added at `sheet`
 time, extended *outside* the trim, so the stored master stays a clean, neutral,
@@ -1672,9 +1903,285 @@ promise a different number of pages than the PDF contains; there is one
 implementation, not three. **Copies** are a first-class part of a run (`ID:4`,
 `--copies N`, `SheetCard.copies`) because a playset is four of the same card, and
 they are recorded in the batch manifest along with the profile and page settings —
-a reprint should be reproducible, not remembered. Every page setting is an
-override *for the run* (`cli._overrides` / `webui._apply_overrides`), never a
-config edit.
+a reprint should be reproducible, not remembered.
+
+**And "the page settings" in that manifest was four of thirty-six.** `page`, `orientation`,
+`dpi` and `bleed_mm` were hand-written into `_write_batch` under a comment claiming they
+were what the run used, so a run that set a margin, an ink offset or a cut guide could not
+be reproduced from its own record — the same defect as the four override lists, with the
+same fix: `[settings]` is derived from `Config.run_options(Run.SHEET)`. Two details. It is
+**one table copied whole** rather than named fields, because `proxdex printed` *rewrites*
+the manifest from the parsed dict — a key the writer does not know is a key it silently
+deletes, which is what made the hand-written list a trap rather than merely incomplete.
+And an **unset optional is absent, not null**: TOML has no null, and "unset" is not a value
+to record — the absence is the record, exactly as it is in `proxdex.toml`.
+
+**Every page setting is an override for the run, and "every" is now true by
+construction (`config.Run`, `Config.run_options`, `config.apply_run`).** It used to be
+eight of the twenty-seven settings a print run read then — thirty-four today, all
+reachable — and the reason it was eight is the shape of the
+old code: each one was hand-written in **four** places — a `click.option`, a field on
+`SheetBody`, a branch in `cli._overrides`, another in `webui._apply_overrides` — so
+adding a setting to `Config` and stopping there left it configurable and not
+overridable, which is what had happened to the other nineteen. The front and back **ink
+offsets** were among them: the settings you most want to change for one sheet and not
+for the library, reachable from no page at all.
+
+Now a setting says so itself — `setting(..., run=Run.SHEET, low=…, high=…, group=…)` —
+and everything else derives from that one line:
+
+- **The CLI flag is generated** (`cli._run_options`, the same shape
+  `steps.click_options` has), including its type, its bounds and its help. The flag
+  *name* is derived too: drop the section prefix and the unit suffix, dash the rest, so
+  `sheet_front_offset_x_mm` → `--front-offset-x` and `bleed_mm` → `--bleed`. That rule
+  reproduces all eight flags `sheet` had before, and `tests/test_run_overrides.py` pins
+  each by name — a flag is a promise, and a derivation that renamed `--bleed` would
+  break every script that ever used it. One escape hatch, used once: `sheet_guide_mm`
+  declares `flag="guide-length"`, because `--guide` sits a hair from `--guides`.
+- **The request body is one field**, `SheetBody.overrides`, keyed by config field name
+  and checked at the boundary by `config.bad_run_value` — an unknown key is a 422
+  rather than an option silently dropped on the way to argv, and a number out of range
+  is refused by the API *and* by click because both read the same two bounds.
+- **`config.apply_run` is one function**, called by `cli._overrides` and by
+  `/api/sheet/plan` alike. Not "the same logic in two places": the same call. The plan
+  and the print must be configured identically or the page count the builder promises
+  is not the one the PDF has, which is the whole reason `sheet.plan` exists.
+- **The UI spells nothing.** `/api/meta`'s `sheet_options` carries every option's label,
+  help, unit, kind, choices, bounds, group and *this library's current value*, and the
+  builder renders its Page setup panel from that — the same relationship the step panels
+  have with `steps.py`.
+
+**A string spelling of a number is a number (`config._as_number`, `_as_bool`), and this
+was a defect in the above rather than a nicety.** `_coerce` only converted `int`/`float`
+when the value *already* was one, and only `bool` when it already was — which is never
+true of the boundaries these cross. An `<input type=number>` hands over `"8"`, a
+`<select>` hands over `"true"`, argv is text and TOML tolerates `dpi = "1400"`. So every
+numeric and boolean override the sheet builder sent was stored **as the string**, the
+field's declared type was a lie, and the arithmetic downstream was string arithmetic:
+`sheet_cols = "4"` makes `cols * rows` the string `"444"`, and the page count died with
+a `TypeError` while the PDF was being written instead of being refused at the boundary.
+It hid because nothing *looked at* the values until then — the first thing to **format**
+one is what surfaced it. `bool` needs its own function for the reason that always
+applies: `bool("false")` is `True`, so an unrecognised word is a `ConfigError` rather
+than a quiet yes. Pinned by `tests/test_run_overrides.py`, over every option of every
+numeric and boolean kind, because the declaration is what makes this general.
+
+Two things about it are deliberate. **An absent override means the library's setting**,
+so a run says `margin_mm = 12` and nothing else rather than restating twenty-seven
+values that happen to equal the defaults; clearing a control *removes* the key rather
+than storing a blank, since `--margin ''` is not what "use the default" means (the same
+distinction `border --tune` draws between an absent flag and `--no-tune`). And **the
+trim is deliberately not overridable** (`card_w_mm`/`card_h_mm` carry no `run=`): it is
+not a page setting but the size every stored master was *fitted* to, so a one-run
+override would impose cards at a size nothing was fitted at and `cover` would crop the
+difference off two edges — perfect on screen, wrong once cut. `sheet_open` is out too,
+for a different reason: it launches an application on the machine the command was typed
+on, which is why `/api/sheet` always passes `--no-open`.
+
+**A control shows the value; where the value came from is a *state*, not text beside it
+(`sheetRow`).** Every row of the builder used to spend its own words on its provenance —
+a select whose first option read `a4 — the library's` above a list that then offered `a4`
+again, a bool as a three-way `off — the library's / on / off`, a number left empty with
+its real value greyed out in the placeholder. So the commonest reading of the panel was
+one value printed twice, once with a caveat, on rows nobody had touched; the empty number
+boxes read as *unset* when the sheet was going to print at 1400 dpi. And this screen
+already had the signal — `.isover` plus `.omark`, the same relationship the fill knobs
+have with `.fillrow.on` — so the text was saying a second time what a dot says once.
+Now every control carries the value the run will use, with the dot in front of the label
+where a row differs. Four things follow:
+
+- **Choosing or typing the library's own value clears the override** (`sheetSet`), rather
+  than storing a copy of it: an override equal to the setting it overrides would light
+  the dot, count towards `n changed for this run` and be recorded in the manifest as a
+  decision, all for a sheet that prints identically. Compared numerically for a number,
+  so `1.5`, `1.50` and `01.5` are one answer.
+- **Clearing a box is still how you go back**, and `sheetRefill` puts the library's value
+  back on blur — a row left blank would claim nothing is set on a setting that has no
+  such state. It only ever writes into a row that is *not* overridden, so it cannot
+  overwrite something being typed.
+- **An `optional` setting is the one row that shows no value**, because there unset is a
+  real answer: the wording is the setting's own (`RunOption.auto`, "same as the fronts"),
+  as a select option or a placeholder. It is offered **only while the library's own value
+  is unset** — with a value there it would be the duplicate option again, one line down.
+- **The dot sits in the row's left gutter, not in the label column**, so the dots line up
+  as a column down the edge of the panel and the labels keep every pixel they had (two of
+  them already wrap at this width). Hidden with `visibility`, so nothing moves when a row
+  is changed.
+
+`none` is a **real profile name** (`profiles.NONE`, the identity), so the profile selects
+had exactly the same duplicate — `none — the library default` above `none` — and are
+answered the same way (`sheetProfileOpts`).
+
+**The grid has to fit the paper, and nothing checked — so both shipped defaults were
+wrong (`sheet.PaperFit`, `paper_fit`).** This is arithmetic, which is exactly why it
+survived: the renderer places the grid where it is told, PIL clips whatever falls off the
+page, and **what is clipped first is the cut bleed you were going to throw away**. The
+sheet looks perfect until a row comes out short.
+
+- **A4 3×3 at 2.5mm bleed is 205.5mm wide on a 210mm sheet** — 2.25mm from each edge,
+  which no real printer can reach. And the placement was `max(margin, centred)`, so with
+  the 5mm margin *forced* the whole 5.5mm of overflow went onto the right edge: 0.51mm
+  off the paper on every sheet ever imposed.
+- **Letter 3×3 is 281.7mm tall on a 279.4mm sheet**, so it never fitted at all. The
+  bottom row of **cards** — not bleed, cards — hung 4.81mm off the paper.
+
+Three things follow, and the third is the one to remember:
+
+- **The margin is a constraint that is reported, not an offset that is forced.** It used
+  to be neither: `max(margin, centred)` is a *no-op* wherever the grid fits (centred is
+  already further in) and actively harmful wherever it does not (it pushes the whole
+  overflow onto two edges). So the grid is now **centred in the printable box** — never
+  worse, since where it fits the old code already chose centred, and where it does not,
+  centring is symmetric and loses half as much off each edge instead of all of it off
+  one. That alone fixes the A4 case. With asymmetric margins it centres in the *box*, so
+  a 12mm bottom really does hold the grid higher.
+- **Margins are per edge** (`sheet.Margins`, `margins()`), because a printer's
+  unprintable border is: 4mm at the sides and 5mm at the top is an ordinary inkjet, and
+  many grip 12mm at the bottom where the paper is still in the rollers. `[sheet]
+  margin_mm` is the default and each edge may override it — the same optional-with-`auto`
+  shape the backs' guides use.
+- **`bleed_mm` defaults to 1.5, not 2.5, because the arithmetic has to close.** Three
+  columns of a 63.5mm card cost `190.5 + 6 × bleed`, so 2.5 wants 205.5mm and 1.5 wants
+  199.5mm — which clears 5.25mm a side on A4 at the default 3×3. The margin is the
+  *honest* number (5mm is a real printer's border), so the bleed is what had to give, and
+  it is a **sheet-time** value that no stored master depends on (`sheet.cell_mm`) — it
+  costs 1mm of waste an edge and changes nothing that was filed. For scale,
+  mtg-jumpstart-dividers ships 1mm of bleed with a 2mm gutter.
+
+`PaperFit.note` is the one sentence both surfaces print, and it names the numbers *and* a
+way out: what the grid measures, what there is room for, which axis overflows, the
+largest grid that fits, and the largest bleed that would keep the one you asked for.
+`_bleed_that_fits` rounds **down** to a hundredth, because a suggestion that does not
+itself fit is worse than no suggestion, and answers `None` when bleed cannot help at all
+(four columns is 254mm of bare card against a 200mm box — pointing at bleed there sends
+somebody to change the one setting that is irrelevant). It is reported **per group**,
+since each trim size has its own grid and an oversized card can fit while the ordinary
+ones do not. And it is *reported*, not refused: `grid_for` still keeps the configured grid
+for the configured trim, which is a documented promise — silently imposing 6 cards when
+you asked for 9 would change the page count `sheet.plan` exists to guarantee.
+
+**A cut guide marks where the card really lands, and for a while it did not
+(`sheet._trim_box`).** Every guide's position came from `Geo.cell_xy`, and the cards
+were pasted at `cell_xy + the ink offset` — so the two agreed only while both offsets
+were 0. Set a **back offset**, which is the one thing you do with a misregistered duplex
+sheet in your hand, and the lines stayed put while the cards moved: 1.5mm at 1400dpi is
+83px of ink, and you were cutting along lines that described no card on the page. It is
+invisible for the reason everything in this area is invisible — both are drawn exactly
+where they were told to be, and the PDF looks immaculate. Both sites were wrong (the
+per-page grid lines *and* the per-card corner ticks), which is why the pin
+(`tests/test_guides.py`) asserts a **whole-raster translation** rather than hunting for
+the lines: a nudged page has to be the same page moved, cards and guides together, and
+any drift at all falls out of that one comparison.
+
+**And `guide_placement` was inverted, which put a mark on every card ever printed.**
+`d = -1 if OUTSIDE else 1` — so with the shipped default (`corners`, `outside`, whose own
+help text reads *"outside the trim keeps marks off the card"*) each tick ran **into** the
+trim. Found by writing the test for it, not by reading the code: a mark is a mark until
+you check which side of the cut it is on, and 4mm in from a corner lands under the card's
+own border, where a yellow Pokémon frame hides a green line almost entirely. Fixing it
+changes what the next sheet looks like for anyone on the defaults — deliberately: the
+setting now means what it says, and marks belong in the bleed you are throwing away.
+`cross` is what puts them back over the cut on purpose, by as much as you ask for.
+
+**Registration marks are the opposite rule, deliberately.** They are *not* moved by the
+offsets, because their job is to be measured against each other through the paper —
+nudged along with the cards they would line up on every sheet by construction and report
+every printer as perfectly registered. The gap between the two sides' targets is the
+drift that is *still there*, which is the number a back offset is set from. Both rules
+are pinned together in one class, since each is only obviously right beside the other.
+
+**The guides are per side, and a side is the unit because the two sides are asked
+different questions (`sheet.GuideSpec`, `sheet.guides_for`).** The fronts carry the lines
+you cut by; the backs, when they carry any, are there to be *compared* with the fronts.
+So the backs' style, placement, length, overshoot, colour and thickness are each an
+**optional** override of the fronts' — unset means "the same as the fronts", the shape
+`[print] back_profile` already has and right for the same reason: one sheet of paper, one
+set of guides, until you say otherwise. What makes a different answer worth having is
+registration: with lines on both sides you hold the sheet to a light, and **two colours
+are how you tell whose line is whose**. `guides_for(cfg, back=…)` is the one place that
+resolution lives — the renderer, the `sheet` readout and `Run.json` all call it, because
+a report that worked the fallbacks out for itself is a second implementation free to
+describe a sheet the printer is not making.
+
+**A frame spec id and a game id are open sets; an *optional setting* is the third shape
+of the same idea (`config.optional_of`, `RunOption.optional`/`auto`).** The backs' guides
+needed a state beyond their type — "unset", meaning something specific — and the two
+tempting spellings are both wrong here. A sentinel number throws the type away, and an
+extra enum member collides with a real one: `guide_style` **has** a `none` member meaning
+"draw no guides on the backs", which is a different answer from "whatever the fronts do".
+So the state is declared, `T | None`, and `_coerce` unwraps it: the enum stays closed, the
+millimetres stay floats, and every reader learns from the annotation that `None` is a case
+it must answer for. Three consequences:
+
+- **What unset *means* is carried per setting** (`auto="same as the fronts"`), exactly as
+  `steps.StepOption.auto_label` is and for the identical reason — the UI once printed one
+  option's "automatic" wording over every optional control. The sheet builder's row, the
+  CLI's `--help` default and `config set`'s confirmation all read it from there.
+- **TOML spells unset by the key not being there**, so `config set sheet.back_guide_color=`
+  and the settings screen's cleared field **remove the key**. There is no `None` to write —
+  the first version tried and died inside tomlkit — and this is the same distinction the
+  builder's controls draw one layer up between "clear this row" and "store a blank".
+- **`""` is the empty spelling and `"none"` is deliberately not**, per the collision above.
+  Pinned, because a single string field could not have told the two apart at all.
+
+**How far a mark reaches is a different question from where marks go, and the
+mtg-jumpstart-dividers generator got that wrong in both directions** — which is the
+argument for `GuideReach` being its own setting rather than more `GuideStyle` members.
+That project has two implementations of one thing:
+
+| | what it draws | reach |
+|---|---|---|
+| `cropMarks` (its first version) | eight segments per card, `markOut` outward + `markIn` inward | a fixed length |
+| `cropGuides` (its rewrite) | continuous lines, footprints skipped, `markIn` reused as the overlap | always to the sheet edge |
+
+The rewrite **deleted the choice**: `markOut` survives in its `CFG` as a value nothing
+reads. So each version can express one of the three useful answers and neither can
+express the third, "as far as the neighbour and no further". proxdex's own first attempt
+at this repeated the mistake from the other side — an `EDGES` style that was `CORNERS`
+with the arms maximally extended, i.e. two spellings of one drawing and no way to ask for
+the middle.
+
+So: **`GuideStyle` says where marks go** (`CORNERS`, never on a card; `FULL`, straight
+across and over them; `NONE`) and **`GuideReach` says how far an arm runs** — `FIXED`
+(`guide_mm`, a tick), `JOIN` (to the neighbouring card's near edge, so the gap becomes one
+line, and `guide_mm` where there is no neighbour so the outer margin stays clean) or
+`PAPER` (the same, out to the sheet edge where there is no neighbour). Five things about
+it:
+
+- **One drawing, one limit changed** (`sheet._mark_guides`, `_arm_end`). Eight arms per
+  card — the shape jumpstart's *first* version had, which is what this went back to —
+  each running away from the card along a trim line, with `_arm_end` the only thing reach
+  touches. Three implementations of "where is the cut" is three chances to disagree about
+  it; this way "a tick", "a line joining its neighbour" and "a line to the paper" cannot.
+- **A mark never runs past a neighbour onto its face.** That is the safety property, and
+  it is what `EDGES`'s footprint-skipping was really for: only `sheet_guide_cross_mm` may
+  put ink on a card. So the old clamp — half the footprint, guarding against a "gap" that
+  ran backwards and silently became `FULL` — is *gone as a special case*, because an arm
+  now stops at a boundary rather than a gap being subtracted from a line.
+- **`JOIN` is not cosmetic.** At the default 4mm against a typical 5mm gap `FIXED`'s two
+  arms already meet, so the two look identical — until the gap exceeds twice the mark
+  length, where `FIXED` leaves a hole in the middle of the gutter and `JOIN` does not.
+  Pinned with a 12mm spacing for exactly that reason: a test at the default would have
+  passed for both and proved nothing.
+- **`sheet_guide_cross_mm` is jumpstart's `markIn`** and means one thing in every style:
+  how far the mark crosses onto the card. A little makes the four lines meet in a **+** at
+  every corner, which is the only thing on the page that tells you the grid is square; 0
+  leaves the cards completely clean. `placement` says which side the arm runs to, `cross`
+  how far it overshoots to the other — so a tick becomes a `+` rather than an `L`.
+- **Reach is meaningless for `placement = inside`**, where the arm is on the card and the
+  card is the only thing bounding it. Said in the help rather than hidden, since the same
+  is already true of `guide_mm` under `FULL`.
+
+**Only cells that hold a card are marked.** The page-wide styles derived their lines from
+the *grid*, so two cards on a nine-up sheet got nine cards' worth of cut marks — seven
+cuts nobody is making, on a sheet you are about to take a blade to. `render_page` collects
+the occupied cells and both drawing functions take that set; `_blocker` walks it to find
+the next *occupied* cell, so an empty cell is not something an arm stops at either.
+
+The one thing from that repo deliberately **not** brought over is its 3mm card border:
+those dividers are drawn by the tool, so a border is something it can thicken. A proxdex
+card's border is on the scan, and inventing one over it is the border step's job — where
+it is fitted to a measured spec rather than typed in as a page setting.
 
 **CLI/UI parity is two-way and load-bearing.** Anything one can do, the other
 can: the UI's contact-sheet filters are `ls --only/--sort/--game/--set` (plus
@@ -1683,15 +2190,49 @@ their shared flags (`--rarity/--year/--type/--supertype/--subtype/--color/--sort
 its data sheet is `proxdex show`;
 its settings screen is `proxdex config show|set|prune` (tomlkit, comment-preserving,
 every value through `Config.coerce`); its batch list is `proxdex batches`; its
-delete is `proxdex rm`; its frame-specs screen is the `frames` group — specs, rules, coverage and warnings, with
+delete is `proxdex rm`; its settings screen's **games** panel is the `game` group
+(`list`/`add`/`edit`/`rm` and `game set add`/`rm`), where a custom game's row says out
+loud that it has no provider and `providerGames()` keeps it out of the Search, Browse,
+import-finder and frames-preview pickers — the four places that ask an API, so offering
+it there would mean finding out by getting an error back out of a search; every other
+picker (the library filter, the import wizard's bulk game, a frame spec's game, card
+backs) keeps the full list, because all of those work perfectly well for a game with no
+provider. Its frame-specs screen is the `frames` group — specs, rules, coverage and warnings, with
 `frames preview` behind every Preview button, `frames check` behind the Warnings tab,
-`frames coverage` behind the Coverage tab, and a Pin control on the align panel; its
+`frames coverage` behind the Coverage tab, the shipped baseline listed beside the
+library's own rules on both sides (`frames rules` prints two tables, the Rules tab shows
+two panels), and a Pin control on the align panel; its
 stored-images screen is `proxdex doctor` (the report read directly, the repair
 shelled out as `doctor --fix --yes`); its **sheet
-builder** is `sheet` with copies and per-run overrides (its live page count is
-`--dry-run`); its **import wizard** is `import` with `--dry-run`/`--on-existing`
+builder** is `sheet` with copies and per-run overrides — all thirty-four, grouped, each
+row either the library's or this run's, and the backs' cut guides among them (its live
+page count is `--dry-run`, and both surfaces print the same one-line
+`GuideSpec.summary` for what each side of the paper will be marked with); its **import
+wizard** is `import` with `--dry-run`/`--on-existing`
 (its review table *is* the dry run, and every row is one `import <file> --id …
---stage … --face …` call, so the CLI stays the only implementation); its **print
+--stage … --face …` call, so the CLI stays the only implementation) — and a row of a
+**provider-less** game grows the two things no lookup can supply, `--card-name` and
+`--faces`, while losing the `Find…` button, which would have opened a search against an
+API that has never heard of that game: worse than absent, because it looks like the way
+in. `creationNote` is the wizard's copy of the "where did this folder's name come from"
+sentence, and it has to branch on the game for the same reason `cli._import_plan` does.
+**The game is per row**, not only the bulk control — a folder holding two games' scans
+is the ordinary case, and the row's own game is what decides whether it shows those two
+extra fields at all.
+
+**And the wizard is the second place "ask what it destroys" was learned the hard way.**
+`planImport` called `paintImport`, which rebuilds `#imprev` wholesale — so every
+keystroke in a card id or a card name destroyed the element being typed into: focus
+gone, caret gone, the character lost, and a `working…` chip flashing beside it. The card
+page had `paintFilm` for exactly this and the import table had no equivalent. Now
+`patchImport` writes only what the plan decides (`impVerdict`, `impActs`, `impSummary`,
+the bar's counts and the Import button) and never touches an input, a select or the row
+structure; `paintImport` is kept for changes that really are structural — files added or
+dropped, a game picked, the blocked-only filter — where nobody is mid-word. Two traps in
+that split, both found by driving it in a browser: patching a table that does not exist
+yet drew **nothing at all** on the first files ever dropped (`paintOrPatchImport` guards
+on the row count the table was built for), and the bar cannot be patched wholesale
+either, because it holds the bulk-id text box; its **print
 screen** is `proxdex profile` + `proxdex calibrate`, one control per verb. Going the other way, `SheetBody.cards` lets the UI impose a
 *selection with copies* (`sheet <name> <id[:n]...>`), `FetchBody.related` is
 `fetch --related`. Border is the one step with **no** bulk action, on both sides: it has
@@ -1897,7 +2438,11 @@ own documentation: `setting(default, label=…, help=…, unit=…)` returns a
 `/api/config`. That is why the settings screen can be a real form rather than a
 list of raw keys, and why there is exactly one place to edit when a setting's
 meaning changes. Per-library settings live in `proxdex.toml`, edited
-comment-preservingly via tomlkit (in the UI). It also
+comment-preservingly via tomlkit (in the UI). **A setting that a page can override for
+one job says so on itself** — `run=Run.SHEET` — and `Config.run_options` is then the
+single declaration the CLI flag, the request field, the validation and the UI control
+are all derived from; see the sheet section above for why that replaced four
+hand-written lists. It also
 owns the sheet/print/tool vocabulary enums (`PageSize`, `Orientation`, `Fit`,
 `Faces`, `DuplexFlip`, `GuideStyle`, `GuidePlacement`, `RegMarks`,
 `UpscaylScale`, `UpscaylModel`) — `Config.load` reads the dataclass' own type

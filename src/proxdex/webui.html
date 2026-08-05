@@ -733,10 +733,31 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
 /* --- step settings ------------------------------------------------------- */
 /* every step shows its settings from the moment you focus it — there are no
    modes to enter and nothing to click through */
-.setting { display: grid; grid-template-columns: minmax(6.5rem, 38%) 1fr; gap: var(--s2); align-items: center; }
+/* `position: relative` for the `.omark` gutter below — one rule, because two top-level
+   definitions of one bare class is the collision this file has been bitten by twice. */
+.setting { display: grid; grid-template-columns: minmax(6.5rem, 38%) 1fr; gap: var(--s2);
+           align-items: center; position: relative; }
 .setting > label { font-size: .75rem; color: var(--dim); }
 .setting .form-select, .setting .form-control { height: 2rem; font-size: .8125rem; }
 .settings { display: flex; flex-direction: column; gap: var(--s3); }
+/* A row overridden for this run. The accent is on the *label*, not the control: a
+   coloured input reads as invalid, and what is being said here is "you changed this",
+   which belongs to the name of the thing. `.omark` is the same statement for a reader
+   who cannot see the colour — and it is **always in the DOM**, shown by the row's own
+   class, so `paintSetup` toggling that class carries both signals at once. Rendered
+   conditionally it went out of step the moment a row was changed after the panel was
+   drawn: two overridden rows, one dot.
+
+   It sits **in front of** the label, in the row's own left gutter rather than in the
+   label column: the dots line up as a column down the edge of the panel, which is what
+   makes "did I change anything?" one glance instead of a read — and the labels keep
+   every pixel they had, two of which already wrap at this width. Hidden with
+   `visibility`, so a row's text never moves when it is changed. (`.setting` itself carries
+   the `position: relative` this needs — see its own rule above.) */
+.setting.isover > label { color: var(--txt); }
+.omark { position: absolute; left: -.7rem; top: 50%; translate: 0 -50%;
+         color: var(--mark); font-size: 1rem; line-height: 1; }
+.setting:not(.isover) .omark { visibility: hidden; }
 /* An option's own `help` is on the row's `title` rather than printed under it. It ran
    two to four lines per setting — most of the panel's height, restated on every visit,
    above the card you are trying to look at. Same affordance the fill knobs already use
@@ -1439,8 +1460,10 @@ const state = {
   // `sheet <name>` with no ids does.
   // `written` is the last PDF this session imposed — the browser's answer to
   // `sheet --open`, which is a link you click rather than an app the server launches
-  sheet:{name:'deck', picks:new Map(), filter:'', opts:null, plan:null, planning:false,
-         written:null},
+  // `over` holds only the page settings changed **for this run**, keyed by config
+  // field name; absent means "the library's setting". See `sheetOver`.
+  sheet:{name:'deck', picks:new Map(), filter:'', over:null, plan:null, planning:false,
+         profile:'', back_profile:'', notes:'', written:null},
   // the print screen: which profile is open, and what the server said about it
   profile:null, profileList:null, profileDetail:null, proofOf:null, previewOf:null,
   // the import wizard: the files the browser is holding, what the server says
@@ -3523,7 +3546,13 @@ function hideLoupe(){ const b = $('#loupe'); if(b) b.hidden = true; }
 
 /* Live preview only — mirrors cardbleed.solve_fit (authoritative on apply).
    Reshapes to the exact card aspect with borders as close to the spec as
-   possible (exactly, with stretch); an already-over-target edge may be shaved. */
+   possible (exactly, with stretch); an already-over-target edge may be shaved.
+
+   The stretch is the caller's choice, at a zero target as much as anywhere else: with
+   it the trim comes out at the marked art's own size and nothing is invented, without
+   it border is extended to reach the aspect. What differs at a zero target is only
+   *how the result is written* — see `bleed.by_resize`, which is downstream of this
+   geometry and changes none of it. */
 function solveFit(m, b, stretch, guide){
   const g = {top:guide.inset[0], right:guide.inset[1], bottom:guide.inset[2], left:guide.inset[3]};
   const cw = m.card_w_mm, ch = m.card_h_mm, w = m.w, h = m.h;
@@ -3819,6 +3848,11 @@ function renderAlignPanel(){
       <div class="eyebrow mb-1">Where the border should be</div>
       <p class="hint mb-0">No printed frame to align to — this reshapes to the card
         aspect and nothing else. Run it as it is.</p>
+      <p class="hint mb-0"><b>Stretch</b> above decides how: ticked, the picture is
+        resized to the aspect and <i>no pixel is invented</i> — nothing is added, so
+        cardbleed is not asked to fill anything. Unticked, border is extended to reach
+        the aspect instead, which on a card whose art already runs to the edge means
+        synthesizing picture that does not exist.</p>
       ${whyThisSpec()}`;
     syncRunLabel();
     return;
@@ -4634,12 +4668,22 @@ async function runFind(){
   }
 }
 
+/* **The games a provider answers for**, which is not the same list as "the games".
+   Search and Browse ask an API; a game you defined has none, so offering it here
+   would mean finding out by getting an error back out of a search. Everywhere a game
+   is a *label or a destination* — the library filter, the import wizard, a frame
+   spec's game, the card-back panel — keeps the full list, because all of those work
+   perfectly well for a game with no provider. */
+const providerGames = () => (state.meta.games || []).filter(g => !g.custom);
+const isCustomGame = id =>
+  !!((state.meta.games || []).find(g => g.id === id) || {}).custom;
+
 /* ---------- Search ------------------------------------------------------- */
 function viewSearch(){
   const f = FIND(), game = findGame();
-  const gopts = state.meta.games.map(g =>
+  const gopts = providerGames().map(g =>
     `<option value="${esc(g.id)}" ${g.id === game ? 'selected' : ''}>${esc(g.name)}</option>`).join('');
-  const example = state.meta.games.find(g => g.id === game)?.example || '';
+  const example = providerGames().find(g => g.id === game)?.example || '';
   return `
     <div class="d-flex align-items-baseline gap-2 mb-3 flex-wrap">
       <div><div class="eyebrow">Find cards by name</div><h5 class="mb-0">Search</h5></div>
@@ -4738,7 +4782,7 @@ function viewBrowse(){
 }
 function browseHeader(){
   const game = browseGame();
-  return state.meta.games.map(g =>
+  return providerGames().map(g =>
     `<button class="btn btn-sm ${g.id === game ? 'btn-primary' : 'btn-outline-secondary'}"
       onclick="setBrowseGame('${esc(g.id)}')">${esc(g.name)}</button>`).join('');
 }
@@ -5132,7 +5176,11 @@ function planImport(){
   clearTimeout(_impTimer);
   if(!IMP().rows.length){ IMP().plan = null; paintImport(); return; }
   IMP().planning = true;
-  paintImport();
+  // **Patch, never repaint** — this runs on every keystroke in a card id or name, and
+  // a repaint would destroy the input being typed into (see `patchImport`). Unless
+  // there is nothing to patch yet: the first files ever dropped have no table, and
+  // patching one that does not exist drew nothing at all.
+  paintOrPatchImport();
   _impTimer = setTimeout(async () => {
     try{
       const r = await fetch('/api/import/plan', {
@@ -5145,6 +5193,8 @@ function planImport(){
           if(row.game) item.game = row.game;
           if(row.stage) item.stage = row.stage;
           if(row.face) item.face = row.face;
+          if(row.card_name) item.card_name = row.card_name;
+          if(row.faces > 1) item.faces = row.faces;
           return item;
         })}),
       });
@@ -5152,11 +5202,28 @@ function planImport(){
       if(!r.ok) toast('The plan could not be worked out\n' + tail(await r.text()), 9000);
     } catch(e){ IMP().plan = null; }
     IMP().planning = false;
-    paintImport();
+    // the blocked-only filter changes which rows are *in* the table, so a plan that
+    // moves a row in or out of it is structural after all
+    // the blocked-only filter changes which rows are *in* the table, so a plan that
+    // moves a row in or out of it is structural after all
+    if(IMP().only_blocked) paintImport(); else paintOrPatchImport();
   }, 200);
 }
+/* Patch if the table is there, build it if it is not. The guard is the row count the
+   table was drawn for: files dropped, dropped rows and the blocked-only filter all
+   change it, and none of those can happen while somebody is mid-word in a text box. */
+function paintOrPatchImport(){
+  if($('#imptab') && Number($('#imptab').dataset.rows) === IMP().rows.length) patchImport();
+  else paintImport();
+}
+/* **What the user changed decides whether the table may be rebuilt.**
+   `id` and `card_name` come from a text box on every keystroke, so those may only
+   patch; a select (game, stage, side) is a settled choice and a game additionally
+   changes which fields the row *has*, so that one has to re-render. */
+const _IMP_TYPED = new Set(['id', 'card_name']);
 function impSet(i, key, value){
   IMP().rows[i][key] = value || null;
+  if(!_IMP_TYPED.has(key)) paintImport();
   planImport();
 }
 /* Accept the id the filename suggested. That is not cosmetic: a *guessed* id can
@@ -5187,9 +5254,9 @@ function paintImport(){
   host.innerHTML = `
     ${impBar()}
     <div class="panel p-3 impwrap">
-      <table class="imptab">
+      <table class="imptab" id="imptab" data-rows="${rows.length}">
         <thead><tr>
-          <th></th><th>file</th><th>card</th><th>stage</th><th>side</th>
+          <th></th><th>file</th><th>card</th><th>game</th><th>stage</th><th>side</th>
           <th>becomes</th><th></th>
         </tr></thead>
         <tbody>${rows.map((r, i) => [r, i, at[i]])
@@ -5216,12 +5283,13 @@ function impBar(){
     <div class="panel p-3 mb-3">
       <div class="d-flex align-items-center gap-3 flex-wrap">
         <span class="mono" style="font-size:.8125rem">${rows.length} file${rows.length === 1 ? '' : 's'}</span>
-        <span class="hint mb-0">${counts}</span> ${busy}
+        <span class="hint mb-0" id="impcounts">${counts}</span>
+        <span id="impbusy">${busy}</span>
         <div class="ms-auto d-flex gap-2 align-items-center flex-wrap">
           <label class="eyebrow mb-0" for="imp_exist">already there</label>
           <select class="form-select form-select-sm" style="width:8.5rem" id="imp_exist"
                   onchange="impOnExisting(this.value)">${opts}</select>
-          <button class="btn btn-sm btn-primary" onclick="runImport()"
+          <button class="btn btn-sm btn-primary" id="impgo" onclick="runImport()"
             ${plan && plan.ready && !IMP().running ? '' : 'disabled'}>
             ${IMP().running ? `Importing ${IMP().at}/${plan ? plan.ready : 0}…`
                             : `Import ${plan ? plan.ready : 0}`}</button>
@@ -5264,34 +5332,67 @@ function impBar(){
           <label class="form-check-label" style="font-size:.75rem" for="imp_only">
             show only the ${plan.blocked} that need a look</label></span>` : ''}
       </div>
-      ${plan && plan.discards ? `<p class="hint mb-0 mt-2" style="color:var(--hold)">
-        ⚠ ${plan.discards} later-stage image(s) go stale and are removed — they were
-        derived from what you are replacing.</p>` : ''}
-      ${plan && plan.creates.length ? `<p class="hint mb-0 mt-2">
-        + ${plan.creates.length} new card folder(s): <span class="mono">${
-        esc(plan.creates.join(' '))}</span> — looked up as they are filed.</p>` : ''}
+      <div id="impsum">${impSummary()}</div>
     </div>`;
 }
 
-function impRow(row, i, at, stages){
-  const d = at ? at.disposition : '';
-  const sent = row.result;
-  const verdict = sent
-    ? `<span class="disp ${sent.ok ? 'ok' : 'fail'}">${sent.ok ? 'filed' : 'failed'}</span>`
-    : `<span class="disp ${dispClass(d)}">${esc(d || '…')}</span>`;
-  const why = sent && !sent.ok ? tail(sent.log) : (at ? at.reason : '');
-  const known = at && at.card_name ? at.card_name : '';
+/* The two lines under the bar that only the plan knows. Split out of `impBar` so
+   `patchImport` can restate them without touching the inputs beside them — the bar
+   holds a text box (the bulk id prefix), so rebuilding it mid-keystroke is the same
+   defect this whole path was fixed for. */
+function impSummary(){
+  const plan = IMP().plan;
+  if(!plan) return '';
   return `
-    <tr class="${at && at.disposition === 'skip' ? 'gone' : ''}">
+    ${plan.discards ? `<p class="hint mb-0 mt-2" style="color:var(--hold)">
+      ⚠ ${plan.discards} later-stage image(s) go stale and are removed — they were
+      derived from what you are replacing.</p>` : ''}
+    ${plan.creates.length ? `<p class="hint mb-0 mt-2">
+      + ${plan.creates.length} new card folder(s): <span class="mono">${
+      esc(plan.creates.join(' '))}</span> — ${creationNote(plan)}.</p>` : ''}`;
+}
+
+/* **Where a new card folder's name comes from**, which is not the same answer for
+   every game and used to claim it was. A custom game has nothing to look up: the set
+   is one it declares and the name is the one you typed, so "looked up as they are
+   filed" described a request that never happens. The CLI says the same two things
+   (`cli._import_plan`); this is the one sentence the UI cannot derive from the plan
+   JSON, because what it turns on is the game rather than the row. */
+function creationNote(plan){
+  const creating = plan.items.filter(a => a.disposition === 'create');
+  return creating.some(a => isCustomGame(a.game))
+    ? "named from your own game's set"
+    : 'looked up as they are filed';
+}
+
+function impRow(row, i, at, stages){
+  const known = at && at.card_name ? at.card_name : '';
+  /* A row of a game with no provider needs *more* than the others and *less*:
+     there is nothing to look a card up in, so the id has to be typed and a name
+     with it — but `Find…` would open a search against an API that has never heard
+     of this game, which is worse than absent because it looks like the way in. */
+  const gid = row.game || (at && at.game) || state.meta.default_game;
+  const mine = isCustomGame(gid);
+  return `
+    <tr id="improw-${i}" class="${at && at.disposition === 'skip' ? 'gone' : ''}">
       <td><img class="pv" alt="" src="${esc(row.url)}"></td>
       <td><div class="fname">${esc(row.name)}</div></td>
       <td>
         <input class="form-control form-control-sm mono" style="width:8.5rem"
                placeholder="${esc(at && at.id ? at.id : 'card id')}"
                value="${esc(row.id || '')}" oninput="impSet(${i}, 'id', this.value.trim())">
-        <div class="why">${known ? esc(known)
+        ${mine ? `<input class="form-control form-control-sm mt-1" style="width:8.5rem"
+               placeholder="card name" value="${esc(row.card_name || '')}"
+               title="What to call the card. Your game has no provider to ask, so
+this is the name — it becomes part of the folder. Blank means the card id."
+               oninput="impSet(${i}, 'card_name', this.value)">` : ''}
+        <div class="why" id="impknown-${i}">${known ? esc(known)
           : (at && at.guessed_id && at.id ? 'from the filename' : '')}</div>
       </td>
+      <td><select class="form-select form-select-sm" style="width:8rem"
+                  onchange="impSet(${i}, 'game', this.value)">
+        ${(state.meta.games || []).map(g => `<option value="${esc(g.id)}" ${
+          gid === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></td>
       <td><select class="form-select form-select-sm" style="width:7.5rem"
                   onchange="impSet(${i}, 'stage', this.value)">
         ${stages.map(s => `<option ${(row.stage || (at && at.stage)) === s ? 'selected' : ''}
@@ -5299,21 +5400,95 @@ function impRow(row, i, at, stages){
       <td><select class="form-select form-select-sm" style="width:5.5rem"
                   onchange="impSet(${i}, 'face', +this.value)">
         ${[1, 2].map(f => `<option value="${f}" ${(row.face || (at && at.face) || 1) === f
-          ? 'selected' : ''}>${f === 1 ? 'front' : 'back'}</option>`).join('')}</select></td>
-      <td>${verdict}<div class="why">${esc(why || '')}</div>
-        ${at && at.discards.length ? `<div class="why" style="color:var(--hold)"
-          >↳ discards ${esc(at.discards.join(', '))}</div>` : ''}</td>
-      <td class="text-end text-nowrap">
-        ${at && at.disposition === 'missing'
-          ? `<button class="btn btn-sm btn-ghost mono" onclick="impConfirm(${i})"
-               title="Take the id from the filename and let the import look the card up"
-               >use ${esc(at.id)}</button>` : ''}
-        ${at && (at.disposition === 'unmatched' || at.disposition === 'missing')
-          ? `<button class="btn btn-sm btn-ghost" onclick="impFind(${i})">Find…</button>` : ''}
-        <button class="btn btn-sm btn-ghost" onclick="impDrop(${i})"
-                title="Leave this file out">×</button>
-      </td>
+          ? 'selected' : ''}>${f === 1 ? 'front' : 'back'}</option>`).join('')}</select>
+        ${mine ? `<select class="form-select form-select-sm mt-1" style="width:5.5rem"
+                  title="How many printed sides this card has. Two makes a double-faced
+card, each side with its own pipeline — and a provider would normally say so."
+                  onchange="impSet(${i}, 'faces', +this.value)">
+        ${[1, 2].map(f => `<option value="${f}" ${(row.faces || 1) === f
+          ? 'selected' : ''}>${f} side${f > 1 ? 's' : ''}</option>`).join('')}</select>` : ''}</td>
+      <td id="impverdict-${i}">${impVerdict(row, at)}</td>
+      <td class="text-end text-nowrap" id="impacts-${i}">${impActs(i, at, mine)}</td>
     </tr>`;
+}
+
+/* **The three things the plan decides about a row**, split out of `impRow` so they can
+   be restated without rebuilding the row — because the row holds the text boxes you
+   are typing into, and rebuilding one mid-keystroke throws away your focus, your caret
+   and the character you were halfway through. See `patchImport`. */
+function impVerdict(row, at){
+  const d = at ? at.disposition : '';
+  const sent = row.result;
+  const verdict = sent
+    ? `<span class="disp ${sent.ok ? 'ok' : 'fail'}">${sent.ok ? 'filed' : 'failed'}</span>`
+    : `<span class="disp ${dispClass(d)}">${esc(d || '…')}</span>`;
+  const why = sent && !sent.ok ? tail(sent.log) : (at ? at.reason : '');
+  return `${verdict}<div class="why">${esc(why || '')}</div>
+    ${at && at.discards.length ? `<div class="why" style="color:var(--hold)"
+      >↳ discards ${esc(at.discards.join(', '))}</div>` : ''}`;
+}
+
+function impActs(i, at, mine){
+  return `
+    ${at && at.disposition === 'missing'
+      ? `<button class="btn btn-sm btn-ghost mono" onclick="impConfirm(${i})"
+           title="Take the id from the filename and let the import look the card up"
+           >use ${esc(at.id)}</button>` : ''}
+    ${!mine && at && (at.disposition === 'unmatched' || at.disposition === 'missing')
+      ? `<button class="btn btn-sm btn-ghost" onclick="impFind(${i})">Find…</button>` : ''}
+    <button class="btn btn-sm btn-ghost" onclick="impDrop(${i})"
+            title="Leave this file out">×</button>`;
+}
+
+/* **Restate what the plan changed, and nothing else.** `planImport` used to call
+   `paintImport`, which rebuilds `#imprev` wholesale — so every keystroke in a card id
+   or a card name destroyed the element it was typed into: focus gone, caret gone, and
+   a "working…" chip flashing in the corner. That is precisely the defect the card
+   page's `paintFilm` exists to avoid, and the import table had no equivalent.
+
+   So the inputs, the selects and the row structure are left strictly alone here, and
+   only the derived cells are written: the verdict, the row actions, the "from the
+   filename" note, the bar's counts, the Import button and the two summary lines. A
+   *structural* change — files added or dropped, a game picked, the blocked-only
+   filter — still goes through `paintImport`, because there the row set really is
+   different and nobody is mid-word. */
+function patchImport(){
+  const rows = IMP().rows, plan = IMP().plan;
+  const at = plan ? plan.items : [];
+  const busy = $('#impbusy');
+  if(busy) busy.innerHTML = IMP().planning ? '<span class="chip">working…</span>' : '';
+  const counts = $('#impcounts');
+  if(counts && plan) counts.innerHTML = [
+    `<b class="mono">${plan.ready}</b> to file`,
+    plan.skipped ? `<span class="faint">${plan.skipped} kept</span>` : '',
+    plan.blocked ? `<span style="color:var(--hold)">${plan.blocked} ${
+      plan.blocked === 1 ? 'needs' : 'need'} a look</span>` : '',
+  ].filter(Boolean).join(' · ');
+  const go = $('#impgo');
+  if(go && !IMP().running){
+    go.textContent = `Import ${plan ? plan.ready : 0}`;
+    go.disabled = !(plan && plan.ready);
+  }
+  const apply = $('#imp_apply');
+  if(apply){
+    apply.textContent = `Apply to ${impNumbered().length}`;
+    apply.disabled = !(IMP().prefix.trim() && impNumbered().length);
+  }
+  const sum = $('#impsum');
+  if(sum) sum.innerHTML = impSummary();
+  rows.forEach((row, i) => {
+    const a = at[i];
+    const cell = $('#impverdict-' + i);
+    if(cell) cell.innerHTML = impVerdict(row, a);
+    const acts = $('#impacts-' + i);
+    const gid = row.game || (a && a.game) || state.meta.default_game;
+    if(acts) acts.innerHTML = impActs(i, a, isCustomGame(gid));
+    const known = $('#impknown-' + i);
+    if(known) known.textContent = a && a.card_name
+      ? a.card_name : (a && a.guessed_id && a.id ? 'from the filename' : '');
+    const tr = $('#improw-' + i);
+    if(tr) tr.classList.toggle('gone', !!a && a.disposition === 'skip');
+  });
 }
 
 /* Finding the card a file is of. It is the same `/api/search` the Search screen
@@ -5348,7 +5523,7 @@ function impFinder(i){
       <div class="d-flex gap-2 mb-3 flex-wrap">
         <select class="form-select form-select-sm" style="width:10rem" id="impgame"
                 onchange="doImpSearch()">
-          ${state.meta.games.map(g => `<option value="${esc(g.id)}"
+          ${providerGames().map(g => `<option value="${esc(g.id)}"
             ${g.id === (row.game || state.meta.default_game) ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}
         </select>
         <input class="form-control form-control-sm" style="max-width:20rem" id="impq"
@@ -5441,6 +5616,9 @@ async function runImport(){
     fd.append('face', String(at.face));
     fd.append('on_existing', IMP().on_existing);
     if(at.game) fd.append('game', at.game);
+    // a custom game has no lookup to name the card or count its sides
+    if(row.card_name) fd.append('card_name', row.card_name);
+    if(row.faces > 1) fd.append('faces', String(row.faces));
     try{
       const r = await fetch('/api/import', {method:'POST', body:fd});
       const j = await r.json();
@@ -5796,7 +5974,16 @@ async function removeSpec(id){
 }
 
 /* The rules, in the order they are tried. First match wins, and a set's default
-   is tried last — so an exception never has to be ordered by hand. */
+   is tried last — so an exception never has to be ordered by hand.
+
+   **Two tables, because there are two kinds of rule and only one of them used to be
+   visible.** The shipped baseline (`specs.Shipped`) is a rule list in everything but
+   name, and leaving it off this screen meant an empty table read as "nothing decides
+   these borders" while thirteen Pokémon sets were being bordered by a row nobody could
+   see. It is shown rather than *materialized* into the library's own rules file for
+   two reasons: a copy would never learn the era measured in the next release, and every
+   library would open on fifty rows nobody wrote. Overriding one is an ordinary rule —
+   every rule is tried before the baseline — so `Override` just fills this form in. */
 function rulesPanel(reg){
   const rows = reg.rules.map(r => `<tr>
       <td class="mono">${esc(r.id)}</td>
@@ -5811,20 +5998,25 @@ function rulesPanel(reg){
     </tr>`).join('');
   const needs = (reg.matches || []).filter(m => m.needs_traits).map(m => m.id);
   return `<div class="panel p-3 mb-3">
+    <div class="eyebrow mb-2">Your rules</div>
     ${reg.rules.length ? `<div class="tblwrap"><table class="tbl">
       <thead><tr><th>Rule</th><th>Game</th><th>Set</th><th>Catches</th><th>Spec</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>`
-      : `<p class="hint mb-0">No rules yet — every set falls back to its era, or to its
-         game's generic spec. Add one below.</p>`}
+      : `<p class="hint mb-0">None yet — every card falls back to the baseline below, or
+         to no spec at all, in which case it refuses to be bordered. Add one here or
+         override a shipped row.</p>`}
   </div>
+  ${shippedRulesPanel(reg)}
   <div class="panel p-3 mb-3">
     <div class="eyebrow mb-2">Assign a spec</div>
     <p class="hint">Point a whole set at a spec, or just part of one. Collector-number
       ranges and id lists are read off the card id, so they always work; the rest match
       on what the provider said about the printing (<span class="mono">${needs.map(esc).join(', ')}</span>),
       which a card records when it is fetched. <b>Leave the set blank</b> for a rule
-      covering every set of the game — the only way to express a frame treatment, which
-      is not a property of any one set. A set's own rule always beats a game-wide one.</p>
+      covering every set of the game: with <i>the whole set</i> that is one border for
+      the whole game — usually what a game of your own wants, and it covers every set
+      you declare later — and it is the only way to express a frame treatment, which is
+      not a property of any one set. A set's own rule always beats a game-wide one.</p>
     <div class="row g-2 mb-2">
       <div class="col-sm-3"><label class="eyebrow d-block mb-1" for="ru_spec">Spec</label>
         <select class="form-select form-select-sm" id="ru_spec">
@@ -5848,6 +6040,63 @@ function rulesPanel(reg){
   </div>
   ${previewPanel()}`;
 }
+/* The baseline proxdex ships, as the rules it is. Read-only here on purpose: the
+   table lives in the source (`frames.BASELINE`), one entry per geometry somebody has
+   measured by hand, and a library that copied it would be frozen at the version it
+   copied. `Override` writes a rule of your own instead, which is tried first. */
+function shippedRulesPanel(reg){
+  const ship = reg.shipped_rules || [];
+  if(!ship.length) return '';
+  const gname = id => ((state.meta.games || []).find(g => g.id === id) || {}).name || id;
+  const rows = ship.map((s, i) => `<tr>
+      <td class="faint">${esc(gname(s.game))}</td>
+      <td class="faint">${esc(s.key_label)}</td>
+      <td class="mono" style="${CLIP}" title="${esc(s.scope)}">${esc(s.scope)}</td>
+      <td class="mono">${esc(s.spec)}</td>
+      <td class="text-end"><button class="btn btn-sm btn-ghost"
+        onclick="overrideShipped(${i})">Override</button></td>
+    </tr>`).join('');
+  return `<div class="panel p-3 mb-3">
+    <div class="d-flex gap-2 align-items-baseline mb-2">
+      <div class="eyebrow">Shipped with proxdex</div>
+      <span class="faint" style="font-size:.75rem">tried last · ${ship.length} rows</span>
+    </div>
+    <p class="hint">One row per geometry somebody measured by hand — the specs above are
+      four numbers, and this is which printings get them. Each game is keyed on the fact
+      its border actually followed: Pokémon's ran for known runs of <b>sets</b>, Magic's
+      changed with the printing's <b>frame generation</b>. These are not stored in your
+      library, so they stay current as more cards are measured;
+      <b>Override</b> adds a rule of your own, which is tried first.</p>
+    <div class="tblwrap" style="max-height:26rem;overflow:auto">
+      <table class="tbl" style="table-layout:fixed">
+        <colgroup><col style="width:11rem"><col style="width:10rem"><col>
+          <col style="width:14rem"><col style="width:6.5rem"></colgroup>
+        <thead><tr><th>Game</th><th>Keyed on</th><th>Covers</th>
+          <th>Spec</th><th></th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+  </div>`;
+}
+
+/* Fill the form in from a shipped row, rather than editing it. A generation row
+   becomes a complete game-wide `frame` rule; a set row covering several sets cannot
+   name one for you, so it says which sets it covers and leaves that field to you. */
+function overrideShipped(i){
+  const s = (framesUi.reg.shipped_rules || [])[i];
+  if(!s) return;
+  const set = (k, v) => { const el = $('#ru_' + k); if(el) el.value = v; };
+  set('spec', s.spec);
+  set('game', s.game);
+  set('match', s.match);
+  set('value', s.key === 'set' ? '' : s.subjects.join(','));
+  set('set', s.key === 'set' && s.subjects.length === 1 ? s.subjects[0] : '');
+  paintRuleValue();
+  const focus = $(s.key === 'set' && s.subjects.length !== 1 ? '#ru_set' : '#ru_spec');
+  if(focus){ focus.scrollIntoView({block:'center', behavior:'smooth'}); focus.focus(); }
+  if(s.key === 'set' && s.subjects.length !== 1)
+    toast('Which set? That row covers ' + s.subjects.join(', ')
+      + ' — a rule names one of them. Pick the spec you want instead.', 12000);
+}
+
 function paintRuleValue(){
   const sel = $('#ru_match'), box = $('#ru_value');
   if(!sel || !box) return;
@@ -5864,12 +6113,10 @@ async function addRule(){
   const v = k => $('#ru_' + k) ? $('#ru_' + k).value.trim() : '';
   const body = {spec:v('spec'), set:v('set').toLowerCase(), match:v('match'),
                 value:v('value'), game:v('game') || null};
-  // a whole-set rule with no set would claim every card of the game, which is what
-  // the game's default spec already is — the CLI refuses it, so say so first
-  if(!body.set && body.match === 'set')
-    return toast('A whole-set rule needs a set — without one it would claim every '
-      + 'card of the game. Match on something narrower for a game-wide rule.', 9000);
-  const where = body.set || 'every set';
+  // A whole-set rule with no set is one border for the whole game, which the CLI used
+  // to refuse and no longer does — the per-game fallback spec it deferred to is gone,
+  // and a game of your own has one border and any number of sets.
+  const where = body.set || 'every set of ' + (body.game || 'the game');
   if(!await act('/api/frames/rule', body, `Assigned ${body.spec} to ${where}`)) return;
   await reloadFrames();
   if(body.set) previewSet(body.set, body.game || state.meta.default_game);
@@ -5939,7 +6186,7 @@ function warningsPanel(reg){
           placeholder="swsh4" value="${esc(framesUi.preview ? framesUi.preview.set : '')}"></div>
       <div><label class="eyebrow d-block mb-1" for="pv_game">Game</label>
         <select class="form-select form-select-sm" id="pv_game" style="max-width:11rem">
-          ${(state.meta.games || []).map(g => `<option value="${esc(g.id)}"
+          ${providerGames().map(g => `<option value="${esc(g.id)}"
             ${framesUi.game === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}
         </select></div>
       <button class="btn btn-sm btn-primary" onclick="previewTyped()">Preview</button>
@@ -6029,6 +6276,7 @@ async function renderSettings(){
         <button class="${n === settingsUi.section ? 'on' : ''}" onclick="pickSection('${esc(n)}')">
           ${esc(n)}<span class="cnt">${Object.keys(state.cfg.sections[n]).length}</span></button>`).join('')}
         <hr class="rule" style="margin:.5rem 0">
+        <button class="${settingsUi.section === '_games' ? 'on' : ''}" onclick="pickSection('_games')">games</button>
         <button class="${settingsUi.section === '_backs' ? 'on' : ''}" onclick="pickSection('_backs')">card backs</button>
         <button class="${settingsUi.section === '_frames' ? 'on' : ''}" onclick="pickSection('_frames')">frame specs</button>
         <button class="${settingsUi.section === '_doctor' ? 'on' : ''}" onclick="pickSection('_doctor')">stored images</button>
@@ -6042,6 +6290,11 @@ function pickSection(name){ settingsUi.section = name; renderSettings(); }
 
 function paintSection(){
   const host = $('#secbody'); if(!host) return;
+  if(settingsUi.section === '_games'){
+    host.innerHTML = gamesPanel();
+    if(!gamesUi.asked && !gamesUi.busy) loadGames();
+    return;
+  }
   if(settingsUi.section === '_backs'){ host.innerHTML = backsPanel(); return; }
   if(settingsUi.section === '_frames'){ host.innerHTML = framesPanel(); return; }
   if(settingsUi.section === '_doctor'){
@@ -6190,6 +6443,160 @@ function backsPanel(){
           accept="image/*" onchange="uploadBack(this)"></div>
     </div></div>`;
 }
+/* Games — the two proxdex ships, and any this library defined.
+
+   A custom game is a file in the library, like a print profile, so this reads it
+   directly and every write shells out to `proxdex game …`. The one thing the screen
+   has to keep straight is that a custom game has **no provider**: Search and Browse
+   cannot reach it, so the panel says so on the row rather than letting somebody find
+   out by getting an error out of a search. */
+const gamesUi = {data:null, busy:false, open:null, asked:false};
+
+async function loadGames(){
+  gamesUi.busy = true; gamesUi.asked = true; paintSection();
+  try{ gamesUi.data = await get('/api/games'); }
+  catch(e){ gamesUi.data = {error:String(e)}; }
+  gamesUi.busy = false; paintSection();
+}
+
+function gamesPanel(){
+  if(gamesUi.busy && !gamesUi.data) return '<div class="panel p-3"><p class="hint mb-0">Loading…</p></div>';
+  const d = gamesUi.data || {};
+  if(d.error) return `<div class="panel p-3"><p class="hint mb-0">Could not read the games: ${esc(d.error)}</p></div>`;
+  const rows = (d.games || []).map(g => gameRow(g, d)).join('');
+  return `
+  <div class="panel p-3 mb-3">
+    <div class="eyebrow mb-2">Games</div>
+    <p class="hint">proxdex ships Pokémon and Magic, which have APIs behind them. A
+      game of your own has none: you bring the pictures and <b>Import</b> files them,
+      then it borders, upscales, grades and imposes exactly like any other card.
+      Declare its sets so a mistyped id is refused instead of quietly becoming a new
+      set.</p>
+    ${d.dangling ? `<p class="hint" style="color:var(--hold)">The default game is
+      <span class="mono">${esc(d.dangling)}</span>, which nothing answers to — pick
+      one under <span class="mono">library</span>.</p>` : ''}
+    ${(d.unreadable || []).map(f => `<p class="hint" style="color:var(--hold)">
+      <span class="mono">games/${esc(f)}</span> could not be read, so that game is
+      missing and its cards will resolve no frame spec.</p>`).join('')}
+    <div class="tblwrap"><table class="tbl">
+      <thead><tr><th>Game</th><th>Name</th><th>Cards</th><th>Sets</th><th>Cards come from</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+  </div>
+  ${gamesUi.open ? setsPanel(d) : ''}
+  <div class="panel p-3">
+    <div class="eyebrow mb-2">Add a game</div>
+    <div class="row g-2 align-items-end">
+      <div class="col-6 col-md-3">
+        <label class="eyebrow d-block mb-1" for="gm_id">id</label>
+        <input class="form-control form-control-sm mono" id="gm_id" placeholder="lorcana"></div>
+      <div class="col-6 col-md-4">
+        <label class="eyebrow d-block mb-1" for="gm_name">name</label>
+        <input class="form-control form-control-sm" id="gm_name" placeholder="Disney Lorcana"></div>
+      <div class="col-12 col-md-3">
+        <label class="eyebrow d-block mb-1" for="gm_notes">notes (optional)</label>
+        <input class="form-control form-control-sm" id="gm_notes" placeholder="scans from …"></div>
+      <div class="col-12 col-md-2 d-grid">
+        <button class="btn btn-sm btn-primary" onclick="addGame()">Add game</button></div>
+    </div>
+    <p class="hint mt-2 mb-0">The id becomes a filename and goes in every card's
+      marker, so it cannot be changed later — lowercase letters, digits and hyphens.</p>
+  </div>`;
+}
+
+function gameRow(g, d){
+  const open = gamesUi.open === g.id;
+  return `<tr class="${g.custom ? '' : 'muted'}">
+    <td class="mono">${esc(g.id)}${g.id === d.default ? ' <span class="chip">default</span>' : ''}</td>
+    <td>${esc(g.name)}</td>
+    <td class="mono">${g.cards || 0}</td>
+    <td class="mono">${g.custom ? (g.sets || []).length : '—'}</td>
+    <td class="faint">${g.custom ? 'your own files — no provider' : esc(g.source)}</td>
+    <td>${g.custom ? `
+      <button class="btn btn-sm btn-outline-secondary" onclick="openSets('${esc(g.id)}')">${open ? 'Hide sets' : 'Sets'}</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="rmGame('${esc(g.id)}', ${g.cards || 0})">Delete</button>`
+      : '<span class="faint">shipped</span>'}</td>
+  </tr>`;
+}
+
+/* The sets of one custom game. Declared rather than discovered — with no provider to
+   contradict a typo, an undeclared set id would file happily into a brand-new set and
+   read as success, so `import` checks this list before a byte moves. */
+function setsPanel(d){
+  const g = (d.games || []).find(x => x.id === gamesUi.open);
+  if(!g) return '';
+  const rows = (g.sets || []).map(s => `<tr>
+    <td class="mono">${esc(s.id)}</td>
+    <td>${esc(s.name)}</td>
+    <td class="mono">${s.total || '—'}</td>
+    <td class="mono faint">${esc(s.released || '—')}</td>
+    <td class="mono faint">${esc(s.id)}-1, ${esc(s.id)}-2, …</td>
+    <td><button class="btn btn-sm btn-outline-secondary"
+      onclick="rmGameSet('${esc(g.id)}','${esc(s.id)}')">Remove</button></td>
+  </tr>`).join('');
+  return `<div class="panel p-3 mb-3">
+    <div class="eyebrow mb-2">${esc(g.name)} · sets</div>
+    ${rows ? `<div class="tblwrap"><table class="tbl">
+      <thead><tr><th>Set</th><th>Name</th><th>Cards</th><th>Released</th><th>Card ids</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`
+      : '<p class="hint">No sets yet. A card id is <span class="mono">&lt;set&gt;-&lt;number&gt;</span>, so there has to be one before anything can be imported.</p>'}
+    <div class="row g-2 align-items-end mt-2">
+      <div class="col-6 col-md-2">
+        <label class="eyebrow d-block mb-1" for="gs_id">set id</label>
+        <input class="form-control form-control-sm mono" id="gs_id" placeholder="tfc"></div>
+      <div class="col-6 col-md-4">
+        <label class="eyebrow d-block mb-1" for="gs_name">name</label>
+        <input class="form-control form-control-sm" id="gs_name" placeholder="The First Chapter"></div>
+      <div class="col-4 col-md-2">
+        <label class="eyebrow d-block mb-1" for="gs_total">cards</label>
+        <input class="form-control form-control-sm mono" id="gs_total" type="number" min="0" placeholder="204"></div>
+      <div class="col-4 col-md-2">
+        <label class="eyebrow d-block mb-1" for="gs_rel">released</label>
+        <input class="form-control form-control-sm mono" id="gs_rel" placeholder="2023-08-18"></div>
+      <div class="col-4 col-md-2 d-grid">
+        <button class="btn btn-sm btn-primary" onclick="addGameSet('${esc(g.id)}')">Declare</button></div>
+    </div>
+  </div>`;
+}
+
+function openSets(id){ gamesUi.open = gamesUi.open === id ? null : id; paintSection(); }
+
+async function addGame(){
+  const id = ($('#gm_id').value || '').trim().toLowerCase();
+  const name = ($('#gm_name').value || '').trim();
+  if(!id || !name){ toast('A game needs an id and a name', 6000); return; }
+  if(await act('/api/games/' + encodeURIComponent(id),
+               {name, notes: $('#gm_notes').value || ''}, 'Game added')){
+    gamesUi.open = id;
+    await loadGames();
+  }
+}
+
+async function rmGame(id, cards){
+  const warn = cards
+    ? `\n\n${cards} filed card(s) stay on disk, but nothing will resolve a frame spec for them until this game is back.`
+    : '';
+  if(!confirm(`Delete the game "${id}"?${warn}`)) return;
+  if(await act('/api/games/' + encodeURIComponent(id), {_method:'DELETE'}, 'Game removed')){
+    if(gamesUi.open === id) gamesUi.open = null;
+    await loadGames();
+  }
+}
+
+async function addGameSet(game){
+  const id = ($('#gs_id').value || '').trim().toLowerCase();
+  const name = ($('#gs_name').value || '').trim();
+  if(!id || !name){ toast('A set needs an id and a name', 6000); return; }
+  const body = {name, total: Number($('#gs_total').value) || 0, released: ($('#gs_rel').value || '').trim()};
+  const path = `/api/games/${encodeURIComponent(game)}/sets/${encodeURIComponent(id)}`;
+  if(await act(path, body, 'Set declared')) await loadGames();
+}
+
+async function rmGameSet(game, set){
+  if(!confirm(`Undeclare "${set}"? Cards already filed into it stay, but importing more will be refused.`)) return;
+  const path = `/api/games/${encodeURIComponent(game)}/sets/${encodeURIComponent(set)}`;
+  if(await act(path, {_method:'DELETE'}, 'Set removed')) await loadGames();
+}
+
 /* Frame specs have their own screen — this is the pointer to it, so the settings
    nav still leads there without a second copy of the tables living here. */
 function framesPanel(){
@@ -6310,31 +6717,74 @@ async function uploadBack(inp){
 
    Nothing here edits the library's settings. Every control is an override for
    this run, because a run is this paper on this printer today. */
-const SHEET_FIELDS = [
-  {key:'faces',  label:'What to print',  kind:'choice', from:'faces',
-   help:'Fronts, backs, or duplex — both sides interleaved for one pass.'},
-  {key:'page',   label:'Paper',          kind:'choice', from:'pages'},
-  {key:'orientation', label:'Orientation', kind:'choice', from:'orientations'},
-  {key:'cols',   label:'Columns',        kind:'int', lo:1, hi:12},
-  {key:'rows',   label:'Rows',           kind:'int', lo:1, hi:12},
-  {key:'bleed',  label:'Cut bleed',      kind:'num', lo:0, hi:20, step:0.5, unit:'mm',
-   help:'Added outside the trim, so a slightly off cut still lands on artwork.'},
-  {key:'dpi',    label:'Resolution',     kind:'int', lo:72, hi:4800, unit:'dpi'},
-  {key:'guides', label:'Cut guides',     kind:'bool'},
-];
+/* **The controls are not written here.** `/api/meta`'s `sheet_options` is
+   `Config.run_options(Run.SHEET)` — every setting a print run reads, with its label,
+   help, unit, kind, choices, bounds and *this library's* current value — so a setting
+   becomes overridable on this page the moment `run=Run.SHEET` is added to it in
+   `config.py`. There used to be a hand-written list of eight here, and the twenty
+   settings added to the config since were not in it: the front/back ink offsets among
+   them, which are exactly what you want to change for one sheet and not for the
+   library. The same relationship the step panels have with `steps.py`. */
+const sheetFields = () => state.meta.sheet_options || [];
+const sheetGroups = () => {
+  const out = [];
+  /* A fronts-only run prints no back, so the backs' own guides cannot reach the paper —
+     six controls that do nothing are the "setting nothing reads" problem one level up,
+     which is why `config prune` exists. Same call the back-profile control makes. */
+  const backs = sheetFaces() !== 'fronts';
+  for(const f of sheetFields()){
+    if(!backs && (f.group || '').endsWith('· backs')) continue;
+    const g = out.find(x => x.name === (f.group || 'Page setup'));
+    if(g) g.fields.push(f); else out.push({name:f.group || 'Page setup', fields:[f]});
+  }
+  return out;
+};
+/* One line per group that needs one — a heading cannot say "and this whole group is
+   inert unless another row is on", which for the backs' guides is the first question. */
+const SHEET_NOTES = {
+  'Cut guides · backs': `Each row unset follows the fronts. Nothing here prints unless
+    <b>Guides on backs</b> is on — worth it to check registration: with lines on both
+    sides, hold the sheet to a light and see whether they land on each other.`,
+};
+/* Which groups start open: the two you touch on an ordinary run. The rest are the
+   ones you open with a misprinted sheet in your hand, and a panel of twenty-seven
+   controls hides the cards you are trying to pick. */
+const SHEET_OPEN = new Set(['What to print', 'Paper & grid']);
 
-function sheetOpts(){
-  // open on the library's own defaults, served by /api/meta — the builder never
-  // invents a default of its own
-  state.sheet.opts ||= {...(state.meta.sheet || {})};
-  return state.sheet.opts;
+/* **Only what was actually overridden**, keyed by config field name. An absent key
+   means "this library's setting", which is what makes the panel readable: a run says
+   `margin_mm = 8` and nothing else, rather than restating twenty-seven values that
+   happen to equal the defaults. It is also what the server needs — `_apply_overrides`
+   and `SheetBody.argv` skip an absent key, so the plan and the print agree by
+   construction. */
+function sheetOver(){ return (state.sheet.over ||= {}); }
+const sheetOverCount = () => Object.keys(sheetOver()).length;
+/* What a row will actually do: the override if there is one, else the library's. */
+function sheetValue(f){
+  const over = sheetOver();
+  return f.key in over ? String(over[f.key]) : String(f.current);
 }
+const sheetIsOver = f => f.key in sheetOver();
+/* `faces` decides whether backs print at all, so the back-profile control and the
+   plan's own wording depend on it — read through the same override path. */
+const sheetFaces = () => {
+  const f = sheetFields().find(x => x.key === 'sheet_faces');
+  return f ? sheetValue(f) : 'fronts';
+};
+/* The profile list, with the one this run will really use selected. `none` is a real
+   profile name (`profiles.NONE`, the identity), so the old first option naming the
+   library's value printed it twice — `none — the library default` above `none` — which
+   is the same duplicate the page settings had. The library's value needs no option of
+   its own: it is in the list, and the dot on the label says when the selection is not
+   it. */
+const sheetProfileOpts = (over, lib) => (state.meta.profiles || []).map(n =>
+  `<option ${(over || lib) === n ? 'selected' : ''}>${esc(n)}</option>`).join('');
 const sheetPicked = () => [...state.sheet.picks.entries()]
   .map(([id, copies]) => ({id, copies}));
 const sheetTotal = () => sheetPicked().reduce((n, p) => n + p.copies, 0);
 
 function renderSheet(){
-  const o = sheetOpts();
+  const o = state.sheet;
   $('#main').innerHTML = `
     <div class="d-flex align-items-baseline gap-2 mb-3 flex-wrap">
       <div><div class="eyebrow">Impose</div><h5 class="mb-0">Print sheet</h5></div>
@@ -6367,28 +6817,28 @@ function renderSheet(){
           <div class="setting"><label for="sb_name">batch name</label>
             <input class="form-control form-control-sm" id="sb_name"
                    value="${esc(state.sheet.name)}" oninput="state.sheet.name=this.value"></div>
-          <div class="setting"><label for="sb_profile">profile · fronts</label>
+          <div class="setting${o.profile ? ' isover' : ''}"><label for="sb_profile"><span class="omark"
+              aria-label="changed for this run">•</span>profile · fronts</label>
             <select class="form-select form-select-sm" id="sb_profile" onchange="sheetSet('profile', this.value)">
-              <option value="">${esc(state.meta.active_profile || 'none')} — the library default</option>
-              ${(state.meta.profiles || []).map(n =>
-                `<option ${o.profile === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+              ${sheetProfileOpts(o.profile, state.meta.active_profile || 'none')}
             </select></div>
-          ${o.faces === 'fronts' ? '' : `
-          <div class="setting"><label for="sb_back_profile">profile · backs</label>
+          ${sheetFaces() === 'fronts' ? '' : `
+          <div class="setting${o.back_profile ? ' isover' : ''}"><label for="sb_back_profile"><span class="omark"
+              aria-label="changed for this run">•</span>profile · backs</label>
             <select class="form-select form-select-sm" id="sb_back_profile"
                     onchange="sheetSet('back_profile', this.value)">
-              <option value="">${esc(state.meta.active_back_profile || 'same as fronts')}</option>
-              ${(state.meta.profiles || []).map(n =>
-                `<option ${o.back_profile === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+              ${state.meta.active_back_profile ? ''
+                : `<option value="" ${o.back_profile ? '' : 'selected'}>same as the fronts</option>`}
+              ${sheetProfileOpts(o.back_profile, state.meta.active_back_profile)}
             </select></div>
           <p class="hint mb-0">Backs need their own profile only when they land on a
             different medium — the reverse of a one-sided stock, or a backs-only run
             on other paper. A duplex sheet is one piece of paper.</p>`}
-          ${SHEET_FIELDS.map(f => sheetField(f, o)).join('')}
           <div class="setting"><label for="sb_notes">notes</label>
             <input class="form-control form-control-sm" id="sb_notes" value="${esc(o.notes || '')}"
                    placeholder="Recorded in the manifest" oninput="sheetSet('notes', this.value)"></div>
         </div>
+        <div class="panel p-3" id="sb_setup">${sheetSetupPanel()}</div>
         <div id="sb_written"></div>
         <div class="panel p-3" id="sb_plan"></div>
         <div class="panel p-3">
@@ -6403,33 +6853,162 @@ function renderSheet(){
   planSheet();
 }
 
-function sheetField(f, o){
-  const id = `sb_${f.key}`;
-  const value = o[f.key];
+/* Every page setting, grouped, each row either **the library's** or overridden for
+   this run — and saying which, because "did I change that?" is the question you have
+   with a misprinted sheet in your hand. Nothing here writes `proxdex.toml`. */
+function sheetSetupPanel(){
+  const n = sheetOverCount();
+  return `<div class="d-flex align-items-baseline gap-2 flex-wrap mb-2">
+      <div class="eyebrow">Page setup</div>
+      ${n ? `<span class="chip">${n} changed for this run</span>
+             <button class="btn btn-sm btn-ghost ms-auto" onclick="sheetResetAll()"
+               >Use the library's settings</button>`
+          : `<span class="faint ms-auto" style="font-size:.6875rem">all from the
+             library's settings</span>`}
+    </div>
+    <p class="hint">Overrides for <b>this run only</b> — a print run is this paper on
+      this printer today. Every row shows the value it will print at; a
+      <b style="color:var(--mark)">•</b> marks the ones you changed.
+      To change one for good, use
+      <a href="#" onclick="go('settings');return false">Settings</a>.</p>
+    ${sheetGroups().map(g => `<details class="mb-1" ${SHEET_OPEN.has(g.name)
+        || g.fields.some(sheetIsOver) ? 'open' : ''}>
+      <summary class="eyebrow" style="cursor:pointer">${esc(g.name)}${
+        g.fields.filter(sheetIsOver).length
+          ? ` <span class="chip">${g.fields.filter(sheetIsOver).length}</span>` : ''}</summary>
+      <div class="pt-1">${SHEET_NOTES[g.name]
+          ? `<p class="hint">${SHEET_NOTES[g.name]}</p>` : ''}${
+        g.fields.map(sheetRow).join('')}</div>
+    </details>`).join('')}`;
+}
+
+/* One row, showing **the value this run will use** — the library's until you change it,
+   and then yours, with the dot in front of the label saying which. That is the whole of
+   it, and it replaced a control that said the value *and* qualified it: a select whose
+   first option read `a4 — the library's` above a list that then offered `a4` again, so
+   the commonest reading of the panel was one value printed twice, once with an
+   explanation nobody needs for a row they have not touched. Where a value comes from is
+   a **state**, and this screen already has a signal for it (`.isover` + `.omark`, the
+   same relationship the fill knobs have with `.fillrow.on`); spending the value's own
+   text on it is what made every row read as a caveat.
+
+   So: the control holds the effective value, and picking or typing the library's own
+   value **clears** the override rather than storing a duplicate of it — a row is
+   changed or it is not, and "changed to exactly what it already was" is not a state
+   worth having. `sheetSet` owns that comparison. */
+function sheetRow(f){
+  const id = 'sb_o_' + f.key, over = sheetIsOver(f), v = sheetValue(f);
+  /* The one place a value is *not* what a row shows: an **optional** setting the
+     library leaves unset, where unset is an answer rather than a blank — the backs'
+     guide colour left alone follows the fronts'. The wording comes from the setting
+     (`RunOption.auto`) rather than from here, because it differs per setting — the same
+     lesson the step panels learned when one option's "automatic" wording was printed
+     over all of them. It is offered only while the library's own value is unset: with a
+     value there it would be the duplicate option all over again, one line down. */
+  const unset = f.current === '';
+  const auto = esc(f.auto || 'unset');
   let ctl;
   if(f.kind === 'choice'){
     ctl = `<select class="form-select form-select-sm" id="${id}"
-      onchange="sheetSet('${f.key}', this.value)">${(state.meta[f.from] || []).map(v =>
-      `<option ${String(v) === String(value) ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`;
+      onchange="sheetSet('${f.key}', this.value)">
+      ${unset ? `<option value="" ${over ? '' : 'selected'}>${auto}</option>` : ''}
+      ${f.choices.map(c => `<option value="${esc(c)}" ${c === v ? 'selected' : ''}
+        >${esc(c)}</option>`).join('')}</select>`;
   } else if(f.kind === 'bool'){
-    ctl = `<div class="form-check form-switch mb-0"><input class="form-check-input" type="checkbox"
-      id="${id}" ${value ? 'checked' : ''} onchange="sheetSet('${f.key}', this.checked)"></div>`;
+    ctl = `<select class="form-select form-select-sm" id="${id}"
+      onchange="sheetSet('${f.key}', this.value)">
+      <option value="true" ${v === 'true' ? 'selected' : ''}>on</option>
+      <option value="false" ${v === 'false' ? 'selected' : ''}>off</option>
+    </select>`;
   } else {
-    ctl = `<input class="form-control form-control-sm mono" type="number" id="${id}"
-      min="${f.lo}" max="${f.hi}" step="${f.step || 1}" value="${value ?? ''}"
-      oninput="sheetSet('${f.key}', this.value === '' ? null : +this.value)">`;
+    /* A number or a colour carries its value, and **clearing the box is how you go
+       back** — so an emptied row is refilled with the library's value when you leave it,
+       rather than sitting there blank claiming nothing is set. `oninput` keeps the plan
+       following every keystroke, as it did. */
+    const num = f.kind !== 'text';
+    const step = f.kind === 'int' ? 1 : (f.high !== null && f.high <= 3 ? 0.05 : 0.5);
+    ctl = `<input class="form-control form-control-sm mono" id="${id}"
+      ${num ? `type="number" ${f.low === null ? '' : `min="${f.low}"`} ${
+        f.high === null ? '' : `max="${f.high}"`} step="${step}"` : ''}
+      placeholder="${unset ? auto : esc(f.current)}" value="${esc(v)}"
+      oninput="sheetSet('${f.key}', this.value)" onblur="sheetRefill(this, '${f.key}')">`;
   }
-  return `<div class="setting"><label for="${id}">${esc(f.label)}${
-    f.unit ? ` <span class="faint mono">${esc(f.unit)}</span>` : ''}</label>${ctl}</div>`;
+  return `<div class="setting${over ? ' isover' : ''}">
+    <label for="${id}" title="${esc(f.help)}" style="cursor:help"><span class="omark"
+      aria-label="changed for this run">•</span>${esc(f.label)}${
+      f.unit ? ` <span class="faint mono">${esc(f.unit)}</span>` : ''}</label>
+    ${ctl}</div>`;
 }
 
+/* An emptied box means "back to the library's", so once the row is no longer overridden
+   the box says what the library says. Only ever writes a value the row is *not*
+   overriding, so it cannot overwrite something being typed — and it normalises a typed
+   `1.50` back to `1.5` for free, which is the same value and would otherwise read as an
+   override that is not one. */
+function sheetRefill(el, key){
+  const f = sheetFields().find(x => x.key === key);
+  if(f && !sheetIsOver(f)) el.value = String(f.current);
+}
+
+/* An empty control means "the library's", so it **removes** the key rather than
+   storing a blank — the two are different requests, and a stored empty string would
+   reach argv as `--margin ''`. Same distinction `border --tune` draws between an
+   absent `--tune` and `--no-tune`.
+
+   **And so does the library's own value.** The control shows the effective value now, so
+   the way back to it is to choose or type it — which must clear the row, not store a
+   copy: an override equal to the setting it overrides would light the dot, count towards
+   `n changed for this run` and be written into the manifest as a decision, all for a
+   sheet that prints identically. Compared numerically where the setting is a number, so
+   `1.50`, `1.5` and `01.5` are one answer. */
 function sheetSet(key, value){
-  sheetOpts()[key] = value;
+  /* The three that are not page settings: they live on the run itself rather than in
+     the override map. A profile picked back to the library's own is cleared for the
+     same reason a page setting is — `''` is what "the library's" means on the wire. */
+  if(key === 'profile' || key === 'back_profile' || key === 'notes'){
+    const lib = key === 'profile' ? (state.meta.active_profile || 'none')
+      : key === 'back_profile' ? state.meta.active_back_profile : null;
+    state.sheet[key] = value === lib ? '' : value;
+    const el = $('#sb_' + key);
+    if(el && key !== 'notes') el.closest('.setting').classList.toggle('isover', !!state.sheet[key]);
+    planSheet();
+    return;
+  }
+  const over = sheetOver();
+  const f = sheetFields().find(x => x.key === key);
+  const same = f && (f.kind === 'text' || f.kind === 'choice' || f.kind === 'bool'
+    ? String(value) === String(f.current)
+    : value !== '' && f.current !== '' && +value === +f.current);
+  if(value === '' || value === null || value === undefined || same) delete over[key];
+  else over[key] = value;
   // `faces` decides whether backs are printed at all, so it changes which
   // controls are even meaningful — that needs a re-render, not just a re-plan
-  if(key === 'faces'){ renderSheet(); return; }
+  if(key === 'sheet_faces'){ renderSheet(); return; }
+  paintSetup();
   paintSheetPicks();
   planSheet();
+}
+/* The panel restates its own chips and open groups, and **nothing else** — repainting
+   the whole screen would destroy the number box being typed into, which is the trap
+   the import wizard already fell into once (`patchImport`). The row's own control is
+   left exactly as the user left it. */
+function paintSetup(){
+  const head = $('#sb_setup > .d-flex'); if(!head) return;
+  const n = sheetOverCount();
+  head.innerHTML = `<div class="eyebrow">Page setup</div>
+      ${n ? `<span class="chip">${n} changed for this run</span>
+             <button class="btn btn-sm btn-ghost ms-auto" onclick="sheetResetAll()"
+               >Use the library's settings</button>`
+          : `<span class="faint ms-auto" style="font-size:.6875rem">all from the
+             library's settings</span>`}`;
+  for(const f of sheetFields()){
+    const row = $('#sb_o_' + f.key);
+    if(row) row.closest('.setting').classList.toggle('isover', sheetIsOver(f));
+  }
+}
+function sheetResetAll(){
+  state.sheet.over = {};
+  renderSheet();
 }
 function sheetFilter(text){
   state.sheet.filter = text;
@@ -6545,16 +7124,17 @@ function planSheet(){
     paintPlan();
   }, 180);
 }
+/* `overrides` carries only what was changed, keyed by config field name — the server
+   spells the flags from the same declaration the controls came from, so the browser
+   cannot send an option the CLI does not have. */
 function sheetPayload(){
-  const o = sheetOpts();
   return {
     name: state.sheet.name || 'deck',
     cards: sheetPicked(),
-    faces: o.faces, page: o.page, orientation: o.orientation,
-    dpi: o.dpi ?? null, cols: o.cols ?? null, rows: o.rows ?? null,
-    bleed: o.bleed ?? null, guides: o.guides ?? null,
-    profile: o.profile || null, back_profile: o.back_profile || null,
-    notes: o.notes || '',
+    overrides: {...sheetOver()},
+    profile: state.sheet.profile || null,
+    back_profile: state.sheet.back_profile || null,
+    notes: state.sheet.notes || '',
   };
 }
 function paintPlan(){
@@ -6583,6 +7163,15 @@ function paintPlan(){
       </div>`).join('')}</div>
     ${plan.groups.length > 1 ? `<p class="hint">Two card sizes, so two sets of pages —
       an oversized card is imposed at its own size rather than shrunk to fit.</p>` : ''}
+    ${/* **A page count is no use beside a row that will be cut off**, and until this
+          nothing checked: the shipped A4 grid ran 0.51mm off the right of every sheet
+          and Letter's bottom row of cards hung 4.8mm off the paper. Per group, because
+          each trim size has its own grid. */''}
+    ${plan.groups.filter(g => g.fit && !g.fit.ok).map(g => `
+      <p class="hint" style="color:var(--bad)"><b>${esc(g.name)} does not fit the
+        paper.</b> ${esc(g.fit.note)}<br>The printable box is the paper less its
+        margins — set those to what your printer can actually reach under
+        <b>Paper &amp; grid</b>.</p>`).join('')}
     ${plan.missing.length ? `<p class="hint" style="color:var(--hold)">Leaving out
       ${plan.missing.length} card(s) whose grade is not settled:
       <span class="mono">${plan.missing.slice(0, 8).map(esc).join(' ')}</span>${

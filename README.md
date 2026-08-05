@@ -145,6 +145,12 @@ in `grade` (after upscaling, WYSIWYG); frame expansion goes _before_ upscale in
 │           ├── .skip-bordered_f2    # per-side state, like everything else
 │           ├── isd-51_1_original.png       # side 1 keeps the plain names
 │           └── isd-51_1_original_f2.png    # side 2 carries the _f2 suffix
+├── games/
+│   └── lorcana.json                 # a game you defined: its name and its sets
+│                                    # (the two proxdex ships are code, not files)
+├── frames/
+│   ├── lorcana-base.json            # a border you measured yourself
+│   └── rules.json                   # which cards get which spec
 ├── profiles/
 │   └── matte-200.json               # one print medium: your notes, its recipe,
 │                                    # and every calibration round measured on it
@@ -357,11 +363,11 @@ _not_ repaired: re-fitting a border needs to know where the border is, which is 
 decision, so `doctor` names the step to re-run instead. The same check is the
 settings screen's **stored images** panel in the web UI.
 
-### Two games in one library
+### Several games in one library
 
 Each card records its game in a `.game` file next to its images, so a mixed
 library just works — `ls` shows it, backs and frame specs follow it. `--game`
-picks which TCG a command means; without it, `[library] game` from
+picks which game a command means; without it, `[library] game` from
 `proxdex.toml` is the default (and `fetch` falls back to trying the others).
 
 ```bash
@@ -380,6 +386,51 @@ proxdex fetch --game mtg 4ed-100   # or say it outright
 | borderless    | not exposed by the API  | detected from the printing                       |
 | sides         | always one              | one or two (transform, modal, reversible)        |
 | related cards | —                       | meld halves + result, tokens (`fetch --related`) |
+
+### A game of your own
+
+proxdex ships Pokémon and Magic because they have APIs behind them. Any other game
+you can define yourself — a name, its sets, and the pictures you supply:
+
+```bash
+proxdex game add lorcana --name "Disney Lorcana"
+proxdex game set add lorcana tfc --name "The First Chapter" --total 204
+
+# measure one card's border by hand, then point the whole game at it — one
+# printer, one stock, one border, and every set you declare later is covered
+proxdex frames set lorcana-base --name "Lorcana base" --game lorcana \
+    --top 3.1 --right 3.0 --bottom 3.1 --left 3.0
+proxdex frames assign lorcana-base --game lorcana --match set
+
+# your pictures go in through `import` — there is no API to fetch from
+proxdex import ~/scans/*.png --game lorcana --id tfc-1 --card-name "Elsa"
+proxdex border tfc-1 --inner-top .035 --inner-right .049 \
+    --inner-bottom .035 --inner-left .049
+proxdex sheet friday tfc-1:4
+```
+
+It lives in `<root>/games/<id>.json`, beside `frames/` and `profiles/`, and the
+settings screen's **games** panel does all of the above.
+
+Two things follow from having no provider, and both are deliberate:
+
+- **`fetch`, `search` and `browse` refuse it**, naming `import` instead. They have
+  nothing to ask, and a game silently sent to Scryfall would come back with either a
+  404 about the wrong problem or — worse — somebody else's card.
+- **Its sets are declared rather than discovered**, which is what lets `import` refuse
+  a typo. For Pokémon and Magic the metadata lookup is what proves a card id exists;
+  here nothing would ever object, so `tfcc-9` would file happily into a brand-new set
+  called `tfcc` and read as a clean import. With `tfc` declared, it is blocked and told
+  which ids are real.
+
+A set that needs its own border still gets one — `frames assign … --set tfc` beats the
+game-wide rule — and `proxdex frames rules` lists both, plus the baseline proxdex ships
+for Pokémon and Magic, so what decides a border is on one screen.
+
+Everything after the source image is the ordinary pipeline — border, upscale, grade,
+impose, `doctor`, `frames coverage` — because nothing downstream of the original ever
+knew which API answered. Two-sided cards work too (`import --faces 2`), and the shared
+card back comes from `proxdex back --game lorcana --file back.png`.
 
 ### Web UI
 
@@ -532,9 +583,34 @@ PDF itself, so the print path is fully determined — **print with your printer'
 colour management OFF** so a calibration holds.
 
 - **Copies and per-run overrides.** `ID:4` prints a playset, `--copies N` applies
-  to the whole run, and `--faces/--page/--orientation/--cols/--rows/--bleed/--dpi/
---guides/--profile` change this run without touching the library's settings.
-  `--dry-run` reports the page plan and writes nothing.
+  to the whole run, and **every page setting has a flag** — `--faces`, `--page`,
+  `--orientation`, `--cols`, `--rows`, `--bleed`, `--dpi`, `--margin`, the ink
+  offsets, the cut guides, the registration marks, `--profile` — so a run changes
+  without touching the library's settings. `proxdex sheet -h` lists them with their
+  bounds and this library's defaults; the web UI's **Page setup** panel is the same
+  list, grouped. `--dry-run` reports the page plan and writes nothing.
+- **The grid is checked against the paper, and you are told when it doesn't
+  fit.** A cell is the card plus bleed on every edge, so three columns of a
+  63.5mm card cost `190.5 + 6 × bleed` mm — 199.5mm at the default 1.5mm bleed,
+  which clears about 5mm a side on A4. `margin_mm` is how close to the paper's
+  edge your printer can actually print; the grid is centred in what's left, and
+  `sheet` names the numbers when it won't go:
+
+  ```
+  $ proxdex sheet deck --page letter
+    ▤ 9 card(s) at standard → 1 page(s) (3×3 per page)
+    ⚠ standard does not fit: the grid is 199.5×275.7mm and the printable box is
+      205.9×269.4mm — too tall by 6.30mm. 3×2 fits, or keep the grid with bleed ≤ 0.44mm
+  ```
+
+  **Letter cannot hold three rows of cards** — 3 × 88.9mm is 266.7mm of bare
+  card on a 279.4mm sheet — so set `rows = 2` there. A4 portrait holds 3×3, A4
+  landscape 4×2.
+- **Margins are per edge**, because printers are: `margin_top_mm`,
+  `margin_right_mm`, `margin_bottom_mm`, `margin_left_mm` each override
+  `margin_mm` for one edge and default to it. 4mm at the sides with 5mm at the
+  top is an ordinary inkjet, and many grip ~12mm at the bottom — set that and
+  the grid is held higher up the sheet to clear it.
 - **Any input size → exact card size.** Whatever resolution a card is, it's
   scaled to **its own** physical size at sheet DPI — the configured dimensions
   (`[card]`, default 63×88mm) for an ordinary card, 89×127mm for an oversized one.
@@ -550,10 +626,40 @@ colour management OFF** so a calibration holds.
   per-card `<id>_back.png`.
 - **Offsets** nudge the whole image (mm): `front_offset_*` and, crucially for
   duplex registration, `back_offset_*` (e.g. `0.4, 0.35`).
-- **Cut guides**: `guide_style` = `full` (grid lines) / `corners` (crop marks)
-  / `none`, with `placement`, length, `color`, width, and independent
-  `guides_front` / `guides_back` (cut from the front, so backs default off).
-  Optional printer `reg_marks`. All under `[sheet]`.
+- **Cut guides — where, and how far.** Two settings, because they are two
+  questions. `guide_style` = `corners` (marks at each card's cut corners, which
+  never touch a card) / `full` (the trim lines straight across, over them) /
+  `none`. `guide_reach` then says how far each corner mark runs *away* from the
+  card:
+
+  | reach | in the gap between two cards | at the outer edge |
+  |---|---|---|
+  | `fixed` | a `guide_mm` tick from each side | a `guide_mm` tick |
+  | `join` | **one line**, bridging the gap | a `guide_mm` tick — margin stays clean |
+  | `paper` | **one line**, bridging the gap | **out to the sheet edge** |
+
+  `join` guarantees the bridge whatever the gap is, where `fixed` leaves a hole
+  as soon as the gap exceeds twice the mark length. `paper` is what a rotary
+  trimmer wants, since you line its blade up on the sheet edge. **A mark never
+  runs past a neighbour onto its face** — only `guide_cross_mm` may touch a card,
+  and a little of it makes the four lines meet in a `+` at every corner, which is
+  the one thing on the page that says the grid is square. Plus `placement`,
+  `color` and width. Guides follow the ink offsets, because a guide marks where
+  the card really lands, and only cells that **hold a card** are marked.
+- **The backs get their own guides.** `guides_front` / `guides_back` decide which
+  sides carry any (you cut from one side, so backs default off), and
+  `back_guide_style` / `_placement` / `_mm` / `_color` / `_width_mm` / `_cross_mm`
+  override the fronts' for the backs alone — **leave one out and it follows the
+  fronts**. Turning the backs on with a second colour is how you check duplex
+  registration: hold the sheet to a light and see whether the two sides' lines land
+  on each other. Note `back_guide_style = "none"` draws none on the backs, which is
+  a different answer from leaving the key out.
+- **Registration marks** (`reg_marks`, `reg_inset_mm`) are corner targets for
+  *measuring* that drift, and are deliberately **not** moved by the offsets — nudged
+  along with the cards they would line up on every sheet and tell you nothing. The
+  gap between the two sides' targets is what you set `back_offset_*` from.
+
+All of the above live under `[sheet]`.
 
 The PDF is **lossless** (Flate-embedded, never JPEG) and rendered at
 `[sheet] dpi` (default 1400, `--dpi` to override) so the printer never

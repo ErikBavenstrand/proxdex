@@ -5,6 +5,13 @@ comes from Scryfall (both). The rest of proxdex only sees :class:`CardMeta` /
 :class:`SearchResult`, which carry their own ``image_url`` — so adding a game
 means adding a provider here and a :class:`proxdex.games.Game`, nothing else.
 
+**A game need not have a provider at all**, which is what a custom game
+(``<root>/games/<id>.json``) is: you bring the pictures, ``import`` files them, and
+nothing in this module is ever asked. That case is a *value* rather than a fallen-
+through branch — see :func:`provider` and the dispatch tables at the foot of the
+file — because the branch it replaced would have asked Scryfall about a card of a
+game Scryfall has never heard of.
+
 Every request goes through :mod:`proxdex.net`, which rate-limits, retries and
 caches, so a provider having a bad day (scrydex 500s often) is survivable here
 rather than something each call site has to think about.
@@ -15,7 +22,7 @@ from __future__ import annotations
 import io
 import re
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -28,7 +35,7 @@ from proxdex.browse import Facet, Page, Query, Sort
 from proxdex.config import Config
 from proxdex.errors import FileError
 from proxdex.frames import GuideId
-from proxdex.games import GameId, Layout
+from proxdex.games import Layout
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +101,7 @@ class CardMeta:
     name: str
     set_id: str
     set_name: str
-    game: GameId
+    game: str
     #: every printable side, front first — always at least one entry
     faces: tuple[FaceImage, ...]
     #: what goes on paper: one side, two, or half of a meld pair
@@ -141,7 +148,7 @@ class SearchResult:
     printed_total: str
     rarity: str
     artist: str
-    game: GameId
+    game: str
     faces: tuple[FaceImage, ...]
     layout: Layout = Layout.SINGLE
     oversized: bool = False
@@ -236,18 +243,27 @@ class CardDetail:
 
 
 # ------------------------------------------------------------------ public ---
-def lookup(cid: str, cfg: Config, game: GameId = games.DEFAULT) -> CardMeta:
+#: which provider answers for a game, or a refusal naming ``import``. Declared in
+#: :mod:`proxdex.games` because :mod:`proxdex.browse` needs the identical answer and
+#: cannot import this module — one decision, so neither copy can grow an ``else``.
+provider = games.require_provider
+
+
+def lookup(cid: str, cfg: Config, game: str = games.DEFAULT) -> CardMeta:
     """Resolve a card id to its name, set and image URL in ``game``."""
-    if game is GameId.POKEMON:
-        return _pokemon_lookup(cid, cfg)
-    return _mtg_lookup(cid, cfg)
+    return _LOOKUP[provider(game)](cid, cfg)
 
 
-def lookup_any(cid: str, cfg: Config, game: GameId | None = None) -> CardMeta:
+def lookup_any(cid: str, cfg: Config, game: str | None = None) -> CardMeta:
     """Resolve a card id without knowing its game: try ``game`` if given, else
-    the library's default game first and the others after."""
+    the library's default game first and the others after.
+
+    Only games with a provider are tried when the game is unknown
+    (:meth:`~proxdex.games.Registry.provider_order`) — a custom game has no API to
+    ask, so including it would collect an error about a request nobody can make.
+    """
     errors: list[str] = []
-    for candidate in (game,) if game else games.order(cfg.library_game):
+    for candidate in (game,) if game else games.load().provider_order(cfg.library_game):
         try:
             return lookup(cid, cfg, candidate)
         except FileError as exc:
@@ -255,14 +271,14 @@ def lookup_any(cid: str, cfg: Config, game: GameId | None = None) -> CardMeta:
     raise FileError("; ".join(errors) or f"{cid}: not found")
 
 
-def details(cid: str, cfg: Config, game: GameId | None = None) -> CardDetail:
+def details(cid: str, cfg: Config, game: str | None = None) -> CardDetail:
     """Everything the provider knows about ``cid`` — facts, links and raw JSON.
 
     Like :func:`lookup_any`, an unknown game means trying the library's default
     first and the others after.
     """
     errors: list[str] = []
-    for candidate in (game,) if game else games.order(cfg.library_game):
+    for candidate in (game,) if game else games.load().provider_order(cfg.library_game):
         try:
             return _details(cid, cfg, candidate)
         except FileError as exc:
@@ -279,20 +295,17 @@ def query_string(query: Query) -> str:
     from one and `c:wu` really means "both colours" to the other, so the spellings
     are pinned by :mod:`tests.test_browse` rather than trusted.
     """
-    if query.game is GameId.POKEMON:
-        return _pokemon_query(query)
-    return _mtg_query(query)
+    return _QUERY[provider(query.game)](query)
 
 
-def provider_sort(game: GameId, sort: Sort) -> str:
+def provider_sort(game: str, sort: Sort) -> str:
     """How ``game``'s provider spells ``sort``.
 
     Every :class:`proxdex.browse.Sort` must have an answer for every game — a sort
     the UI offers and the provider rejects is a 400 halfway through a browse — which
     is a completeness claim, so it is checked rather than assumed.
     """
-    table = _POKEMON_ORDER if game is GameId.POKEMON else _MTG_ORDER
-    return table[sort]
+    return _ORDER[provider(game)][sort]
 
 
 def search_page(query: Query, cfg: Config) -> Page[SearchResult]:
@@ -312,22 +325,17 @@ def search_page(query: Query, cfg: Config) -> Page[SearchResult]:
     """
     if not query.narrowed:
         return Page(items=(), page=query.page, per_page=query.per_page, total=0)
-    if query.game is GameId.POKEMON:
-        return _pokemon_page(query, cfg)
-    return _mtg_page(query, cfg)
+    return _SEARCH_PAGE[provider(query.game)](query, cfg)
 
 
-def set_cards(
-    set_id: str, cfg: Config, game: GameId = games.DEFAULT
-) -> list[CardBrief]:
+def set_cards(set_id: str, cfg: Config, game: str = games.DEFAULT) -> list[CardBrief]:
     """Every card in one set, with the traits a frame rule matches on.
 
     Deliberately per-set and never "every card of every set": one set is a page or
     two, and the only thing this is for is showing which cards a rule catches
     *before* it is saved.
     """
-    provider = _pokemon_set_cards if game is GameId.POKEMON else _mtg_set_cards
-    return provider(set_id, cfg)
+    return _SET_CARDS[provider(game)](set_id, cfg)
 
 
 #: **The image host answers 200 for a card it does not have, with a placeholder.**
@@ -383,9 +391,49 @@ def known_meta(
         # so the set is everything before the last one
         set_id=cid.rsplit("-", 1)[0],
         set_name=set_name.strip() or cid.rsplit("-", 1)[0],
-        game=GameId.POKEMON,
+        game=games.GameId.POKEMON.value,
         faces=one_face(cfg.scrydex_url.format(id=cid)),
         traits=_pokemon_traits({"rarity": rarity, "subtypes": subtypes.split(",")}),
+    )
+
+
+def local_meta(
+    cid: str,
+    game: games.Game,
+    *,
+    name: str = "",
+    faces: int = 1,
+) -> CardMeta:
+    """A custom game's card, described from what the person filing it said.
+
+    The third way a :class:`CardMeta` comes into being, beside a provider answer and
+    :func:`known_meta`, and the only one with **no image URL at all**: a custom game
+    has no host to download from, so the picture arrives through ``import`` and the
+    faces here are placeholders that exist to say how many sides the card has.
+
+    It is a :class:`CardMeta` rather than a new shape precisely so nothing
+    downstream has to care: ``_card_from_meta`` names the folder, ``write_kind``
+    records the layout, and every step after the original stage never knew which
+    API answered.
+
+    The set id is read off the card id the same way :func:`known_meta` reads it, and
+    the set's *name* comes from the game's own declaration — which is what makes
+    declaring sets worth doing: without it the folder would be named after the id.
+    """
+    set_id = cid.rsplit("-", 1)[0]
+    sides = max(1, min(faces, _MAX_FACES))
+    return CardMeta(
+        id=cid,
+        name=name.strip() or cid,
+        set_id=set_id,
+        set_name=game.set_name(set_id),
+        game=game.id,
+        # named sides only when there are two, matching what a provider gives us:
+        # a single-faced card's face carries no label anywhere in proxdex
+        faces=tuple(
+            FaceImage("" if sides == 1 else f"Side {n + 1}", "") for n in range(sides)
+        ),
+        layout=Layout.DOUBLE if sides > 1 else Layout.SINGLE,
     )
 
 
@@ -413,9 +461,12 @@ def download(meta: CardMeta, face: int = 0) -> Image.Image:
     return flatten(im)
 
 
-def _details(cid: str, cfg: Config, game: GameId) -> CardDetail:
-    source = games.get(game).source
-    if game is GameId.POKEMON:
+def _details(cid: str, cfg: Config, game: str) -> CardDetail:
+    which = provider(game)
+    source = games.load().name_of(game)
+    found = games.builtin(game)
+    source = found.source if found is not None else source
+    if which is games.ProviderId.POKEMONTCG:
         data = _pokemon_data(cid, cfg)
         return CardDetail(
             meta=_pokemon_meta(data, cfg),
@@ -453,7 +504,7 @@ def _pokemon_meta(data: dict[str, Any], cfg: Config) -> CardMeta:
         name=data["name"],
         set_id=data["set"]["id"],
         set_name=data["set"]["name"],
-        game=GameId.POKEMON,
+        game=games.GameId.POKEMON.value,
         # Pokémon cards are printed on one side; the back is the shared TPC back
         faces=one_face(cfg.scrydex_url.format(id=data["id"])),
         traits=_pokemon_traits(data),
@@ -615,7 +666,7 @@ def _pokemon_groups(data: dict[str, Any]) -> list[FactGroup]:
 
 
 def _pokemon_links(data: dict[str, Any]) -> list[Link]:
-    game = games.get(GameId.POKEMON)
+    game = games.POKEMON
     card_set = _obj(data.get("set"))
     links: list[Link] = []
     if game.card_page and card_set.get("id") and data.get("number"):
@@ -745,7 +796,7 @@ def _pokemon_result(data: dict[str, Any], cfg: Config) -> SearchResult:
         printed_total=str(card_set.get("printedTotal") or ""),
         rarity=str(data.get("rarity") or "—"),
         artist=str(data.get("artist") or "—"),
-        game=GameId.POKEMON,
+        game=games.GameId.POKEMON.value,
         faces=one_face(cfg.scrydex_url.format(id=data["id"])),
         # the tile's picture only — `faces` above is still what `fetch` files
         thumb_url=cfg.scrydex_thumb_url.format(id=data["id"]),
@@ -877,7 +928,7 @@ def _mtg_meta(data: dict[str, Any]) -> CardMeta:
         name=str(data.get("name", "")),
         set_id=str(data.get("set", "")),
         set_name=str(data.get("set_name", "")),
-        game=GameId.MTG,
+        game=games.GameId.MTG.value,
         faces=_mtg_faces(data),
         layout=_mtg_layout(data),
         oversized=data.get("oversized") is True,
@@ -899,7 +950,7 @@ def _mtg_result(data: dict[str, Any]) -> SearchResult:
         printed_total="",
         rarity=str(data.get("rarity") or "—").title(),
         artist=str(data.get("artist") or "—"),
-        game=GameId.MTG,
+        game=games.GameId.MTG.value,
         faces=_mtg_faces(data),
         # the tile's picture only — `faces` is still the lossless PNG `fetch` files
         thumb_url=_mtg_thumb(_mtg_face_uris(data)),
@@ -1521,3 +1572,54 @@ def _edge_color(rgba: Image.Image) -> tuple[int, int, int]:
         return (0, 0, 0)
     median = np.median(opaque, axis=0)
     return (int(median[0]), int(median[1]), int(median[2]))
+
+
+# --------------------------------------------------------------- dispatch ---
+# **One table per question a provider answers, keyed by provider.**
+#
+# These replaced four ``if game is POKEMON: … else: <the Magic one>`` branches.
+# That shape was total only while there were exactly two games, and it failed in
+# the worst available direction: a third game's id fell into the ``else`` and was
+# asked of Scryfall, which answers a 404 that reads precisely like a mistyped
+# Magic card. So the branch is gone and :func:`provider` is the only way in — a
+# game with no provider raises there, once, with a sentence naming ``import``.
+#
+# Declared at the bottom because the functions are defined above; a ``dict``
+# rather than a ``match`` so that adding a provider is one row per question and a
+# missing row is a ``KeyError`` here rather than a silent Magic lookup.
+_LOOKUP: dict[games.ProviderId, Callable[[str, Config], CardMeta]] = {
+    games.ProviderId.POKEMONTCG: _pokemon_lookup,
+    games.ProviderId.SCRYFALL: _mtg_lookup,
+}
+
+_QUERY: dict[games.ProviderId, Callable[[Query], str]] = {
+    games.ProviderId.POKEMONTCG: _pokemon_query,
+    games.ProviderId.SCRYFALL: _mtg_query,
+}
+
+_ORDER: dict[games.ProviderId, dict[Sort, str]] = {
+    games.ProviderId.POKEMONTCG: _POKEMON_ORDER,
+    games.ProviderId.SCRYFALL: _MTG_ORDER,
+}
+
+_SEARCH_PAGE: dict[games.ProviderId, Callable[[Query, Config], Page[SearchResult]]] = {
+    games.ProviderId.POKEMONTCG: _pokemon_page,
+    games.ProviderId.SCRYFALL: _mtg_page,
+}
+
+_SET_CARDS: dict[games.ProviderId, Callable[[str, Config], list[CardBrief]]] = {
+    games.ProviderId.POKEMONTCG: _pokemon_set_cards,
+    games.ProviderId.SCRYFALL: _mtg_set_cards,
+}
+
+#: every table above, so the completeness the ``if/else`` used to claim by accident
+#: can be *asserted*: each provider must answer each question, and a missing row is a
+#: `KeyError` at the call rather than a silent Magic lookup. Public only for
+#: :mod:`tests.test_games`, which is why it carries no other use.
+TABLES: tuple[Mapping[games.ProviderId, object], ...] = (
+    _LOOKUP,
+    _QUERY,
+    _ORDER,
+    _SEARCH_PAGE,
+    _SET_CARDS,
+)

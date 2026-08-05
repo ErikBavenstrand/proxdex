@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
 from enum import Enum, StrEnum
@@ -35,6 +35,7 @@ from rich.table import Table
 from proxdex import (
     art,
     bleed,
+    config,
     frames,
     games,
     imports,
@@ -60,8 +61,6 @@ from proxdex.config import (
     MARKER,
     Config,
     Faces,
-    Orientation,
-    PageSize,
     UpscaylModel,
     UpscaylScale,
 )
@@ -98,7 +97,7 @@ click.rich_click.COMMAND_GROUPS = {
                 "ui",
             ],
         },
-        {"name": "Acquire", "commands": ["search", "fetch", "import"]},
+        {"name": "Acquire", "commands": ["search", "fetch", "import", "game"]},
         {"name": "Prepare", "commands": ["border", "upscale", "grade", "frames"]},
         {"name": "Pipeline", "commands": ["skip", "unskip", "reset"]},
         {
@@ -119,7 +118,6 @@ F = TypeVar("F", bound=Callable[..., Any])
 #: the stage order, read from the one place it is declared
 _STAGES = steps.STAGES
 
-_GAME_CHOICE = click.Choice([g.value for g in GameId])
 _STEP_CHOICE = click.Choice([s.value for s in Step])
 
 #: how far `fetch --related` follows the provider's links. Two rounds reach both
@@ -140,9 +138,10 @@ _FOLLOWED = frozenset(
 #: shared `--game`; unset means "the library default, then the other games"
 _GAME = click.option(
     "--game",
-    type=_GAME_CHOICE,
     default=None,
-    help="Which TCG to use (default: [cyan]\\[library] game[/] in proxdex.toml).",
+    metavar="GAME",
+    help="Which game to use (default: [cyan]\\[library] game[/] in proxdex.toml). "
+    "[cyan]proxdex game list[/] names them — including your own.",
 )
 #: shared `--face`; unset means every face the card has. A two-sided card's back
 #: is its own picture with its own pipeline state, so a step can target one side.
@@ -165,8 +164,11 @@ DEFAULT_TOML = """\
 
 [library]
 # Which game a bare `search`/`fetch` means. Every card also records its own
-# game in a `.game` file, so one library can hold both — this is just the
-# default for new lookups. "pokemon" | "mtg"
+# game in a `.game` file, so one library can hold several — this is just the
+# default for new lookups. "pokemon" | "mtg" | a game of your own.
+#
+# `proxdex game add <id> --name "…"` defines one: no API behind it, so you bring
+# the pictures and `proxdex import` files them. `proxdex game list` names them all.
 game = "pokemon"
 
 [border]
@@ -201,7 +203,11 @@ w_mm = 63.5
 h_mm = 88.9
 
 [sources]
-bleed_mm = 2.5              # cut bleed added to every edge by cardbleed
+# Cut bleed added outside the trim at sheet time (never baked into a master). 1.5 and
+# not more because the width has to close: three columns of a 63.5mm card cost
+# 190.5 + 6*bleed mm, so 1.5 gives a 199.5mm grid that clears 5mm a side on A4, and 2.5
+# gives 205.5mm — 2.25mm from each edge, which no real printer can reach.
+bleed_mm = 1.5
 # Where each game's metadata and images come from. Pokémon splits the two
 # (pokemontcg.io for data, scrydex for the scan); Scryfall serves both for MTG.
 # A search or browse *tile* takes the small scan instead — 245px and ~30 KB
@@ -222,7 +228,19 @@ orientation = "portrait"   # portrait | landscape
 dpi         = 1400         # high so the printer never upsamples; PDF stays lossless
 cols        = 3
 rows        = 3
+# How close to the paper's edge anything may be printed — your printer's unprintable
+# border. The grid is centred in what is left, and `sheet` tells you when it does not
+# fit rather than letting the page clip a row. A4 3x3 at bleed 1.5 needs 199.5x275.7mm
+# and clears 5.2 x 10.6mm; Letter cannot hold three rows of cards at all (281.7mm of
+# 279.4), so set rows = 2 there.
 margin_mm   = 5.0
+# Per edge, when your printer is not symmetrical — 4mm at the sides and 5mm at the top
+# is an ordinary inkjet, and many grip 12mm at the bottom. Each unset edge takes
+# margin_mm above.
+# margin_top_mm    = 5.0
+# margin_right_mm  = 4.0
+# margin_bottom_mm = 12.0
+# margin_left_mm   = 4.0
 spacing_mm  = 0.0          # gap between cards, x
 spacing_y_mm = 0.0
 # How the trim master maps to the exact card cell (see [card]) at this dpi.
@@ -244,17 +262,46 @@ front_offset_y_mm = 0.0
 back_offset_x_mm  = 0.0
 back_offset_y_mm  = 0.0
 
-# cut guides
+# cut guides. Every one of these follows the ink offset above, because a guide's job
+# is to mark where the card really lands on the paper.
 guides          = true
-guide_style     = "corners"  # full (grid lines) | corners (crop marks) | none
+# WHERE the marks go. corners = at each card's cut corners, never on a card. full =
+# the trim lines straight across the page, over the cards. none = draw none.
+guide_style     = "corners"  # corners | full | none
+# HOW FAR each corner mark runs away from the card — a separate question:
+#   fixed = guide_mm and no more, i.e. a tick at the corner
+#   join  = on to the neighbouring card's mark, so the gap between two cards becomes
+#           one line; guide_mm where there is no neighbour, so the margin stays clean
+#   paper = the same, and out to the edge of the sheet where there is no neighbour,
+#           which is what a rotary trimmer needs (line the blade up on the sheet edge)
+# It never runs past a neighbour onto its face — only guide_cross_mm may touch a card.
+guide_reach     = "fixed"    # fixed | join | paper
 guide_placement = "outside"  # outside | inside the trim
-guide_mm        = 4.0        # crop-mark length
+guide_mm        = 4.0        # crop-mark length, and the reach where nothing longer fits
 guide_color     = "#00ff00"
 guide_width_mm  = 0.3
+# how far a mark runs past the trim edge onto the card. A little makes the four lines
+# meet in a + at every corner, which is what tells you the grid is square; 0 is clean.
+guide_cross_mm  = 0.0
 guides_front    = true
 guides_back     = false      # cut from the front, so back guides usually off
 
-# registration marks (printer front/back alignment)
+# The backs get their own guides, and each key left out means "the same as the fronts"
+# — one sheet of paper, one set of guides, until you say otherwise. The reason to
+# differ is checking registration: turn guides_back on, give the backs a second
+# colour, and hold the sheet to a light to see whether the two sides' lines meet.
+# `none` below draws none on the backs; leaving the key out is what follows the fronts.
+# back_guide_style     = "corners"
+# back_guide_reach     = "fixed"
+# back_guide_placement = "outside"
+# back_guide_mm        = 4.0
+# back_guide_color     = "#ff00ff"
+# back_guide_width_mm  = 0.3
+# back_guide_cross_mm  = 0.0
+
+# Registration marks: corner targets for measuring how far the printer's backs drift
+# from its fronts. Deliberately *not* moved by the offsets above — nudged along with
+# the cards they would line up on every sheet and measure nothing.
 reg_marks    = "none"        # none | corners
 reg_inset_mm = 10.0
 
@@ -530,12 +577,39 @@ def _card_from_meta(lib: Library, meta: sources.CardMeta) -> tuple[Card, bool]:
     return card, True
 
 
-def _ensure_card(lib: Library, cfg: Config, cid: str, game: GameId | None) -> Card:
-    """Find the card, or look up its metadata and create the folder."""
+def _ensure_card(
+    lib: Library,
+    cfg: Config,
+    cid: str,
+    game: str | None,
+    *,
+    card_name: str = "",
+    faces: int = 1,
+) -> Card:
+    """Find the card, or create its folder — from a lookup, or from what you said.
+
+    Two ways in, because a **custom game has nothing to look up**. For the built-in
+    games the provider answer is what names the folder *and* what proves the id
+    exists; for a game you defined, the id is proved by its set being declared
+    (``imports.plan`` checks that before a byte moves) and the name is whatever you
+    called it. Both end at :func:`_card_from_meta`, so a card folder is built one way
+    however it was described.
+    """
     card = lib.find(cid)
     if card is not None:
         return card
-    return _card_from_meta(lib, sources.lookup_any(cid, cfg, game))[0]
+    found = _games(lib).get(game) if game else None
+    if found is not None and found.custom:
+        meta = sources.local_meta(cid, found, name=card_name, faces=faces)
+    else:
+        meta = sources.lookup_any(cid, cfg, game)
+    created = _card_from_meta(lib, meta)[0]
+    # a two-sided custom card has to *say* it is two-sided, or `face 2` is refused
+    # everywhere downstream — the same marker a fetched transform card gets
+    if found is not None and found.custom:
+        created.write_kind(meta.layout)
+        created.write_faces(meta.face_names)
+    return created
 
 
 def _known_meta(
@@ -545,7 +619,7 @@ def _known_meta(
     set_name: str | None,
     rarity: str | None,
     subtypes: str | None,
-    game: GameId | None,
+    game: str | None,
 ) -> sources.CardMeta | None:
     """The metadata the caller supplied, or None to look it up.
 
@@ -564,7 +638,7 @@ def _known_meta(
         return None
     if len(ids) != 1:
         raise click.UsageError("--name describes one card, so pass exactly one id")
-    if game is not None and game is not GameId.POKEMON:
+    if game is not None and game != GameId.POKEMON:
         raise click.UsageError(
             "--name is Pokémon-only: a Magic card's image URL is a uuid path that "
             "only Scryfall's own answer carries, so it has to be looked up"
@@ -580,7 +654,7 @@ def _known_meta(
 
 
 def _resolve_meta(
-    lib: Library, cfg: Config, cid: str, game: GameId | None
+    lib: Library, cfg: Config, cid: str, game: str | None
 ) -> sources.CardMeta:
     """Metadata for an id, preferring the game an already-filed card records."""
     known = lib.find(cid)
@@ -612,7 +686,7 @@ def _kind_note(lib: Library, card: Card, meta: sources.CardMeta) -> None:
         )
 
 
-def _related_ids(lib: Library, cfg: Config, cid: str, game: GameId | None) -> list[str]:
+def _related_ids(lib: Library, cfg: Config, cid: str, game: str | None) -> list[str]:
     """The ids of cards printed alongside ``cid``, reported as they are found.
 
     A meld pair is three physical cards; a card that makes tokens is printed with
@@ -753,7 +827,7 @@ def fetch(
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    want = games.parse(game)
+    want = _provided(_games(lib), game).id if game else None
     known = _known_meta(cfg, ids, name, set_name, rarity, subtypes, want)
     queue = list(ids)
     seen: set[str] = set()
@@ -862,7 +936,7 @@ def _query_options(fn: Callable[..., None]) -> Callable[..., None]:
 
 
 def _query(
-    game: GameId,
+    game: str,
     *,
     text: str = "",
     set_id: str = "",
@@ -952,7 +1026,7 @@ def search(
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    want = games.coerce(game, cfg.library_game)
+    want = _provided(_games(lib), game or cfg.library_game).id
     text = " ".join(query)
     wanted = _query(want, text=text, set_id=set_filter or "", **filters)
     if not wanted.narrowed:
@@ -966,7 +1040,7 @@ def search(
         console.print(
             _nothing(
                 found,
-                f"[yellow]no {games.get(want).name} matches for[/] "
+                f"[yellow]no {_games(lib).name_of(want)} matches for[/] "
                 f"{text or _filter_note(wanted)!r} [dim](--game switches TCG)[/]",
             )
         )
@@ -1019,14 +1093,15 @@ def browse(
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    want = games.coerce(game, cfg.library_game)
+    want = _provided(_games(lib), game or cfg.library_game).id
     wanted = _query(want, set_id=set_id, **filters)
     expansion = browse_mod.find(want, set_id, cfg)
     if expansion is None:
         # not fatal: a set proxdex's cached list has not seen yet may still answer,
         # and refusing here would make a brand-new set unbrowsable for a day
         err.print(
-            f"[yellow]⚠[/] no {games.get(want).name} set called {escape(set_id)!r} "
+            f"[yellow]⚠[/] no {_games(lib).name_of(want)} set called "
+            f"{escape(set_id)!r} "
             "in the set list [dim](proxdex sets lists them; --game switches TCG)[/]"
         )
     else:
@@ -1081,7 +1156,7 @@ def sets_cmd(
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    want = games.coerce(game, cfg.library_game)
+    want = _provided(_games(lib), game or cfg.library_game).id
     held = browse_mod.owned([card.set_id for card in lib.cards()])
     groups = [
         replaced
@@ -1092,7 +1167,7 @@ def sets_cmd(
         console.print_json(
             json.dumps(
                 {
-                    "game": want.value,
+                    "game": want,
                     "grouping": browse_mod.grouping(want).value,
                     "groups": [g.json(held) for g in groups],
                 },
@@ -1335,6 +1410,23 @@ def _parse_selection(
     "else original).",
 )
 @_FACE
+@click.option(
+    "--card-name",
+    "card_name",
+    default="",
+    metavar="NAME",
+    help="What to call the card, for a game of your own — it becomes part of the "
+    "folder name. Ignored for [cyan]pokemon[/] and [cyan]mtg[/], whose names come "
+    "from the lookup. Default: the card id.",
+)
+@click.option(
+    "--faces",
+    "faces",
+    type=click.IntRange(1, 2),
+    default=1,
+    help="How many printed sides a card of your own game has ([cyan]2[/] = "
+    "double-faced, each side with its own pipeline). Default: 1.",
+)
 @click.option("--move", is_flag=True, help="Move files instead of copying them.")
 @click.option(
     "--on-existing",
@@ -1357,6 +1449,8 @@ def import_(
     game: str | None,
     stage: str | None,
     face: int | None,
+    card_name: str,
+    faces: int,
     move: bool,
     on_existing: str,
     dry_run: bool,
@@ -1380,7 +1474,7 @@ def import_(
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    want = games.parse(game)
+    want = _game(_games(lib), game).id if game else None
     existing = imports.OnExisting(on_existing)
     files: list[Path] = [
         Path(match)
@@ -1400,6 +1494,8 @@ def import_(
                 stage=STAGE_BY_LABEL[stage] if stage else None,
                 # --face is 1-based everywhere it is typed; faces are 0-based inside
                 face=face - 1 if face is not None else None,
+                card_name=card_name,
+                faces=faces,
             )
             for f in files
         ],
@@ -1415,7 +1511,11 @@ def import_(
     def one(planned: imports.Assignment) -> None:
         source = Path(planned.item.name)
         assert planned.id is not None  # noqa: S101 (a writing plan always has one)
-        card = _ensure_card(lib, cfg, planned.id, want) if cid else lib.find(planned.id)
+        card = (
+            _ensure_card(lib, cfg, planned.id, want, card_name=card_name, faces=faces)
+            if cid
+            else lib.find(planned.id)
+        )
         if card is None:  # the library changed under a plan made a moment ago
             raise FileError(f"{planned.id}: no card folder any more")
         # a card the plan created is only now known to have one side or two, so
@@ -1513,9 +1613,21 @@ def _import_plan(run: imports.Run, lib: Library) -> None:
         counts.append(f"{len(run.blocked)} blocked")
     console.print(f"[dim]{lib.root.name}: {', '.join(counts)}[/]")
     if run.creates:
+        # a custom game has nothing to look up: its folder is named from the set it
+        # declares and the name you gave, so saying "looked up" would describe a
+        # request that never happens
+        how = (
+            "named from your own game's set"
+            if any(
+                (found := _games(lib).get(a.game or "")) is not None and found.custom
+                for a in run.ready
+                if a.disposition is imports.Disposition.CREATE
+            )
+            else "looked up as they are filed"
+        )
         console.print(
             f"[cyan]+[/] {len(run.creates)} new card folder(s) — "
-            f"{', '.join(run.creates)} [dim](looked up as they are filed)[/]"
+            f"{', '.join(run.creates)} [dim]({how})[/]"
         )
     if run.discards:
         console.print(
@@ -1536,7 +1648,11 @@ def where(ctx: click.Context, clear_cache: bool) -> None:
     mark = "[green]✓[/]" if cfg_file.exists() else "[red]missing[/]"
     console.print(f"[bold]library[/]  {lib.root}")
     console.print(f"config    {cfg_file} {mark}")
-    console.print(f"game      {games.get(lib.default_game).name} [dim](default)[/]")
+    known = _games(lib)
+    custom = f", {len(known.custom)} of your own" if known.custom else ""
+    console.print(
+        f"game      {known.name_of(lib.default_game)} [dim](default{custom})[/]"
+    )
     # the art count is worth naming: it is much the largest thing in there (a
     # browsed set is 60 pictures) and it is what --clear-cache would drop
     console.print(f"cache     {net.cache_dir()} [dim]({art.cached()} picture(s))[/]")
@@ -1565,6 +1681,19 @@ def where(ctx: click.Context, clear_cache: bool) -> None:
     # here the only thing that noticed was `sheet`, at the end of a run
     for gone in profiles.dangling(lib.root, cfg):
         err.print(f"[yellow]⚠[/] {escape(gone.message)} [dim]{gone.hint}[/]")
+    # exactly the same broken reference, one layer down: `[library] game` is a name
+    # in a text file too, and deleting the game it names leaves a config that reads
+    # fine and a bare `fetch` that refers to nothing
+    if orphan := games.dangling(lib.root, cfg):
+        err.print(
+            f"[yellow]⚠[/] [cyan]\\[library] game[/] is {escape(orphan)!r}, which no "
+            "game answers to [dim]`proxdex game list`[/]"
+        )
+    for bad in known.unreadable:
+        err.print(
+            f"[yellow]⚠[/] [dim]{games.DIRNAME}/{escape(bad)}[/] could not be read, "
+            "so that game is missing [dim](its cards will resolve no frame spec)[/]"
+        )
     if clear_cache:
         console.print(f"[green]✓[/] cleared {net.clear_cache()} cached response(s)")
     for host in net.health():
@@ -1649,14 +1778,18 @@ def _matches(
     printed: bool,
     *,
     match: str | None,
-    game: GameId | None,
+    game: str | None,
     set_id: str | None,
     only: LsOnly | None,
 ) -> bool:
     text = match.lower() if match else ""
     if text and text not in card.id.lower() and text not in card.name.lower():
         return False
-    if game is not None and card.game is not game:
+    # `==`, never `is` — see `library.read_game`. While a game id was a `StrEnum` every
+    # one was an interned singleton and this read perfectly well; the moment ids came
+    # out of files it started answering "no cards match" for every game, including the
+    # two built-in ones, because a `str` read off disk is a different object.
+    if game is not None and card.game != game:
         return False
     if set_id is not None and card.set_id.lower() != set_id.lower():
         return False
@@ -1740,7 +1873,7 @@ def ls(
             card,
             bool((b := by_card.get(card.id)) and b.printed),
             match=match,
-            game=games.parse(game),
+            game=_game(_games(lib), game).id if game else None,
             set_id=set_id,
             only=want_only,
         )
@@ -1797,7 +1930,7 @@ def ls(
             table.add_row(
                 card.id if first else "",
                 card.name.title() if first else "",
-                card.game.value if first else "",
+                card.game if first else "",
                 card.set_id if first else "",
                 _kind_tag(card) if first else "",
                 side,
@@ -1838,7 +1971,7 @@ def _card_json(card: Card, batch: report.Batch | None) -> dict[str, Any]:
     return {
         "id": card.id,
         "name": card.name.title(),
-        "game": card.game.value,
+        "game": card.game,
         "set": card.set_id,
         "layout": card.layout.value,
         "oversized": card.oversized,
@@ -1877,6 +2010,36 @@ def _tally(cards: Sequence[Card]) -> None:
     )
 
 
+def _detail(
+    lib: Library, cfg: Config, cid: str, card: Card | None, game: str | None
+) -> sources.CardDetail:
+    """What to show about one card: the provider's answer, or the card itself.
+
+    A **custom game has no provider**, so asking one would be the only part of
+    ``show`` that fails — and failing there took the whole command with it, printing
+    nothing at all about a card that is sitting in the library. So a card of a
+    provider-less game is described from what proxdex already knows: its name, set,
+    layout and sides, with no fact groups and no outbound links, because those are the
+    provider's and there isn't one.
+
+    The header, the kind line and the local state are then rendered by exactly the
+    same code as any other card — the point of :func:`proxdex.sources.local_meta`
+    being a real :class:`~proxdex.sources.CardMeta`.
+    """
+    wanted = (_provided(_games(lib), game).id if game else None) or (
+        card.game if card else None
+    )
+    found = _games(lib).get(wanted or "")
+    if card is not None and found is not None and found.custom:
+        return sources.CardDetail(
+            meta=sources.local_meta(
+                cid, found, name=card.name.title(), faces=len(card.faces)
+            ),
+            source=found.source,
+        )
+    return sources.details(cid, cfg, wanted)
+
+
 @cli.command()
 @click.argument("cid", metavar="ID")
 @_GAME
@@ -1893,13 +2056,11 @@ def show(ctx: click.Context, cid: str, game: str | None) -> None:
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     known = lib.find(cid)
-    detail = sources.details(
-        cid, cfg, games.parse(game) or (known.game if known else None)
-    )
+    detail = _detail(lib, cfg, cid, known, game)
     meta = detail.meta
     console.print(
         f"[bold]{meta.name}[/]  [dim]{meta.id}[/]\n"
-        f"{meta.set_name} [dim]({meta.set_id})[/] · {games.get(meta.game).name} "
+        f"{meta.set_name} [dim]({meta.set_id})[/] · {_games(lib).name_of(meta.game)} "
         f"[dim]· {detail.source}[/]"
     )
     kind = [meta.layout.label] + (["oversized"] if meta.oversized else [])
@@ -2234,6 +2395,16 @@ def config_set(ctx: click.Context, assignments: tuple[str, ...]) -> None:
         # coerced through the field's own annotation, so the file only ever holds
         # the declared type and a bad value names the valid options right here
         clean = Config.coerce(field_name, _toml_value(value.strip()))
+        if clean is None:
+            # An **optional** setting's unset state is an answer of its own, and the way
+            # TOML spells it is by not being there — there is no `None` to write. So an
+            # empty value removes the key, which is the same distinction the sheet
+            # builder's controls draw between "clear this" and "store a blank".
+            auto = Config.describe().get(field_name, {}).get("auto") or "the default"
+            if section in doc and key in doc[section]:
+                del doc[section][key]
+            console.print(f"[green]✓[/] \\[{section}] {key} unset — {auto}")
+            continue
         if section not in doc:
             doc[section] = tomlkit.table()
         doc[section][key] = clean.value if isinstance(clean, Enum) else clean
@@ -2573,6 +2744,52 @@ def _registry(lib: Library) -> specs.Registry:
     return specs.load(lib.root)
 
 
+def _game(known: games.Registry, value: str | None) -> games.Game:
+    """A game from a flag, checked against *this library's* games.
+
+    **Not a ``click.Choice``**, for the same reason ``--frame`` is not one: the list
+    of legal values lives in a library that is not open when the decorator runs. The
+    error names every option, which is what a Choice would have done — the thing it
+    cannot do is know about the game you defined this afternoon.
+    """
+    want = games.coerce(value, games.DEFAULT)
+    found = known.get(want)
+    if found is None:
+        raise click.UsageError(
+            f"'{escape(str(value))}' is not a game in this library. Known: "
+            f"{', '.join(known.ids)} (`proxdex game list`)"
+        )
+    return found
+
+
+def _provided(known: games.Registry, value: str | None) -> games.Game:
+    """Like :func:`_game`, and refuses one nothing can be looked up in.
+
+    What every provider-backed verb takes (``search``, ``browse``, ``fetch``,
+    ``show``, ``sets``). The refusal names ``import`` rather than the API, because a
+    custom game's cards are not missing from a provider — they were never there.
+    """
+    found = _game(known, value)
+    if found.custom:
+        raise click.UsageError(
+            f"{found.name} has no card provider, so there is nothing to search or "
+            f"fetch. Bring the images yourself: `proxdex import <files> --id "
+            f"{found.example}`"
+        )
+    return found
+
+
+def _games(lib: Library) -> games.Registry:
+    """This library's games — the two proxdex ships, plus its own.
+
+    A game id is an open set, so naming one is a question about *this* library and
+    not a lookup in a module-level table. Total, like `_spec_name`: an id nothing
+    answers to is reported as the id, which is exactly what a card whose game was
+    deleted should read as.
+    """
+    return games.load(lib.root)
+
+
 def _spec_name(lib: Library, spec_id: str) -> str:
     """A spec's own name, or its id if this library has never heard of it.
 
@@ -2690,12 +2907,12 @@ def _warn_spec(card: Card, found: specs.Resolution) -> None:
         )
 
 
-def _spec_row(spec: FrameGuide) -> tuple[str, ...]:
+def _spec_row(spec: FrameGuide, known: games.Registry) -> tuple[str, ...]:
     top, right, bottom, left = spec.mm()
     return (
         spec.id,
         spec.name,
-        games.get(spec.game).name if spec.game else "any",
+        known.name_of(spec.game) if spec.game else "any",
         f"{top:.2f} / {right:.2f} / {bottom:.2f} / {left:.2f}",
         # two of the shipped specs describe an 89×127 card, so a millimetre column
         # with no card beside it would be read against the wrong one
@@ -2703,12 +2920,12 @@ def _spec_row(spec: FrameGuide) -> tuple[str, ...]:
     )
 
 
-def _spec_table(reg: specs.Registry) -> Table:
+def _spec_table(reg: specs.Registry, known: games.Registry) -> Table:
     table = Table(box=None, pad_edge=False, header_style="bold")
     for col in ("Spec", "Name", "Game", "Border T/R/B/L (mm)", "Card"):
         table.add_column(col)
     for spec in reg.specs.values():
-        table.add_row(*_spec_row(spec))
+        table.add_row(*_spec_row(spec, known))
     return table
 
 
@@ -2732,18 +2949,42 @@ def _audit(lib: Library, reg: specs.Registry) -> list[specs.Issue]:
     )
 
 
-def _rules_table(reg: specs.Registry) -> Table:
+def _rules_table(reg: specs.Registry, known: games.Registry) -> Table:
     table = Table(box=None, pad_edge=False, header_style="bold")
     for col in ("Rule", "Game", "Set", "Catches", "Spec", "Needs traits"):
         table.add_column(col)
     for rule in reg.rules:
         table.add_row(
             rule.id,
-            games.get(rule.game).name,
+            known.name_of(rule.game),
             rule.set_id or "[dim]every set[/]",
             rule.describes,
             rule.spec,
             "[yellow]yes[/]" if rule.match.needs_traits else "[dim]no[/]",
+        )
+    return table
+
+
+def _shipped_rules_table(known: games.Registry, game: str | None = None) -> Table:
+    """The shipped baseline, as the rules it is (:class:`specs.Shipped`).
+
+    Printed beside this library's own so the list of "what decides a border here" is
+    complete. Without it an empty Rules table read as "nothing rules these cards",
+    while thirteen Pokémon sets were being bordered by a row nobody could see.
+    """
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    table.add_column("Game")
+    # what the row keys on, said once. "Catches: every card of the set" on every
+    # Pokémon row restated this column and squeezed the spec id into an ellipsis.
+    table.add_column("Keyed on")
+    table.add_column("Covers", max_width=34)
+    table.add_column("Spec")
+    for row in specs.shipped_rules(game):
+        table.add_row(
+            known.name_of(row.game),
+            row.key.label,
+            escape(row.scope),
+            row.spec,
         )
     return table
 
@@ -2769,10 +3010,16 @@ def frames_cmd(ctx: click.Context) -> None:
         return
     lib = _lib(ctx)
     reg = _registry(lib)
-    console.print(_spec_table(reg))
+    known = _games(lib)
+    console.print(_spec_table(reg, known))
     if reg.rules:
         console.print("\n[bold]Rules[/] [dim](first match wins)[/]")
-        console.print(_rules_table(reg))
+        console.print(_rules_table(reg, known))
+    else:
+        console.print(
+            "\n[dim]no rules of your own — `proxdex frames rules` lists the baseline "
+            "proxdex ships, which is what every card falls back to.[/]"
+        )
 
     cards = lib.cards()
     if not cards:
@@ -2784,7 +3031,7 @@ def frames_cmd(ctx: click.Context) -> None:
     # keyed by the answer, not by the set: a set with a rule for its secret-rare
     # tail resolves two ways, and one row claiming the default for all of them
     # would name a fit that half those cards never get
-    seen: dict[tuple[GameId, str, str, str], tuple[specs.Resolution, int]] = {}
+    seen: dict[tuple[str, str, str, str], tuple[specs.Resolution, int]] = {}
     for card in cards:
         found = _resolve_spec(reg, card)
         answer = found.spec.id if found.spec else "—"
@@ -2799,7 +3046,7 @@ def frames_cmd(ctx: click.Context) -> None:
     for (game, set_id, _, _), (found, count) in sorted(seen.items()):
         mine.add_row(
             set_id,
-            games.get(game).name,
+            known.name_of(game),
             str(count),
             found.spec.id if found.spec else "[yellow]none measured[/]",
             found.via.label + (f" ({found.rule})" if found.rule else ""),
@@ -2823,7 +3070,8 @@ def frames_cmd(ctx: click.Context) -> None:
 @click.pass_context
 def frames_list(ctx: click.Context) -> None:
     """Every frame spec this library can fit to."""
-    console.print(_spec_table(_registry(_lib(ctx))))
+    lib = _lib(ctx)
+    console.print(_spec_table(_registry(lib), _games(lib)))
 
 
 @frames_cmd.command("show")
@@ -2849,7 +3097,7 @@ def frames_show(ctx: click.Context, spec_id: str) -> None:
     )
     console.print(
         f"[bold]{spec.name}[/]  [dim]{spec.id}[/]\n"
-        f"{games.get(spec.game).name if spec.game else 'any game'} · {where}\n"
+        f"{_games(lib).name_of(spec.game) if spec.game else 'any game'} · {where}\n"
         f"[dim]border:[/] top {top:.2f} · right {right:.2f} · bottom {bottom:.2f} "
         f"· left {left:.2f} mm  [dim](of a {spec.card_mm[0]:g}×"
         f"{spec.card_mm[1]:g}mm card"
@@ -2859,7 +3107,11 @@ def frames_show(ctx: click.Context, spec_id: str) -> None:
     used = reg.uses(spec.id)
     if used:
         console.print("\n[bold]Used by[/]")
-        console.print(_rules_table(specs.Registry(specs=reg.specs, rules=tuple(used))))
+        console.print(
+            _rules_table(
+                specs.Registry(specs=reg.specs, rules=tuple(used)), _games(lib)
+            )
+        )
     pinned = [c.id for c in lib.cards() if c.pin == spec.id]
     if pinned:
         console.print(f"[dim]pinned to:[/] {', '.join(pinned)}")
@@ -2873,9 +3125,10 @@ _EDGES = (
     click.option("--name", default="", help="What to call it in listings."),
     click.option(
         "--game",
-        type=click.Choice([g.value for g in GameId]),
         default=None,
-        help="The game whose frame this is. Omit for a spec that suits any game.",
+        metavar="GAME",
+        help="The game whose frame this is, including one of your own "
+        "([cyan]proxdex game list[/]). Omit for a spec that suits any game.",
     ),
     click.option(
         "--oversized",
@@ -2911,9 +3164,16 @@ def _store(lib: Library, spec: FrameGuide) -> None:
         f"→ {path.relative_to(lib.root)}"
     )
     if not frames.is_shipped(spec.id) and not _registry(lib).uses(spec.id):
+        # A game of your own is one border, so point the whole game at it and every
+        # set declared later is covered too. A game with a provider has eras, so
+        # naming the set is right there — the hint follows whichever this spec is for.
+        known = _games(lib)
+        game = known.get(spec.game) if spec.game else None
+        where = "--set <set> " if game is None or not game.custom else ""
         console.print(
             "[dim]nothing uses it yet — `proxdex frames assign "
-            f"{spec.id} --set <set> --match set`[/]"
+            f"{spec.id}{f' --game {spec.game}' if spec.game else ''} "
+            f"{where}--match set`[/]"
         )
 
 
@@ -2947,12 +3207,13 @@ def frames_set(
     [dim]  proxdex frames set mtg-m15 --game mtg \\
           --top 2.4 --right 2.4 --bottom 2.4 --left 2.4[/]
     """
+    lib = _lib(ctx)
     _store(
-        _lib(ctx),
+        lib,
         specs.spec(
             spec_id,
             name,
-            games.parse(game),
+            _game(_games(lib), game).id if game else None,
             (top, right, bottom, left),
             oversized=oversized,
         ),
@@ -2978,15 +3239,27 @@ def frames_rm(ctx: click.Context, spec_id: str) -> None:
 @frames_cmd.command("rules")
 @click.pass_context
 def frames_rules(ctx: click.Context) -> None:
-    """Which cards get which spec, in the order they are tried."""
-    reg = _registry(_lib(ctx))
-    if not reg.rules:
+    """Which cards get which spec, in the order they are tried.
+
+    Two tables: this library's own rules, then the baseline proxdex ships. The
+    shipped rows are what a card falls back to, and they are listed because an empty
+    first table used to read as "nothing decides these borders" while thirteen Pokémon
+    sets were being bordered by a row nobody could see. Overriding one is an ordinary
+    [cyan]assign[/] — every rule is tried before the baseline.
+    """
+    lib = _lib(ctx)
+    reg = _registry(lib)
+    known = _games(lib)
+    if reg.rules:
+        console.print("[bold]This library's rules[/] [dim](most specific first)[/]")
+        console.print(_rules_table(reg, known))
+    else:
         console.print(
-            "[dim]no rules — every set falls back to its era or its game's "
-            "generic spec. `proxdex frames assign` adds one.[/]"
+            "[dim]no rules of your own — every card falls back to the shipped "
+            "baseline below, or to no spec at all. `proxdex frames assign` adds one.[/]"
         )
-        return
-    console.print(_rules_table(reg))
+    console.print("\n[bold]Shipped with proxdex[/] [dim](tried last)[/]")
+    console.print(_shipped_rules_table(known))
 
 
 @frames_cmd.command("assign")
@@ -2996,8 +3269,9 @@ def frames_rules(ctx: click.Context) -> None:
     "set_id",
     default="",
     help="The set code this rule is for. Omit it for a rule covering every set of "
-    "the game — the only way to express a frame treatment, which is not a property "
-    "of any one set. Game-wide rules lose to set-specific ones.",
+    "the game — with `--match set` that is one border for the whole game, and it is "
+    "also the only way to express a frame treatment, which is not a property of any "
+    "one set. Game-wide rules lose to set-specific ones.",
 )
 @click.option(
     "--match",
@@ -3034,7 +3308,12 @@ def frames_assign(
     that ever printed one, and listing those sets would go stale every release.
     Specificity decides, not file order — a set's own rule beats a game-wide one.
 
-    [dim]  proxdex frames assign pokemon-swsh --set swsh4 --match set
+    With [cyan]--match set[/] and no [cyan]--set[/] it is **one border for the whole
+    game**, which is usually what a game of your own wants: one printer, one stock,
+    one border, however many sets you declare later.
+
+    [dim]  proxdex frames assign lorcana-base --game lorcana --match set
+      proxdex frames assign pokemon-swsh --set swsh4 --match set
       proxdex frames assign pokemon-secret --set swsh4 --match numbers
         --value 188-216
       proxdex frames assign mtg-extended --game mtg --match effect
@@ -3047,7 +3326,7 @@ def frames_assign(
     rule = specs.assign(
         lib.root,
         spec_id,
-        games.coerce(game, lib.default_game),
+        _game(_games(lib), game or lib.default_game).id,
         set_id,
         chosen,
         value,
@@ -3186,7 +3465,11 @@ def frames_coverage(
     cfg = Config.load(lib.root)
     reg = _registry(lib)
     held = browse_mod.owned([card.set_id for card in lib.cards()])
-    wanted = [games.coerce(game, lib.default_game)] if game else list(GameId)
+    known = _games(lib)
+    # every game this library has, custom ones included: a set of your own game with
+    # no measured spec is a set whose cards `border` refuses, which is exactly the
+    # gap this report exists to name
+    wanted = [_game(known, game or lib.default_game)] if game else list(known.games)
     reports = [inventory.coverage(g, cfg, reg, held) for g in wanted]
     if as_json:
         console.print_json(data={"games": [r.json() for r in reports]})
@@ -3196,7 +3479,7 @@ def frames_coverage(
 
 
 def _print_coverage(found: inventory.Coverage, *, show_all: bool) -> None:
-    name = games.get(found.game).name
+    name = found.game_name or found.game
     mark = "[green]✓[/]" if found.complete else "[yellow]○[/]"
     console.print(
         f"\n{mark} [bold]{name}[/] — [bold]{found.covered}[/] of "
@@ -3264,7 +3547,7 @@ def frames_preview(
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     found = inventory.preview(
-        set_id, cfg, _registry(lib), games.coerce(game, lib.default_game)
+        set_id, cfg, _registry(lib), _provided(_games(lib), game or lib.default_game).id
     )
     rows = [r for r in found.rows if not only or r.spec == only]
     table = Table(box=None, pad_edge=False, header_style="bold")
@@ -3440,7 +3723,8 @@ def border(
             # looks perfect and is wrong once it is cut.
             raise FileError(
                 f"{name}: no frame spec has been measured for this printing "
-                f"({card.set_id}, {games.get(card.game).name}). Measure a card and "
+                f"({card.set_id}, {_games(lib).name_of(card.game)}). Measure a card "
+                f"and "
                 "record it with `proxdex frames set`, assign it, or pass --frame to "
                 "fit against a spec for this run."
             )
@@ -3461,7 +3745,9 @@ def border(
             # the size *this* card prints at, not the library's — an oversized
             # printing is reshaped to 88.9×127mm, or `sheet` crops it into a cell
             # it was never fitted to
-            plan = bleed.fit_plan(w, h, guide, inner_t, trim, stretch=do_stretch)
+            plan = bleed.fit_plan(
+                w, h, guide, inner_t, trim, stretch=do_stretch, what=card.id
+            )
             tw, th = round(plan.trim_w), round(plan.trim_h)
             bd = plan.borders
             tag = f"{guide.name}{', stretch' if do_stretch else ''}"
@@ -3495,7 +3781,14 @@ def border(
             if dry_run:
                 console.print(f"[cyan]{name}[/]: {note}")
                 return
-            bleed.fit(src, dst, guide, inner_t, trim, stretch=do_stretch, tune=fill)
+            if bleed.by_resize(guide, plan):
+                # A zero target with the stretch on invents nothing, so cardbleed's
+                # synthesis has no area to fill — and it rewrites the outermost pixels
+                # anyway (measured: 109 of them, by up to 255 levels, along two edges of
+                # a full-bleed card). Crop and resize instead.
+                bleed.reshape_only(src, dst, inner_t, plan)
+            else:
+                bleed.fit(src, dst, guide, inner_t, trim, stretch=do_stretch, tune=fill)
             # what it was fitted to, beside the file: `doctor` compares it against
             # what the rules say today, because a spec that has since been
             # corrected leaves a master that is wrong and looks fine
@@ -3655,13 +3948,37 @@ def _write_batch(path: Path, data: dict[str, object]) -> None:
     # how it was printed, so a reprint is reproducible rather than remembered
     doc["profile"] = str(data.get("profile", ""))
     doc["back_profile"] = str(data.get("back_profile", ""))
-    for key in ("page", "orientation"):
-        doc[key] = str(data.get(key, ""))
-    doc["dpi"] = _as_int(data.get("dpi"))
-    doc["bleed_mm"] = _as_float(data.get("bleed_mm"))
     doc["cards"] = _as_strings(data.get("cards"))
     doc["copies"] = _as_ints(data.get("copies"))
+    # **Every page setting this run used, derived from the declaration.** It was a
+    # hand-written four — page, orientation, dpi, bleed — out of the thirty-six a run
+    # reads, while the comment above claimed it was "the page settings". So a reprint of
+    # a run that set a margin or a cut guide was not reproducible from its own manifest,
+    # which is the same defect the four override lists had and the same fix. Written as
+    # its own table so `printed` can copy it back verbatim: this function *rewrites* the
+    # manifest from the parsed dict, so any key it does not know is a key it deletes.
+    settings = data.get("settings")
+    doc["settings"] = _batch_settings(
+        settings if isinstance(settings, dict) else cast("dict[str, Any]", {})
+    )
     path.write_text(tomlkit.dumps(doc), encoding="utf-8", newline="\n")
+
+
+def _batch_settings(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """One run's page settings, coerced to their declared types.
+
+    Read back through `Config.coerce` rather than trusted, so a hand-edited manifest
+    cannot put a string where the field is a float — the same rule the config file gets.
+    """
+    out: dict[str, Any] = {}
+    for opt in Config.run_options(config.Run.SHEET):
+        if opt.key not in raw:
+            continue
+        value = Config.coerce(opt.key, raw[opt.key])
+        if value is None:  # an optional setting left unset — say nothing about it
+            continue
+        out[opt.key] = value.value if isinstance(value, Enum) else value
+    return out
 
 
 def _as_int(value: object) -> int:
@@ -3682,13 +3999,13 @@ def _as_ints(value: object) -> list[int]:
     return [_as_int(v) for v in cast("Sequence[object]", value)]
 
 
-def _back_path(root: Path, game: GameId) -> Path:
+def _back_path(root: Path, game: str) -> Path:
     """Where `proxdex back --game <g>` stores that game's shared back.
 
     A mixed library needs one per game — Pokémon and MTG backs are different
     pictures — so they can't share a single ``back.png``.
     """
-    return root / f"back-{game.value}.png"
+    return root / f"back-{game}.png"
 
 
 def _resolve_back_path(card: Card, cfg: Config, lib: Library) -> Path | None:
@@ -3796,14 +4113,15 @@ def back(
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    want = games.coerce(game, cfg.library_game)
+    want = _game(_games(lib), game or cfg.library_game).id
     if not url and not file_path:
-        url = games.get(want).back_url
+        found = _games(lib).get(want)
+        url = found.back_url if found else None
     if file_path:
         im = Image.open(file_path).convert("RGB")
     elif not url:
         raise click.UsageError(
-            f"no downloadable back for {games.get(want).name} — give --file or "
+            f"no downloadable back for {_games(lib).name_of(want)} — give --file or "
             "--url with your own scan"
         )
     else:
@@ -3820,7 +4138,7 @@ def back(
     dst = out or _back_path(lib.root, want)
     im.save(dst)
     console.print(
-        f"[green]✓[/] {games.get(want).name} card back → "
+        f"[green]✓[/] {_games(lib).name_of(want)} card back → "
         f"{dst.relative_to(lib.root)} [dim](colour + bleed applied at sheet "
         "time)[/]"
     )
@@ -3860,81 +4178,84 @@ def _plan_note(run: sheet_mod.Run, cfg: Config) -> None:
             f"{group.pages} page(s) [dim]({group.grid[0]}×{group.grid[1]} "
             "per page)[/]"
         )
+        # **A page count is no use beside a row that will be cut off.** Nothing checked
+        # this until now, and both shipped defaults were wrong: A4's grid ran 0.51mm off
+        # the right edge and Letter's bottom row of cards hung 4.8mm off the paper.
+        paper = group.fit(cfg)
+        if not paper.ok:
+            err.print(f"  [yellow]⚠[/] {group.name(cfg)} does not fit: {paper.note}")
 
 
-def _overrides(
-    cfg: Config,
-    *,
-    faces: str | None = None,
-    page: str | None = None,
-    orientation: str | None = None,
-    dpi: int | None = None,
-    cols: int | None = None,
-    rows: int | None = None,
-    bleed: float | None = None,
-    guides: bool | None = None,
-) -> None:
+def _overrides(cfg: Config, **given: Any) -> None:
     """Apply this run's overrides to a loaded config, in place.
 
     A sheet run is a one-off — this paper, this printer, today — so the flags
     change the run and never the library's settings.
+
+    `config.apply_run` does the work, and the web layer's plan route calls the *same*
+    function: the plan and the print have to be configured identically or the page
+    count the builder promises is not the one the PDF has. It was eight hand-written
+    branches here and eight more there, and the twenty settings a print run reads that
+    had been added since were in neither.
     """
-    if faces:
-        cfg.sheet_faces = Faces(faces)
-    if page:
-        cfg.sheet_page = PageSize(page)
-    if orientation:
-        cfg.sheet_orientation = Orientation(orientation)
-    if dpi:
-        cfg.sheet_dpi = dpi
-    if cols:
-        cfg.sheet_cols = cols
-    if rows:
-        cfg.sheet_rows = rows
-    if bleed is not None:
-        cfg.bleed_mm = bleed
-    if guides is not None:
-        cfg.sheet_guides = guides
+    config.apply_run(cfg, config.Run.SHEET, given)
+
+
+def _run_options(run: config.Run) -> tuple[Any, ...]:
+    """One click option per overridable setting, generated from the declaration.
+
+    The same shape `steps.click_options` has and for the same reason: the flag, its
+    type, its bounds and its help text are written once, beside the setting. Every
+    one defaults to ``None`` — "whatever this library says" — so an unpassed flag is
+    indistinguishable from the way the command behaved before there was a flag.
+    """
+    out: list[Any] = []
+    for opt in Config.run_options(run):
+        dashed = opt.flag
+        # an optional setting's default is unset, and *what unset does* is the useful
+        # thing to print — "default: unset" beside a back-guide colour says nothing
+        note = f"  [dim](default: {opt.default_text or opt.auto or 'unset'})[/]"
+        if opt.kind is config.OptKind.BOOL:
+            out.append(
+                click.option(
+                    f"--{dashed}/--no-{dashed}",
+                    opt.key,
+                    default=None,
+                    help=opt.help + note,
+                )
+            )
+            continue
+        if opt.kind is config.OptKind.CHOICE:
+            kind: Any = click.Choice(list(opt.choices))
+        elif opt.kind is config.OptKind.INT:
+            kind = (
+                click.IntRange(int(opt.low), int(opt.high))
+                if opt.low is not None and opt.high is not None
+                else int
+            )
+        elif opt.kind is config.OptKind.FLOAT:
+            kind = (
+                click.FloatRange(opt.low, opt.high)
+                if opt.low is not None and opt.high is not None
+                else float
+            )
+        else:
+            kind = str
+        out.append(
+            click.option(
+                f"--{dashed}",
+                opt.key,
+                type=kind,
+                default=None,
+                metavar=opt.unit.upper() if opt.unit else None,
+                help=opt.help + note,
+            )
+        )
+    return tuple(out)
 
 
 _SHEET_OPTIONS = (
-    click.option(
-        "--faces",
-        type=click.Choice([f.value for f in Faces]),
-        default=None,
-        help="What to impose (default from [sheet]).",
-    ),
-    click.option(
-        "--page",
-        type=click.Choice([p.value for p in PageSize]),
-        default=None,
-        help="Page size override.",
-    ),
-    click.option(
-        "--orientation",
-        type=click.Choice([o.value for o in Orientation]),
-        default=None,
-        help="Paper orientation override.",
-    ),
-    click.option(
-        "--dpi",
-        type=click.IntRange(72, 4800),
-        default=None,
-        help="Render resolution override.",
-    ),
-    click.option(
-        "--cols", type=click.IntRange(1, 12), default=None, help="Cards across."
-    ),
-    click.option(
-        "--rows", type=click.IntRange(1, 12), default=None, help="Cards down."
-    ),
-    click.option(
-        "--bleed",
-        type=click.FloatRange(0, 20),
-        default=None,
-        help="Cut bleed in mm, outside the trim.",
-    ),
-    click.option("--guides/--no-guides", default=None, help="Print the cut guides."),
+    *_run_options(config.Run.SHEET),
     click.option(
         "--profile",
         default=None,
@@ -3987,20 +4308,13 @@ def sheet(
     ctx: click.Context,
     name: str,
     ids: tuple[str, ...],
-    faces: str | None,
-    page: str | None,
-    orientation: str | None,
-    dpi: int | None,
-    cols: int | None,
-    rows: int | None,
-    bleed: float | None,
-    guides: bool | None,
     profile: str | None,
     back_profile: str | None,
     copies: int,
     notes: str,
     dry_run: bool,
     open_pdf: bool | None,
+    **over: Any,
 ) -> None:
     """Impose the trim masters into a print PDF and record the batch.
 
@@ -4016,9 +4330,12 @@ def sheet(
     [cyan]--profile[/] and [cyan]--back-profile[/] — for the runs where the two
     sides do not land on the same paper.
 
-    Every page setting can be overridden for this run only —
-    [cyan]--page/--orientation/--cols/--rows/--bleed/--dpi/--guides[/] — because
-    a print run is this paper on this printer today, not a library preference.
+    **Every page setting is overridable for this run only** — the paper, the grid,
+    the gaps and margin, the cut guides and their colour, the registration marks,
+    and the front/back ink offsets you reach for with a misregistered duplex sheet
+    in your hand. One flag per setting, generated from the settings themselves, so
+    `-h` lists exactly what this library has and nothing drifts out of step. A run
+    is this paper on this printer today, so none of it touches `proxdex.toml`.
     [cyan]--dry-run[/] reports the page plan and writes nothing.
 
     A two-sided card contributes the side [cyan]proxdex flip[/] points at, and in
@@ -4028,17 +4345,8 @@ def sheet(
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    _overrides(
-        cfg,
-        faces=faces,
-        page=page,
-        orientation=orientation,
-        dpi=dpi,
-        cols=cols,
-        rows=rows,
-        bleed=bleed,
-        guides=guides,
-    )
+    # every `run=Run.SHEET` setting, by its own field name — see `_run_options`
+    _overrides(cfg, **over)
     wanted = _parse_copies(ids)
     if wanted:
         by_id = dict(wanted)
@@ -4072,6 +4380,23 @@ def sheet(
             f"[yellow]⚠[/] {len(two_sided)} two-sided card(s) — only the flipped-to "
             "side is in this sheet. [dim]`--faces duplex` prints the reverse too; "
             "`proxdex flip` swaps which side is the front.[/]"
+        )
+
+    # What will be drawn on the paper, from the same call the renderer uses — the whole
+    # point of the guides is that you cut along them, and "did the back get its own
+    # colour?" is a question you cannot answer from a PDF page you have not printed.
+    front_guides = sheet_mod.guides_for(cfg, back=False)
+    console.print(
+        f"[cyan]✂[/] fronts: {front_guides.summary}"
+        if front_guides
+        else "[dim]✂ no cut guides on the fronts[/]"
+    )
+    if cfg.sheet_faces is not Faces.FRONTS:
+        back_guides = sheet_mod.guides_for(cfg, back=True)
+        console.print(
+            f"[cyan]✂[/] backs:  {back_guides.summary}"
+            if back_guides
+            else "[dim]✂ no cut guides on the backs[/]"
         )
 
     prof = profiles.active(lib.root, cfg, profile)
@@ -4143,14 +4468,15 @@ def sheet(
             "faces": cfg.sheet_faces,
             "cards": [c.id for c in ready],
             # what was actually imposed, so a reprint is reproducible: the copy
-            # counts, the medium, and the page settings this run used
+            # counts, the medium, and **every** page setting this run used — derived
+            # from `Config.run_options`, so a setting added later is recorded without
+            # anybody remembering to list it here
             "copies": counts,
             "profile": prof.name,
             "back_profile": back_prof.name,
-            "page": cfg.sheet_page,
-            "orientation": cfg.sheet_orientation,
-            "dpi": cfg.sheet_dpi,
-            "bleed_mm": cfg.bleed_mm,
+            "settings": {
+                o.key: getattr(cfg, o.key) for o in Config.run_options(config.Run.SHEET)
+            },
             "notes": notes,
             "pdf": pdf.name,
         },
@@ -4245,6 +4571,348 @@ def _profile_note(prof: profiles.Profile) -> None:
             "measurement, and its numbers are all 1. [dim]`proxdex profile set "
             f"{prof.name} --saturation …`, or measure it.[/]"
         )
+
+
+# ------------------------------------------------------------------- games ---
+def _custom(lib: Library, game_id: str) -> games.Game:
+    """One of *this library's own* games, refusing a built-in.
+
+    Separate from :func:`_game` because every verb in this group edits a file, and
+    ``games/pokemon.json`` is not a file that exists: the two shipped games are code,
+    with providers and measured frame specs written against them. Saying so is better
+    than writing a file :func:`proxdex.games.load` would then drop as a duplicate.
+    """
+    found = _game(_games(lib), game_id)
+    if not found.custom:
+        raise click.UsageError(
+            f"{found.name} is a game proxdex ships, so there is no file to edit. "
+            f"`proxdex game add <id> --name …` defines one of your own."
+        )
+    return found
+
+
+def _save_game(lib: Library, game: games.Game) -> None:
+    try:
+        path = games.store(lib.root, game)
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
+    console.print(f"[green]✓[/] {game.name} → [dim]{path.relative_to(lib.root)}[/]")
+
+
+@cli.group("game")
+def game_cmd() -> None:
+    """Games this library holds — the two proxdex ships, and any you define.
+
+    A custom game is [bold]yours[/]: a name, the sets it has, and the pictures you
+    bring. There is no API behind it, so [cyan]fetch[/], [cyan]search[/] and
+    [cyan]browse[/] have nothing to ask and say so — [cyan]import[/] is the whole
+    intake path. Everything after that is the ordinary pipeline: measure a frame
+    spec with [cyan]frames set[/], border, upscale, grade and impose, exactly as a
+    Pokémon card does.
+
+    [dim]  proxdex game add lorcana --name "Disney Lorcana"
+      proxdex game set add lorcana tfc --name "The First Chapter" --total 204
+      proxdex frames set lorcana-base --game lorcana --top 3.1 --right 3.0 \\
+          --bottom 3.1 --left 3.0
+      proxdex frames assign lorcana-base --game lorcana --set tfc
+      proxdex import ~/scans/*.png --game lorcana --id tfc-1 --card-name "Elsa"[/]
+    """
+
+
+@game_cmd.command("list")
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable.")
+@click.pass_context
+def game_list(ctx: click.Context, as_json: bool) -> None:
+    """Every game this library knows, and what each can do."""
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    known = _games(lib)
+    if as_json:
+        console.print_json(data={"games": [g.json() for g in known.games]})
+        return
+    held: dict[str, int] = {}
+    for card in lib.cards():
+        held[card.game] = held.get(card.game, 0) + 1
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for col in ("", "Game", "Name", "Cards", "Sets", "Comes from"):
+        table.add_column(col)
+    for one in known.games:
+        table.add_row(
+            "→" if one.id == cfg.library_game else "",
+            f"[bold]{one.id}[/]" if one.custom else f"[dim]{one.id}[/]",
+            one.name,
+            str(held.get(one.id, 0)),
+            # a built-in's sets come from its provider, so a count here would read
+            # as "Pokémon has 0 sets" rather than "that list is not kept locally"
+            str(len(one.sets)) if one.custom else "[dim]provider[/]",
+            "[dim]your own files[/]" if one.custom else one.source,
+        )
+    console.print(table)
+    if cfg.library_game in known.ids:
+        console.print("[dim]→ is [/][cyan]\\[library] game[/][dim], the default.[/]")
+    else:
+        # the same broken reference `profiles.dangling` reports, said the same way
+        err.print(
+            f"[yellow]⚠[/] [cyan]\\[library] game[/] is "
+            f"{escape(cfg.library_game)!r}, which no game answers to — "
+            "`proxdex config set library.game=<id>`"
+        )
+    for bad in known.unreadable:
+        err.print(
+            f"[yellow]⚠[/] [dim]{games.DIRNAME}/{bad}[/] could not be read, so that "
+            "game is not in this list (and its cards will not resolve a frame spec)"
+        )
+
+
+@game_cmd.command("add")
+@click.argument("game_id", metavar="GAME")
+@click.option("--name", required=True, help="What the game is called, for screens.")
+@click.option(
+    "--id-example",
+    "id_example",
+    default="",
+    help="What one of its card ids looks like, for help text (default: [cyan]"
+    "<game>-1[/]).",
+)
+@click.option("--notes", default="", help="Anything worth remembering about it.")
+@click.pass_context
+def game_add(
+    ctx: click.Context, game_id: str, name: str, id_example: str, notes: str
+) -> None:
+    """Define a game of your own.
+
+    Its cards come from [cyan]import[/] — there is no provider to fetch from — so
+    the next steps are declaring its sets ([cyan]game set add[/]) and measuring a
+    frame spec ([cyan]frames set[/]).
+
+    [dim]  proxdex game add lorcana --name "Disney Lorcana"[/]
+    """
+    lib = _lib(ctx)
+    want = game_id.strip().lower()
+    if not games.valid_id(want):
+        raise click.UsageError(
+            f"'{escape(game_id)}' is not a usable game id — lowercase letters, "
+            f"digits and hyphens, up to 32 characters (it becomes a filename)"
+        )
+    if want in games.RESERVED:
+        raise click.UsageError(
+            f"'{want}' is a game proxdex ships, so it cannot be redefined. Pick "
+            "another id."
+        )
+    if _games(lib).has(want):
+        raise click.UsageError(
+            f"this library already has a game called '{want}' — "
+            f"`proxdex game show {want}`"
+        )
+    if not games.valid_name(name):
+        raise click.UsageError("--name has to be 1-60 characters")
+    _save_game(
+        lib, games.custom(want, name.strip(), id_example=id_example, notes=notes)
+    )
+    console.print(
+        f"[dim]next: declare a set ([/][cyan]proxdex game set add {want} <set> "
+        f"--name …[/][dim]), then measure its border ([/]"
+        f"[cyan]proxdex frames set …[/][dim]).[/]"
+    )
+
+
+@game_cmd.command("edit")
+@click.argument("game_id", metavar="GAME")
+@click.option("--name", default=None, help="Rename it (the id never changes).")
+@click.option("--id-example", "id_example", default=None, help="Sample card id.")
+@click.option("--notes", default=None, help="Replace the notes.")
+@click.pass_context
+def game_edit(
+    ctx: click.Context,
+    game_id: str,
+    name: str | None,
+    id_example: str | None,
+    notes: str | None,
+) -> None:
+    """Change a custom game's name, sample id or notes.
+
+    The **id** is not editable: it is in every card's `.game` marker, every set
+    folder and every frame rule, so changing it here would leave all of those
+    pointing at a game that no longer exists. Add the new one and re-file if you
+    really need to.
+    """
+    lib = _lib(ctx)
+    found = _custom(lib, game_id)
+    if name is not None and not games.valid_name(name):
+        raise click.UsageError("--name has to be 1-60 characters")
+    _save_game(
+        lib,
+        replace(
+            found,
+            name=name.strip() if name is not None else found.name,
+            id_example=id_example if id_example is not None else found.id_example,
+            notes=notes if notes is not None else found.notes,
+        ),
+    )
+
+
+@game_cmd.command("rm")
+@click.argument("game_id", metavar="GAME")
+@click.option("--yes", is_flag=True, help="Skip the confirmation.")
+@click.pass_context
+def game_rm(ctx: click.Context, game_id: str, yes: bool) -> None:
+    """Delete a custom game's definition.
+
+    **The cards stay.** This removes one JSON file; the folders, images and pipeline
+    state are untouched, and re-adding the game with the same id picks them all back
+    up. What it does cost is *resolution*: until then those cards' game answers to
+    nothing, so no frame spec applies and `border` refuses them — which is why the
+    count is named before you confirm rather than after.
+    """
+    lib = _lib(ctx)
+    found = _custom(lib, game_id)
+    held = [card for card in lib.cards() if card.game == found.id]
+    if held and not yes:
+        click.confirm(
+            f"{found.name} has {len(held)} card(s) filed. Their images stay, but "
+            f"nothing will resolve a frame spec for them until this game is back. "
+            f"Delete the definition?",
+            abort=True,
+        )
+    elif not yes:
+        click.confirm(f"Delete {found.name}?", abort=True)
+    games.remove(lib.root, found.id)
+    console.print(
+        f"[green]✓[/] removed {found.name} [dim](its cards are still here)[/]"
+    )
+
+
+@game_cmd.command("show")
+@click.argument("game_id", metavar="GAME")
+@click.pass_context
+def game_show(ctx: click.Context, game_id: str) -> None:
+    """One game: what it is, its sets, and what your library holds of it."""
+    lib = _lib(ctx)
+    known = _games(lib)
+    found = _game(known, game_id)
+    reg = _registry(lib)
+    held = browse_mod.owned([card.set_id for card in lib.cards()])
+    console.print(f"[bold]{found.name}[/] [dim]({found.id})[/]")
+    console.print(f"cards from  {found.source}")
+    console.print(f"card id     [dim]e.g.[/] {found.example}")
+    if found.notes:
+        console.print(f"notes       {found.notes}")
+    if found.custom:
+        console.print("[dim]no provider — `proxdex import` is how its cards get in[/]")
+    if not found.sets:
+        if found.custom:
+            console.print(
+                f"\n[dim]no sets declared yet — [/][cyan]proxdex game set add "
+                f"{found.id} <set> --name …[/]"
+            )
+        else:
+            console.print(
+                f"\n[dim]its sets come from the provider — [/]"
+                f"[cyan]proxdex sets --game {found.id}[/]"
+            )
+        return
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for col in ("Set", "Name", "Cards", "You have", "Released", "Border spec"):
+        table.add_column(col)
+    for one in found.sets:
+        # the same question `frames coverage` asks, per set: a set with no spec is
+        # one whose cards `border` will refuse, which is worth seeing next to it
+        answers = specs.resolve(reg, f"{one.id}-1", one.id, found.id)
+        table.add_row(
+            one.id,
+            one.name,
+            str(one.total) if one.total else "[dim]—[/]",
+            str(held.get(one.id, 0)),
+            one.released or "[dim]—[/]",
+            answers.spec.id if answers.spec else "[yellow]none measured[/]",
+        )
+    console.print(table)
+
+
+@game_cmd.group("set")
+def game_set() -> None:
+    """The sets a custom game has.
+
+    **Declared rather than discovered**, because there is no provider to ask and the
+    alternative is worse: with sets inferred from whatever folders exist, a typo in
+    an `import` id silently becomes a new set holding one card, and nothing can list
+    a set before its first card is filed. Declared, `import` can refuse the typo, the
+    set folder gets a real name, and `frames coverage` has a row to put a spec
+    against.
+    """
+
+
+@game_set.command("add")
+@click.argument("game_id", metavar="GAME")
+@click.argument("set_id", metavar="SET")
+@click.option("--name", required=True, help="What the set is called.")
+@click.option(
+    "--total", type=int, default=0, help="How many cards it holds (0 = unstated)."
+)
+@click.option("--released", default="", help="Release date, e.g. 2023-08-18.")
+@click.pass_context
+def game_set_add(
+    ctx: click.Context,
+    game_id: str,
+    set_id: str,
+    name: str,
+    total: int,
+    released: str,
+) -> None:
+    """Declare a set, or change one that is already declared.
+
+    [dim]  proxdex game set add lorcana tfc --name "The First Chapter" --total 204[/]
+    """
+    lib = _lib(ctx)
+    found = _custom(lib, game_id)
+    want = set_id.strip().lower()
+    if not games.valid_set_id(want):
+        raise click.UsageError(
+            f"'{escape(set_id)}' is not a usable set id — lowercase letters, digits, "
+            "hyphens and dots (it becomes half of every card id, and a folder name)"
+        )
+    if not games.valid_name(name):
+        raise click.UsageError("--name has to be 1-60 characters")
+    if total < 0:
+        raise click.UsageError("--total cannot be negative")
+    entry = games.SetSpec(
+        id=want, name=name.strip(), total=total, released=released.strip()
+    )
+    had = found.set_of(want) is not None
+    _save_game(lib, games.with_set(found, entry))
+    console.print(
+        f"[dim]{'updated' if had else 'declared'} {want} — cards of it are "
+        f"[/][cyan]{want}-1[/][dim], [/][cyan]{want}-2[/][dim], …[/]"
+    )
+
+
+@game_set.command("rm")
+@click.argument("game_id", metavar="GAME")
+@click.argument("set_id", metavar="SET")
+@click.option("--yes", is_flag=True, help="Skip the confirmation.")
+@click.pass_context
+def game_set_rm(ctx: click.Context, game_id: str, set_id: str, yes: bool) -> None:
+    """Undeclare a set. Its cards and their images stay where they are."""
+    lib = _lib(ctx)
+    found = _custom(lib, game_id)
+    want = set_id.strip().lower()
+    if found.set_of(want) is None:
+        raise click.UsageError(
+            f"{found.name} has no set '{escape(want)}' — `proxdex game show {found.id}`"
+        )
+    held = [c for c in lib.cards() if c.game == found.id and c.set_id == want]
+    if not yes:
+        click.confirm(
+            f"Undeclare {want}?"
+            + (
+                f" {len(held)} filed card(s) stay, but importing more into it will "
+                "be refused."
+                if held
+                else ""
+            ),
+            abort=True,
+        )
+    _save_game(lib, games.without_set(found, want))
 
 
 @cli.group("profile")

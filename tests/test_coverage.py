@@ -25,23 +25,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from proxdex import browse, frames, inventory, specs
+from proxdex import browse, frames, games, inventory, specs
 from proxdex.frames import Generation, GuideId
-from proxdex.games import GameId
 from proxdex.library import Library
 from proxdex.specs import Match, Via
 
-POKEMON = GameId.POKEMON
-MTG = GameId.MTG
+POKEMON = games.POKEMON
+MTG = games.MTG
 
 
-def sets(game: GameId, *ids: str) -> list[browse.Expansion]:
+def sets(game: games.Game, *ids: str) -> list[browse.Expansion]:
     """A set list as the provider would hand one over, minus everything unread."""
     return [
         browse.Expansion(
             id=set_id,
             name=set_id.title(),
-            game=game,
+            game=game.id,
             group="Era" if game is POKEMON else "expansion",
             released=f"{2000 + n}-01-01",
         )
@@ -55,8 +54,10 @@ def row(found: inventory.Coverage, subject: str) -> inventory.Row:
     return match[0]
 
 
-def add(root: Path, spec_id: str, game: GameId = POKEMON) -> None:
-    specs.save(root, specs.spec(spec_id, spec_id.title(), game, (4.0, 4.0, 4.0, 4.0)))
+def add(root: Path, spec_id: str, game: games.Game = POKEMON) -> None:
+    specs.save(
+        root, specs.spec(spec_id, spec_id.title(), game.id, (4.0, 4.0, 4.0, 4.0))
+    )
 
 
 class TestEachGameIsAskedItsOwnQuestion:
@@ -70,8 +71,8 @@ class TestEachGameIsAskedItsOwnQuestion:
     """
 
     def test_pokemon_is_keyed_by_set_and_mtg_by_generation(self) -> None:
-        assert frames.keyed(POKEMON) is frames.Key.SET
-        assert frames.keyed(MTG) is frames.Key.GENERATION
+        assert frames.keyed(POKEMON.id) is frames.Key.SET
+        assert frames.keyed(MTG.id) is frames.Key.GENERATION
 
     def test_a_set_keyed_game_gets_one_row_per_set(self, library: Library) -> None:
         found = inventory.assess(
@@ -198,7 +199,7 @@ class TestWhatCountsAsCovered:
         self, library: Library
     ) -> None:
         add(library.root, "pokemon-sv")
-        specs.assign(library.root, "pokemon-sv", POKEMON, "sv1", Match.SET)
+        specs.assign(library.root, "pokemon-sv", POKEMON.id, "sv1", Match.SET)
         found = inventory.assess(
             POKEMON, sets(POKEMON, "sv1"), specs.load(library.root)
         )
@@ -217,7 +218,12 @@ class TestWhatCountsAsCovered:
         `frames preview` is where such a rule is judged, card by card."""
         add(library.root, "pokemon-secret")
         specs.assign(
-            library.root, "pokemon-secret", POKEMON, "sv1", Match.NUMBERS, "188-216"
+            library.root,
+            "pokemon-secret",
+            POKEMON.id,
+            "sv1",
+            Match.NUMBERS,
+            "188-216",
         )
         found = inventory.assess(
             POKEMON, sets(POKEMON, "sv1"), specs.load(library.root)
@@ -231,7 +237,7 @@ class TestWhatCountsAsCovered:
         falls through it, so coverage must too — otherwise a deleted spec leaves a set
         looking answered by a rule that resolves to nothing."""
         add(library.root, "pokemon-sv")
-        specs.assign(library.root, "pokemon-sv", POKEMON, "sv1", Match.SET)
+        specs.assign(library.root, "pokemon-sv", POKEMON.id, "sv1", Match.SET)
         (library.root / "frames" / "pokemon-sv.json").unlink()
         found = inventory.assess(
             POKEMON, sets(POKEMON, "sv1"), specs.load(library.root)
@@ -246,7 +252,7 @@ class TestWhatCountsAsCovered:
         the cards carrying that treatment, so it answers for those and not for the
         generation, which keeps the baseline as the generation's only answer."""
         add(library.root, "mtg-mine", MTG)
-        specs.assign(library.root, "mtg-mine", MTG, "", Match.FULL_ART)
+        specs.assign(library.root, "mtg-mine", MTG.id, "", Match.FULL_ART)
         found = inventory.assess(MTG, sets(MTG, "dft"), specs.load(library.root))
         answers = row(found, str(Generation.F2015)).answers
         assert [a.spec for a in answers] == [GuideId.MTG_M15]

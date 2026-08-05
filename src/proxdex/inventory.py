@@ -36,7 +36,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from proxdex import browse, frames, games, net, sources, specs
-from proxdex.games import GameId
 from proxdex.specs import Registry, Via
 
 if TYPE_CHECKING:
@@ -75,7 +74,7 @@ class Preview:
     """What every card of one set resolves to."""
 
     set_id: str
-    game: GameId
+    game: str
     rows: list[Assignment]
 
     def tally(self) -> dict[str, int]:
@@ -88,7 +87,7 @@ class Preview:
     def json(self) -> dict[str, Any]:
         return {
             "set": self.set_id,
-            "game": self.game.value,
+            "game": self.game,
             "cards": len(self.rows),
             "tally": self.tally(),
             "rows": [r.json() for r in self.rows],
@@ -99,7 +98,7 @@ def preview(
     set_id: str,
     cfg: Config,
     reg: Registry,
-    game: GameId = games.DEFAULT,
+    game: str = games.DEFAULT,
 ) -> Preview:
     """Which spec every card of one set gets, and which rule decided it.
 
@@ -113,7 +112,7 @@ def preview(
     return Preview(set_id=set_id, game=game, rows=rows)
 
 
-def _assign(brief: CardBrief, set_id: str, game: GameId, reg: Registry) -> Assignment:
+def _assign(brief: CardBrief, set_id: str, game: str, reg: Registry) -> Assignment:
     found = specs.resolve(reg, brief.id, set_id, game, traits=brief.traits)
     return Assignment(
         card=brief,
@@ -216,7 +215,9 @@ class Band:
 class Coverage:
     """What has a measured frame spec for one game, and what has not."""
 
-    game: GameId
+    game: str
+    #: display name, carried so :attr:`note` needs no registry to read
+    game_name: str
     key: frames.Key
     bands: tuple[Band, ...] = ()
     #: for a generation-keyed game, how many of its sets this report deliberately
@@ -270,7 +271,7 @@ class Coverage:
         load-bearing part: a reader who does not know MTG resolves per printing will
         read "5 rows" as "5 sets covered" and conclude the opposite of the truth.
         """
-        name = games.get(self.game).name
+        name = self.game_name or self.game
         if self.key is frames.Key.SET:
             return (
                 f"{name}'s border ran for known runs of sets, so a set is the thing a "
@@ -287,7 +288,8 @@ class Coverage:
 
     def json(self) -> dict[str, Any]:
         return {
-            "game": self.game.value,
+            "game": self.game,
+            "game_name": self.game_name,
             "key": self.key.value,
             "key_label": self.key.label,
             "bands": [b.json() for b in self.bands],
@@ -302,7 +304,7 @@ class Coverage:
 
 
 def coverage(
-    game: GameId,
+    game: games.Game,
     cfg: Config,
     reg: Registry,
     owned: dict[str, int] | None = None,
@@ -314,29 +316,38 @@ def coverage(
     answered by the shipped baseline and this library's own rules, both of which are
     local. :func:`assess` is the pure half, so the ordering and the verdicts are
     testable without a provider.
+
+    **A custom game answers this without a request at all**, off the sets it
+    declares — which is the argument for declaring them. It is the same question and
+    the same report: a set of your own game with no spec is a set whose cards
+    ``border`` will refuse, exactly as an unmeasured Pokémon set is, and the whole
+    reason to ask is to find those before you have filed fifty cards into one.
     """
-    return assess(game, browse.expansions(game, cfg), reg, owned)
+    found = browse.declared(game) if game.custom else browse.expansions(game.id, cfg)
+    return assess(game, found, reg, owned)
 
 
 def assess(
-    game: GameId,
+    game: games.Game,
     found: Sequence[browse.Expansion],
     reg: Registry,
     owned: dict[str, int] | None = None,
 ) -> Coverage:
     """:func:`coverage` over a set list already in hand — pure."""
-    key = frames.keyed(game)
+    key = frames.keyed(game.id)
     held = owned or {}
     if key is frames.Key.SET:
         bands = tuple(
             Band(
                 key=group.key,
                 label=group.label,
-                rows=tuple(_set_row(exp, game, reg, held) for exp in group.expansions),
+                rows=tuple(
+                    _set_row(exp, game.id, reg, held) for exp in group.expansions
+                ),
             )
-            for group in browse.gather(game, found)
+            for group in browse.gather(game.id, found)
         )
-        return Coverage(game=game, key=key, bands=bands)
+        return Coverage(game=game.id, game_name=game.name, key=key, bands=bands)
 
     # A generation-keyed game: the rows are the generations, and the only sets worth
     # a row of their own are the ones the baseline really keys by set — MTG's three
@@ -344,14 +355,14 @@ def assess(
     # scheme of their own. Every other set is deliberately unlisted: a per-set verdict
     # is the answer this game does not have, and inventing one is what the deleted
     # report did.
-    exceptions = frames.set_keys(game)
+    exceptions = frames.set_keys(game.id)
     named = {exp.id: exp for exp in found}
     bands = (
         Band(
             key="generation",
             label="Frame generations",
             rows=tuple(
-                _generation_row(generation, game, reg)
+                _generation_row(generation, game.id, reg)
                 for generation in frames.Generation
             ),
         ),
@@ -359,13 +370,13 @@ def assess(
             key="exception",
             label="Sets keyed away from their generation",
             rows=tuple(
-                _set_row(named[set_id], game, reg, held)
+                _set_row(named[set_id], game.id, reg, held)
                 if set_id in named
                 else Row(
                     subject=set_id,
                     name=set_id,
                     key=frames.Key.SET,
-                    answers=_answers_for_set(set_id, game, reg),
+                    answers=_answers_for_set(set_id, game.id, reg),
                     owned=held.get(set_id, 0),
                 )
                 for set_id in sorted(exceptions)
@@ -373,7 +384,8 @@ def assess(
         ),
     )
     return Coverage(
-        game=game,
+        game=game.id,
+        game_name=game.name,
         key=key,
         bands=bands,
         per_printing=sum(1 for exp in found if exp.id not in exceptions),
@@ -381,7 +393,7 @@ def assess(
 
 
 def _set_row(
-    exp: browse.Expansion, game: GameId, reg: Registry, held: dict[str, int]
+    exp: browse.Expansion, game: str, reg: Registry, held: dict[str, int]
 ) -> Row:
     return Row(
         subject=exp.id,
@@ -393,7 +405,7 @@ def _set_row(
     )
 
 
-def _answers_for_set(set_id: str, game: GameId, reg: Registry) -> tuple[Answer, ...]:
+def _answers_for_set(set_id: str, game: str, reg: Registry) -> tuple[Answer, ...]:
     """Every spec that answers for a whole set, in :func:`proxdex.specs.resolve`'s
     own order — a library's whole-set rule first, then the shipped baseline.
 
@@ -422,7 +434,7 @@ def _answers_for_set(set_id: str, game: GameId, reg: Registry) -> tuple[Answer, 
     return tuple(out)
 
 
-def _generation_row(generation: frames.Generation, game: GameId, reg: Registry) -> Row:
+def _generation_row(generation: frames.Generation, game: str, reg: Registry) -> Row:
     out: list[Answer] = []
     seen: set[str] = set()
     # a whole-set rule with no set covers every card of the game, whatever its frame

@@ -58,10 +58,9 @@ from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar
 
 from proxdex import games, net
 from proxdex.errors import FileError
-from proxdex.games import GameId
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from proxdex.config import Config
 
@@ -232,7 +231,7 @@ class Query:
     query is every card of the game, newest set first.
     """
 
-    game: GameId = games.DEFAULT
+    game: str = games.DEFAULT
     #: words that must appear in the card's name
     text: str = ""
     #: one expansion, by its id (``base1``, ``dft``)
@@ -315,7 +314,7 @@ class Query:
     def params(self) -> dict[str, str]:
         """This query as URL parameters, empties dropped — one spelling, used by
         the CLI's help examples, the web UI's address bar and the API alike."""
-        out: dict[str, str] = {"game": self.game.value}
+        out: dict[str, str] = {"game": self.game}
         if self.text:
             out["q"] = self.text
         for facet, value in self.filters:
@@ -450,7 +449,7 @@ class Choices:
         }
 
 
-def facets(game: GameId, cfg: Config) -> tuple[Choices, ...]:
+def facets(game: str, cfg: Config) -> tuple[Choices, ...]:
     """Which facets ``game`` can be filtered by, and the values each offers.
 
     The values come from the provider where it publishes them — pokemontcg.io
@@ -463,9 +462,13 @@ def facets(game: GameId, cfg: Config) -> tuple[Choices, ...]:
     ``set`` and ``year`` are never listed: their values are the expansion list
     (:func:`groups`) and a number, both of which a screen already has.
     """
-    if game is GameId.POKEMON:
-        return _pokemon_facets(cfg)
-    return _mtg_facets(cfg)
+    found = games.provider_of(game)
+    if found is None:
+        # a custom game has no catalog endpoints to ask, and an empty dropdown reads
+        # as "this game has no rarities" — so it offers no filters at all, which is
+        # the same reason a facet whose request failed is dropped rather than shown
+        return ()
+    return _FACETS[found](cfg)
 
 
 def _pokemon_facets(cfg: Config) -> tuple[Choices, ...]:
@@ -542,20 +545,47 @@ class Grouping(StrEnum):
     ERA = "era"
     #: kinds of product, in a fixed curated order (MTG's ``set_type``)
     KIND = "kind"
+    #: a custom game's own sets — one heading, because nobody declared a grouping
+    #: and inventing eras for somebody else's game would be making it up
+    OWN = "own"
 
     @property
     def label(self) -> str:
-        return "Series" if self is Grouping.ERA else "Kind"
+        return _GROUPING_LABELS[self]
 
     @property
     def plural(self) -> str:
         """Both labels, pluralised — "series" already is, and an ``s`` bolted on
         by the caller made it "seriess"."""
-        return "series" if self is Grouping.ERA else "kinds"
+        return _GROUPING_PLURALS[self]
 
 
-def grouping(game: GameId) -> Grouping:
-    return Grouping.ERA if game is GameId.POKEMON else Grouping.KIND
+_GROUPING_LABELS: dict[Grouping, str] = {
+    Grouping.ERA: "Series",
+    Grouping.KIND: "Kind",
+    Grouping.OWN: "Sets",
+}
+
+_GROUPING_PLURALS: dict[Grouping, str] = {
+    Grouping.ERA: "series",
+    Grouping.KIND: "kinds",
+    Grouping.OWN: "sets",
+}
+
+#: how each provider groups its sets. A game with **no** provider groups its sets
+#: under one heading: the two built-in groupings are each a fact about a publisher's
+#: release history (an era, a kind of product), and proxdex knows neither about a
+#: game somebody defined this afternoon — so it says "Sets" rather than inventing a
+#: taxonomy and sorting by it.
+_GROUPINGS: dict[games.ProviderId, Grouping] = {
+    games.ProviderId.POKEMONTCG: Grouping.ERA,
+    games.ProviderId.SCRYFALL: Grouping.KIND,
+}
+
+
+def grouping(game: str) -> Grouping:
+    found = games.provider_of(game)
+    return _GROUPINGS[found] if found is not None else Grouping.OWN
 
 
 @dataclass(frozen=True, slots=True)
@@ -569,7 +599,7 @@ class Expansion:
 
     id: str
     name: str
-    game: GameId
+    game: str
     #: the raw group key as the provider spells it (``Sword & Shield``,
     #: ``draft_innovation``)
     group: str
@@ -603,7 +633,7 @@ class Expansion:
         return {
             "id": self.id,
             "name": self.name,
-            "game": self.game.value,
+            "game": self.game,
             "group": self.group,
             "group_label": self.group_label,
             "total": self.total,
@@ -653,7 +683,7 @@ class Group:
         }
 
 
-def expansions(game: GameId, cfg: Config) -> tuple[Expansion, ...]:
+def expansions(game: str, cfg: Config) -> tuple[Expansion, ...]:
     """Every expansion of ``game``, newest first.
 
     One request per game (both providers serve the whole list at once), cached for
@@ -663,17 +693,15 @@ def expansions(game: GameId, cfg: Config) -> tuple[Expansion, ...]:
     printing rather than the set. Listing the sets so somebody can pick one is the
     honest use, and it is one request rather than one per set.
     """
-    if game is GameId.POKEMON:
-        return _pokemon_expansions(cfg)
-    return _mtg_expansions(cfg)
+    return _EXPANSIONS[games.require_provider(game)](cfg)
 
 
-def groups(game: GameId, cfg: Config) -> tuple[Group, ...]:
+def groups(game: str, cfg: Config) -> tuple[Group, ...]:
     """:func:`expansions`, gathered under headings in display order."""
     return gather(game, expansions(game, cfg))
 
 
-def gather(game: GameId, found: Sequence[Expansion]) -> tuple[Group, ...]:
+def gather(game: str, found: Sequence[Expansion]) -> tuple[Group, ...]:
     """Group and order expansions — pure, so the ordering is testable without a
     provider.
 
@@ -700,7 +728,7 @@ def gather(game: GameId, found: Sequence[Expansion]) -> tuple[Group, ...]:
     )
 
 
-def read_expansion(game: GameId, row: dict[str, Any]) -> Expansion:
+def read_expansion(game: str, row: dict[str, Any]) -> Expansion:
     """One expansion out of a provider's untyped JSON.
 
     Public because it *is* the boundary: the two APIs agree on almost no key name
@@ -710,17 +738,42 @@ def read_expansion(game: GameId, row: dict[str, Any]) -> Expansion:
     unreadable date is empty, because the alternative is a browse screen that will
     not draw because one set of 1047 has a null in it.
     """
-    if game is GameId.POKEMON:
-        return _pokemon_expansion(row)
-    return _mtg_expansion(row)
+    return _READ[games.require_provider(game)](row)
 
 
-def find(game: GameId, set_id: str, cfg: Config) -> Expansion | None:
+def find(game: str, set_id: str, cfg: Config) -> Expansion | None:
     """One expansion by id, or None. Off the same cached list — a browse screen
     that has already drawn the index must not spend a request to name the set it
     just navigated into."""
     want = set_id.strip().lower()
     return next((e for e in expansions(game, cfg) if e.id.lower() == want), None)
+
+
+def declared(game: games.Game) -> tuple[Expansion, ...]:
+    """A custom game's own sets, as the expansions every other reader here expects.
+
+    The counterpart to :func:`expansions`, which needs a provider. A custom game's
+    sets are **declared** (``games/<id>.json``) rather than discovered, so this is a
+    pure conversion with no request in it — and it exists so the frame coverage
+    report can ask a custom game the same question it asks Pokémon without knowing
+    where the list came from.
+
+    ``logo_url`` and ``symbol_url`` are empty because nobody published set art for
+    your game; a tile stands on its name, which :class:`Expansion` already allows for
+    a game whose provider serves no wordmark.
+    """
+    return tuple(
+        Expansion(
+            id=one.id,
+            name=one.name,
+            game=game.id,
+            group="",
+            total=one.total,
+            printed_total=one.total,
+            released=one.released,
+        )
+        for one in game.sets
+    )
 
 
 def owned(set_ids: Sequence[str]) -> dict[str, int]:
@@ -736,7 +789,7 @@ def owned(set_ids: Sequence[str]) -> dict[str, int]:
     return counts
 
 
-def group_label(game: GameId, key: str) -> str:
+def group_label(game: str, key: str) -> str:
     """A group key spelled for a person.
 
     A Pokémon series already is one (``Sword & Shield``). An MTG ``set_type`` is a
@@ -744,8 +797,10 @@ def group_label(game: GameId, key: str) -> str:
     type every few years, and a browse screen that silently hides a whole kind of
     product is worse than one showing ``Treasure Chest`` in the wrong place.
     """
-    if game is GameId.POKEMON:
-        return key or "Other"
+    if games.provider_of(game) is not games.ProviderId.SCRYFALL:
+        # Pokémon's series names and a custom game's own group keys are already
+        # display text; only Scryfall's `set_type` slugs need translating
+        return key or ("Sets" if grouping(game) is Grouping.OWN else "Other")
     return _KIND_LABELS.get(key) or key.replace("_", " ").title() or "Other"
 
 
@@ -807,7 +862,7 @@ def _pokemon_expansions(cfg: Config) -> tuple[Expansion, ...]:
     body = resp.json()
     rows = body.get("data") if isinstance(body, dict) else None
     return tuple(
-        read_expansion(GameId.POKEMON, row)
+        read_expansion(games.GameId.POKEMON.value, row)
         for row in (rows if isinstance(rows, list) else [])
         if isinstance(row, dict) and row.get("id")
     )
@@ -818,7 +873,7 @@ def _pokemon_expansion(row: dict[str, Any]) -> Expansion:
     return Expansion(
         id=str(row.get("id") or ""),
         name=str(row.get("name") or ""),
-        game=GameId.POKEMON,
+        game=games.GameId.POKEMON.value,
         group=str(row.get("series") or ""),
         total=_count(row.get("total")),
         printed_total=_count(row.get("printedTotal")),
@@ -836,7 +891,7 @@ def _mtg_expansions(cfg: Config) -> tuple[Expansion, ...]:
     body = resp.json()
     rows = body.get("data") if isinstance(body, dict) else None
     return tuple(
-        read_expansion(GameId.MTG, row)
+        read_expansion(games.GameId.MTG.value, row)
         for row in (rows if isinstance(rows, list) else [])
         if isinstance(row, dict) and row.get("code")
     )
@@ -847,7 +902,7 @@ def _mtg_expansion(row: dict[str, Any]) -> Expansion:
     return Expansion(
         id=str(row.get("code") or ""),
         name=str(row.get("name") or ""),
-        game=GameId.MTG,
+        game=games.GameId.MTG.value,
         group=str(row.get("set_type") or ""),
         total=count,
         # Scryfall counts once; a Magic set has no second "printed" total
@@ -889,11 +944,11 @@ def _iso(value: Any) -> str:
 DEFAULTS: Final = {"per_page": PER_PAGE, "max_per_page": MAX_PER_PAGE}
 
 
-def meta(game: GameId) -> dict[str, Any]:
+def meta(game: str) -> dict[str, Any]:
     """What a screen needs to draw browse controls for ``game``, minus the
     provider reads — the sorts, the grouping and the page sizes, declared once."""
     return {
-        "game": game.value,
+        "game": game,
         "grouping": grouping(game).value,
         "grouping_label": grouping(game).label,
         "sorts": [
@@ -903,3 +958,24 @@ def meta(game: GameId) -> dict[str, Any]:
         "facet_labels": {f.value: f.label for f in Facet},
         **DEFAULTS,
     }
+
+
+# ---------------------------------------------------------------- dispatch ---
+# One table per question a provider answers. Same argument as the tables at the
+# foot of :mod:`proxdex.sources`: the ``if pokemon … else`` these replaced was
+# total only while there were exactly two games, and a custom game reaching that
+# ``else`` would have been handed Scryfall's answer for a set it never listed.
+_FACETS: dict[games.ProviderId, Callable[[Config], tuple[Choices, ...]]] = {
+    games.ProviderId.POKEMONTCG: _pokemon_facets,
+    games.ProviderId.SCRYFALL: _mtg_facets,
+}
+
+_EXPANSIONS: dict[games.ProviderId, Callable[[Config], tuple[Expansion, ...]]] = {
+    games.ProviderId.POKEMONTCG: _pokemon_expansions,
+    games.ProviderId.SCRYFALL: _mtg_expansions,
+}
+
+_READ: dict[games.ProviderId, Callable[[dict[str, Any]], Expansion]] = {
+    games.ProviderId.POKEMONTCG: _pokemon_expansion,
+    games.ProviderId.SCRYFALL: _mtg_expansion,
+}

@@ -57,7 +57,6 @@ from typing import Any
 from proxdex import frames, games
 from proxdex.errors import ProxdexError
 from proxdex.frames import FrameGuide
-from proxdex.games import GameId
 
 #: where a library keeps its own specs and its rule list
 DIR = "frames"
@@ -188,7 +187,10 @@ _VIA_LABELS: dict[Via, str] = {
     Via.PIN: "pinned to this card",
     Via.PRINTING: "the printing",
     Via.RULE: "a rule",
-    Via.SET_DEFAULT: "the set's default",
+    # not "the set's default": the same band holds a **game-wide** whole-set rule, and
+    # a card of a set nobody named reading "matched by the set's default" sends you
+    # looking for a per-set rule that does not exist. True of both, either way.
+    Via.SET_DEFAULT: "a whole-set rule",
     Via.ERA: "its era/frame",
     Via.NONE: "no spec measured for this printing",
 }
@@ -220,7 +222,7 @@ class Rule:
     """One selector → spec, inside one set of one game."""
 
     id: str
-    game: GameId
+    game: str
     set_id: str
     match: Match
     #: what the selector needs: a range list, an id list, a rarity list. Empty
@@ -241,6 +243,11 @@ class Rule:
         could only name one set could not express it at all. An empty ``set_id``
         means "this game", and global rules are tried *after* the set-specific ones
         of the same kind (:meth:`Registry.for_set`), so a set can always overrule.
+
+        Combined with :attr:`Match.SET` this is **one border for a whole game**, which
+        is what a game somebody defined themselves almost always wants: one printer,
+        one stock, one border, and a rule per declared set would be the same four
+        numbers written out ten times and forgotten on the eleventh set.
         """
         return not self.set_id
 
@@ -248,8 +255,8 @@ class Rule:
     def scope(self) -> str:
         return self.set_id or "every set"
 
-    def covers(self, game: GameId, set_id: str) -> bool:
-        if self.game is not game:
+    def covers(self, game: str, set_id: str) -> bool:
+        if self.game != game:
             return False
         return self.is_global or self.set_id.lower() == (set_id or "").lower()
 
@@ -292,6 +299,10 @@ class Rule:
     @property
     def describes(self) -> str:
         """One line naming what this rule catches, for a table cell."""
+        if self.match is Match.SET:
+            # "the whole set" beside a Set column reading "every set" describes
+            # nothing; a game-wide default is a different claim and says so
+            return "every card of the game" if self.is_global else self.match.label
         if not self.match.takes_value:
             return self.match.label
         return f"{self.match.label} {self.value}"
@@ -299,7 +310,7 @@ class Rule:
     def json(self) -> dict[str, Any]:
         return {
             "id": self.id,
-            "game": self.game.value,
+            "game": self.game,
             "set": self.set_id,
             "match": self.match.value,
             "value": self.value,
@@ -357,6 +368,96 @@ def _in_ranges(number: str, spec: str) -> bool:
         if lo[1] <= want[1] <= hi[1]:
             return True
     return False
+
+
+# -------------------------------------------------------- the shipped rules ---
+@dataclass(frozen=True, slots=True)
+class Shipped:
+    """One row of the shipped baseline, shown beside a library's own rules.
+
+    :data:`proxdex.frames.BASELINE` is a rule list in everything but name — "cards of
+    these sets take that spec", "cards of that frame generation take this one" — and
+    until it was rendered it was the one part of the answer nobody could see. Every
+    other input to a fit is on screen: the specs are listed, the rules are listed, the
+    resolution names its :class:`Via`. The baseline was reachable only by reading the
+    source, so a person looking at an empty Rules tab could reasonably conclude their
+    library had no frame rules at all while thirteen Pokémon sets were being bordered
+    by one.
+
+    It is deliberately **not materialized** into ``frames/rules.json``. A copy of the
+    table would not learn the era measured in the next release — a library initialised
+    today would be stuck on today's baseline forever, which is worse than not having
+    it — and every library would open on fifty rows nobody wrote. So the shipped rows
+    are *shown*, and a rule of this library's own is what overrides one: exactly the
+    relationship a stored ``frames/<id>.json`` has with a shipped **spec**, where
+    correcting the shipped numbers is the expected path rather than a special case.
+    """
+
+    game: str
+    #: which fact about a card this row keys on — see :class:`proxdex.frames.Key`
+    key: frames.Key
+    #: the set ids, or the frame generations, this row answers for
+    subjects: tuple[str, ...]
+    spec: str
+
+    @property
+    def match(self) -> Match:
+        """The rule kind that would override this row.
+
+        A set-keyed row is overridden by that set's own default; a generation-keyed
+        row by a game-wide ``frame`` rule. Both beat the baseline, because every rule
+        is tried before it (see :func:`resolve`).
+        """
+        return Match.SET if self.key is frames.Key.SET else Match.FRAME
+
+    @property
+    def scope(self) -> str:
+        return ", ".join(self.subjects)
+
+    def json(self) -> dict[str, Any]:
+        return {
+            "game": self.game,
+            "key": self.key.value,
+            "key_label": self.key.label,
+            "subjects": list(self.subjects),
+            "scope": self.scope,
+            "spec": self.spec,
+            "match": self.match.value,
+        }
+
+
+def shipped_rules(game: str | None = None) -> tuple[Shipped, ...]:
+    """The shipped baseline as rows, in the order :data:`~proxdex.frames.BASELINE`
+    is written — which is the order :func:`~proxdex.frames.baselines` offers them in,
+    so the first row for a set is the spec a card of it is actually fitted to.
+
+    One row per table *entry*, not per set: ``pokemon-wotc`` covers thirteen sets and
+    is one measurement, so thirteen rows would be one fact printed thirteen times.
+    """
+    out: list[Shipped] = []
+    for game_id, entries in frames.BASELINE.items():
+        if game is not None and game_id != game:
+            continue
+        for entry in entries:
+            if entry.sets:
+                out.append(
+                    Shipped(
+                        game=game_id,
+                        key=frames.Key.SET,
+                        subjects=tuple(entry.sets),
+                        spec=entry.spec.value,
+                    )
+                )
+            if entry.frames:
+                out.append(
+                    Shipped(
+                        game=game_id,
+                        key=frames.Key.GENERATION,
+                        subjects=tuple(f.value for f in entry.frames),
+                        spec=entry.spec.value,
+                    )
+                )
+    return tuple(out)
 
 
 # ---------------------------------------------------------------- resolution --
@@ -505,15 +606,15 @@ class Registry:
     def get(self, spec_id: str | None) -> FrameGuide | None:
         return self.specs.get(frames.clean_id(spec_id)) if spec_id else None
 
-    def choices(self, game: GameId | None = None) -> list[FrameGuide]:
+    def choices(self, game: str | None = None) -> list[FrameGuide]:
         """Specs selectable for ``game`` — its own, plus the game-agnostic ones."""
         return [
             s
             for s in self.specs.values()
-            if s.game is None or game is None or s.game is game
+            if s.game is None or game is None or s.game == game
         ]
 
-    def for_set(self, game: GameId, set_id: str) -> list[Rule]:
+    def for_set(self, game: str, set_id: str) -> list[Rule]:
         """Every rule that could claim a card of this set, **most specific first**.
 
         Four bands, in order: this set's exceptions, the game's exceptions, this
@@ -545,7 +646,7 @@ def resolve(
     reg: Registry,
     card_id: str,
     set_id: str,
-    game: GameId = games.DEFAULT,
+    game: str = games.DEFAULT,
     *,
     override: str | None = None,
     pin: str | None = None,
@@ -822,7 +923,7 @@ def write_rules(root: Path, rules: Iterable[Rule], *, counter: int = 0) -> Path:
 def assign(
     root: Path,
     spec_id: str,
-    game: GameId,
+    game: str,
     set_id: str,
     match: Match,
     value: str = "",
@@ -835,24 +936,31 @@ def assign(
     edges in every set that ever printed one, and enumerating those sets would be a
     list that goes stale with every release. Global rules lose to set-specific ones
     of the same kind, so a set can always overrule.
+
+    With :attr:`Match.SET` that is **one border for the whole game**, and it used to be
+    refused here on the grounds that it "would claim every card of the game, which is
+    what the game's own default spec already is". Both halves of that stopped being
+    true: the per-game fallback spec was deleted (an unmeasured printing resolves to
+    :attr:`Via.NONE` and refuses to be bordered, rather than being reshaped to somebody
+    else's numbers), and a game a *library* defines has one border and any number of
+    declared sets — so the refusal left the commonest case to be written out one set at
+    a time and silently unanswered on the next set added. Nothing else needed changing
+    for it: :meth:`Registry.for_set` already sorted a game-wide default into the last
+    of its four bands, and ``inventory`` already counted one as coverage for every set
+    and generation of the game.
     """
     reg = load(root)
+    known_games = games.load(root)
     spec = reg.get(spec_id)
     if spec is None:
         known = ", ".join(sorted(reg.specs)) or "none"
         raise ProxdexError(f"no frame spec named '{spec_id}'. Known: {known}")
-    if spec.game is not None and spec.game is not game:
+    if spec.game is not None and spec.game != game:
         raise ProxdexError(
-            f"'{spec.id}' describes {games.get(spec.game).name} frames, so it "
-            f"cannot be assigned to a {games.get(game).name} set"
+            f"'{spec.id}' describes {known_games.name_of(spec.game)} frames, so it "
+            f"cannot be assigned to a {known_games.name_of(game)} set"
         )
     sid = set_id.strip().lower()
-    if not sid and match is Match.SET:
-        raise ProxdexError(
-            "a whole-set rule with no set would claim every card of "
-            f"{games.get(game).name}, which is what the game's own default spec "
-            "already is. Name a set, or match on something narrower"
-        )
     if match.takes_value and not value.strip():
         raise ProxdexError(f"matching by {match.label} needs a value (e.g. 188-216)")
     if match is Match.NUMBERS and not _valid_ranges(value):
@@ -881,7 +989,7 @@ def assign(
         (
             r
             for r in existing
-            if r.game is game
+            if r.game == game
             and r.set_id.lower() == sid
             and r.match is match
             and r.value.strip().lower() == value.strip().lower()
@@ -928,7 +1036,7 @@ def _valid_ranges(value: str) -> bool:
 def spec(
     spec_id: str,
     name: str,
-    game: GameId | None,
+    game: str | None,
     mm: tuple[float, float, float, float],
     *,
     oversized: bool = False,
@@ -1085,6 +1193,8 @@ def json_registry(reg: Registry) -> dict[str, Any]:
             for s in reg.specs.values()
         ],
         "rules": [r.json() for r in reg.rules],
+        # the baseline, shown rather than stored — see `Shipped`
+        "shipped_rules": [s.json() for s in shipped_rules()],
         "matches": [
             {
                 "id": m.value,

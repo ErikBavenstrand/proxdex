@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Final
 from cardbleed import Edges, Params, bleed_card
 from cardbleed import FileError as _CardbleedError
 from cardbleed.geometry import Amount, FitPlan, solve_fit
+from PIL import Image
 
 from proxdex.errors import FileError
 
@@ -437,6 +438,61 @@ def _pct(fracs: Fracs) -> Edges:
     )
 
 
+def by_resize(guide: FrameGuide, plan: FitPlan) -> bool:
+    """Can this fit be done by resizing alone — no border synthesized at all?
+
+    **A zero target with the stretch on is pure geometry.** All four target borders
+    being 0 means the card has no border, and with the stretch the trim comes out at
+    exactly the marked art's own stretched size (`solve_fit` shaves the marks away and
+    adds nothing), so the whole operation is: crop to the marks, resize to the trim.
+    Nothing has to be invented — and cardbleed must therefore not be asked to.
+
+    That is not a micro-optimisation, it is the fix for a visible defect. Measured on a
+    card whose art reaches all four edges, marks at 0, target 0/0/0/0, stretch on: the
+    fit landed at the right size (600×840, aspect exact) and matched a pure resize
+    everywhere *except* the top rows and left columns, where **109 pixels differed by up
+    to a full 255 levels**. cardbleed runs its synthesis pass regardless of whether it
+    has any area to fill, and that pass rewrites the outermost pixels. On a flat test
+    colour it is invisible; on a real card it is a smeared line down two edges.
+
+    Deliberately gated on :attr:`FrameGuide.frameless` rather than on
+    :func:`extends` alone. A *bordered* card whose marks already exceed its target also
+    invents nothing, and could take this path — but there cardbleed is additionally
+    squaring die-cut corners, which is real work on a real border, so changing those
+    pixels is a separate decision from fixing this one.
+
+    With the stretch **off** a zero target does need invention: the trim cannot match
+    the art's aspect, so border is extended to reach it. That is the caller's choice to
+    make and this returns ``False`` for it.
+    """
+    return guide.frameless and not extends(plan)
+
+
+def reshape_only(src: Path, dst: Path, inner: Fracs, plan: FitPlan) -> None:
+    """Crop to the marks and resize to the trim — the whole of a no-invention fit.
+
+    The one path that produces a stage image without going through cardbleed, taken
+    only where :func:`by_resize` says there is nothing to synthesize. Lanczos, because
+    this is the same 1-2% resample every other stage uses; the mode is left alone, so a
+    scan with die-cut corners still reaches ``cli._flatten_filed`` with its alpha and
+    gets filled from the card's own border exactly as a cardbleed-written file does.
+    """
+    top, right, bottom, left = inner
+    with Image.open(src) as im:
+        w, h = im.size
+        box = (
+            round(left * w),
+            round(top * h),
+            w - round(right * w),
+            h - round(bottom * h),
+        )
+        art = im.crop(box)
+        out = art.resize(
+            (round(plan.trim_w), round(plan.trim_h)), Image.Resampling.LANCZOS
+        )
+        out.save(dst)
+
+
 def fit_plan(
     w: int,
     h: int,
@@ -445,22 +501,44 @@ def fit_plan(
     trim: Trim,
     *,
     stretch: bool,
+    what: str = "",
 ) -> FitPlan:
     """Preview the reshape (for dry-run / the readout) without writing.
 
     ``inner`` = current border per edge as image fractions [top, right,
     bottom, left]; ``guide.inset`` = the era's target borders as card fractions.
+
+    A reading that cannot be fitted is a :class:`FileError` — reported, that card
+    skipped, the batch carries on — for the same reason :func:`grow` converts one:
+    ``inner`` is a *measurement*, so ``--inner-top 4`` for a fraction meant as ``0.04``
+    is an ordinary slip, and cardbleed's own ``FileError`` reaching the top of the
+    program spelled it as thirty lines of stack ending in "border marks leave no inner
+    frame". The UI cannot send this (Run stays shut until a fit solves), which is
+    precisely why the CLI was the path where it showed.
+
+    ``what`` is the card id, for the same reason :func:`proxdex.sources._get` takes
+    one: ``cli._each`` prints the message verbatim, so a skip that does not name its
+    card leaves you unable to tell which of fifty to look at.
     """
-    return solve_fit(
-        w,
-        h,
-        _pct(inner),
-        _pct(guide.inset),
-        trim[0],
-        trim[1],
-        stretch=stretch,
-        crop=True,
-    )
+    try:
+        return solve_fit(
+            w,
+            h,
+            _pct(inner),
+            _pct(guide.inset),
+            trim[0],
+            trim[1],
+            stretch=stretch,
+            crop=True,
+        )
+    except _CardbleedError as exc:
+        top, right, bottom, left = inner
+        raise FileError(
+            f"{f'{what}: ' if what else ''}cannot fit a border at "
+            f"{top:.4g} / {right:.4g} / {bottom:.4g} / "
+            f"{left:.4g} against {guide.id}: {exc} (the inner edges are image "
+            "*fractions* — 0.04, not 4)"
+        ) from exc
 
 
 def fit(
@@ -478,6 +556,9 @@ def fit(
     ``tune`` overrides how the *added* border is synthesized. It changes no geometry, so
     a tuned fit lands on exactly the same trim and the same border widths as an untuned
     one — which is why :func:`fit_plan` needs none of it and the readout is unaffected.
+
+    Where the fit invents nothing at all, :func:`reshape_only` does the job instead and
+    this is never reached — see :func:`by_resize`.
     """
     _run(
         src,

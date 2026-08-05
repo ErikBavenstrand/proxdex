@@ -53,6 +53,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
+from proxdex import games
 from proxdex.games import (
     CARD_H_MM,
     CARD_W_MM,
@@ -106,7 +107,7 @@ class FrameGuide:
     id: str
     name: str
     #: the game this spec describes; None = applies to any game
-    game: GameId | None
+    game: str | None
     #: inner border edge inset as card fractions, [top, right, bottom, left]
     inset: tuple[float, float, float, float]
     #: this spec describes an **oversized** card (89×127mm) rather than the standard
@@ -149,7 +150,7 @@ class FrameGuide:
         return {
             "id": self.id,
             "name": self.name,
-            "game": self.game.value if self.game else None,
+            "game": self.game,
             "inset": [round(v, 6) for v in self.inset],
             "oversized": self.oversized,
         }
@@ -209,7 +210,7 @@ _mm = mm_to_inset  # the name this module used before the specs split
 _POKEMON_WOTC = FrameGuide(
     id=GuideId.POKEMON_WOTC.value,
     name="Pokémon · WOTC vintage (Base-Neo Destiny)",
-    game=GameId.POKEMON,
+    game=GameId.POKEMON.value,
     inset=_mm(3.45, 3.15, 3.45, 3.15),
 )
 
@@ -246,7 +247,7 @@ _POKEMON_WOTC = FrameGuide(
 _POKEMON_ECARD = FrameGuide(
     id=GuideId.POKEMON_ECARD.value,
     name="Pokémon · e-Card (Expedition-Skyridge)",
-    game=GameId.POKEMON,
+    game=GameId.POKEMON.value,
     # [top, right, bottom, left] — the two wide edges carry the e-Reader dot code
     inset=(0.035093, 0.051003, 0.076083, 0.112689),
 )
@@ -291,7 +292,7 @@ _POKEMON_ECARD = FrameGuide(
 _POKEMON_ECARD_DEEP_TOP = FrameGuide(
     id=GuideId.POKEMON_ECARD_DEEP_TOP.value,
     name="Pokémon · e-Card, deep top (Expedition-Skyridge)",
-    game=GameId.POKEMON,
+    game=GameId.POKEMON.value,
     # [top, right, bottom, left] — top/right derived to hold the measured sums,
     # left/bottom shared with `pokemon-ecard`
     inset=(0.102379, 0.041157, 0.076083, 0.112689),
@@ -330,7 +331,7 @@ _POKEMON_ECARD_DEEP_TOP = FrameGuide(
 _POKEMON_ECARD_EX = FrameGuide(
     id=GuideId.POKEMON_ECARD_EX.value,
     name="Pokémon · e-Card, ex era (Nintendo Black Star Promos)",
-    game=GameId.POKEMON,
+    game=GameId.POKEMON.value,
     # [top, right, bottom, left] — only the bottom carries the e-Reader dot code
     inset=(0.036663, 0.036754, 0.067624, 0.043397),
 )
@@ -362,7 +363,7 @@ _POKEMON_EX_PLAIN = FrameGuide(
     # ex series from `ex5` on at this spec as their *only* frame, so a name saying
     # which set it was read off would read as which sets it describes.
     name="Pokémon · ex era, no dot code",
-    game=GameId.POKEMON,
+    game=GameId.POKEMON.value,
     # [top, right, bottom, left] — 23px all round, of a 554×769 file
     inset=(0.029909, 0.041516, 0.029909, 0.041516),
 )
@@ -424,7 +425,7 @@ _POKEMON_EX_PLAIN = FrameGuide(
 _MTG_1993 = FrameGuide(
     id=GuideId.MTG_1993.value,
     name="MTG · 1993 frame (Arabian Nights-4th Edition)",
-    game=GameId.MTG,
+    game=GameId.MTG.value,
     inset=(32 / 1040, 29 / 745, 32 / 1040, 29 / 745),
 )
 
@@ -435,7 +436,7 @@ _MTG_1993 = FrameGuide(
 _MTG_1993_ALPHA = FrameGuide(
     id=GuideId.MTG_1993_ALPHA.value,
     name="MTG · 1993 frame (Alpha, Beta, Collectors' Edition)",
-    game=GameId.MTG,
+    game=GameId.MTG.value,
     inset=(32 / 1040, 23 / 745, 32 / 1040, 23 / 745),
 )
 
@@ -446,7 +447,7 @@ _MTG_1993_ALPHA = FrameGuide(
 _MTG_1993_UNLIMITED = FrameGuide(
     id=GuideId.MTG_1993_UNLIMITED.value,
     name="MTG · 1993 frame (Unlimited, Revised)",
-    game=GameId.MTG,
+    game=GameId.MTG.value,
     inset=(42.5 / 1040, 35 / 745, 42.5 / 1040, 35 / 745),
 )
 
@@ -465,7 +466,7 @@ _MTG_1993_UNLIMITED = FrameGuide(
 _MTG_1997 = FrameGuide(
     id=GuideId.MTG_1997.value,
     name="MTG · 1997 frame (Mirage-7th Edition)",
-    game=GameId.MTG,
+    game=GameId.MTG.value,
     inset=(40 / 1040, 36 / 744, 40 / 1040, 36 / 744),
 )
 
@@ -482,7 +483,7 @@ _MTG_1997 = FrameGuide(
 _MTG_2003 = FrameGuide(
     id=GuideId.MTG_2003.value,
     name="MTG · 2003 frame (8th Edition-M14, and the `future` frame)",
-    game=GameId.MTG,
+    game=GameId.MTG.value,
     inset=(35 / 1040, 35 / 745, 35 / 1040, 35 / 745),
 )
 
@@ -506,7 +507,7 @@ _MTG_2003 = FrameGuide(
 _MTG_M15 = FrameGuide(
     id=GuideId.MTG_M15.value,
     name="MTG · M15 frame (Magic 2015-present)",
-    game=GameId.MTG,
+    game=GameId.MTG.value,
     inset=(30 / 1040, 30 / 744, 30 / 1040, 30 / 744),
 )
 
@@ -527,7 +528,7 @@ _MTG_M15 = FrameGuide(
 _MTG_YELLOW_BAND = FrameGuide(
     id=GuideId.MTG_YELLOW_BAND.value,
     name="MTG · yellow box-topper band",
-    game=GameId.MTG,
+    game=GameId.MTG.value,
     inset=(44 / 1040, 50 / 744, 44 / 1040, 50 / 744),
 )
 
@@ -553,7 +554,7 @@ _MTG_YELLOW_BAND = FrameGuide(
 _MTG_OVERSIZED = FrameGuide(
     id=GuideId.MTG_OVERSIZED.value,
     name="MTG · oversized plane or scheme (89×127mm)",
-    game=GameId.MTG,
+    game=GameId.MTG.value,
     inset=(35 / 1490, 35 / 1040, 35 / 1490, 35 / 1040),
     oversized=True,
 )
@@ -567,7 +568,7 @@ _MTG_OVERSIZED = FrameGuide(
 _MTG_VANGUARD = FrameGuide(
     id=GuideId.MTG_VANGUARD.value,
     name="MTG · oversized Vanguard",
-    game=GameId.MTG,
+    game=GameId.MTG.value,
     inset=(63 / 1510, 48 / 1060, 63 / 1510, 48 / 1060),
     oversized=True,
 )
@@ -682,7 +683,7 @@ class Baseline:
 #: absent **deliberately** — such a printing resolves to no spec and refuses to be
 #: bordered, rather than being fitted to a number nobody took. Adding one is purely
 #: additive, since what it covers resolved to nothing before.
-BASELINE: dict[GameId, tuple[Baseline, ...]] = {
+BASELINE: dict[str, tuple[Baseline, ...]] = {
     # Pokémon ids come from pokemontcg.io, and are **exact** (see `Baseline.sets`).
     # Three eras are read and the rest are deliberately absent: WOTC's yellow border,
     # the e-Card series after it — asymmetric, because two edges carry the Nintendo
@@ -692,7 +693,7 @@ BASELINE: dict[GameId, tuple[Baseline, ...]] = {
     # `np`, which is a decision recorded as one. Everything from Diamond & Pearl
     # (2007-05) onward still resolves to nothing and refuses to be bordered — the honest
     # answer until somebody reads one.
-    GameId.POKEMON: (
+    GameId.POKEMON.value: (
         Baseline(
             GuideId.POKEMON_WOTC,
             # `basep`, the Wizards Black Star Promos, is here because the `"base"`
@@ -783,7 +784,7 @@ BASELINE: dict[GameId, tuple[Baseline, ...]] = {
             ),
         ),
     ),
-    GameId.MTG: (
+    GameId.MTG.value: (
         # **The 1993 frame is three bands, so the exceptions are keyed by set and the
         # majority by the generation.** Scryfall calls them all one frame; 26 sets read
         # by hand say otherwise, but they say it in three groups rather than 26 — so
@@ -839,7 +840,7 @@ class Key(StrEnum):
         return "sets" if self is Key.SET else "frame generations"
 
 
-def keyed(game: GameId) -> Key:
+def keyed(game: str) -> Key:
     """How this game's border was keyed — see :class:`Key`.
 
     A game with a generation entry is keyed on the generation *even though it may
@@ -851,7 +852,7 @@ def keyed(game: GameId) -> Key:
     return Key.GENERATION if any(e.frames for e in entries) else Key.SET
 
 
-def set_keys(game: GameId) -> dict[str, tuple[GuideId, ...]]:
+def set_keys(game: str) -> dict[str, tuple[GuideId, ...]]:
     """Every set id :data:`BASELINE` names for ``game``, and what it answers.
 
     The whole table for one game, keyed the way it is written — so a coverage report
@@ -865,7 +866,7 @@ def set_keys(game: GameId) -> dict[str, tuple[GuideId, ...]]:
     return {k: tuple(v) for k, v in out.items()}
 
 
-def generation_keys(game: GameId) -> dict[Generation, tuple[GuideId, ...]]:
+def generation_keys(game: str) -> dict[Generation, tuple[GuideId, ...]]:
     """Every frame generation :data:`BASELINE` answers for ``game``.
 
     Absent generations are *not* filled in: one that nobody has measured resolves to
@@ -879,7 +880,7 @@ def generation_keys(game: GameId) -> dict[Generation, tuple[GuideId, ...]]:
 
 
 def baselines(
-    set_id: str, game: GameId, traits: Mapping[str, str] | None = None
+    set_id: str, game: str, traits: Mapping[str, str] | None = None
 ) -> tuple[GuideId, ...]:
     """Every shipped spec that describes this card, most-likely first.
 
@@ -908,7 +909,7 @@ def baselines(
 
 
 def baseline(
-    set_id: str, game: GameId, traits: Mapping[str, str] | None = None
+    set_id: str, game: str, traits: Mapping[str, str] | None = None
 ) -> GuideId | None:
     """The one shipped spec a fit would use — the first of :func:`baselines`."""
     found = baselines(set_id, game, traits)
@@ -953,8 +954,12 @@ def _four(value: Any) -> tuple[float, float, float, float]:
     return (clipped[0], clipped[1], clipped[2], clipped[3])
 
 
-def _game(value: Any) -> GameId | None:
-    try:
-        return GameId(str(value).strip().lower())
-    except ValueError:
-        return None
+def _game(value: Any) -> str | None:
+    """A game id out of a stored spec's JSON, or ``None`` for "any game".
+
+    Shape-validated rather than coerced into :class:`~proxdex.games.GameId`: a
+    library's own game is a legal answer here, so the closed enum would have made a
+    custom game's frame spec unreadable — silently, since a dropped ``game`` reads as
+    "applies to any game" and the spec would then be offered for every game at once.
+    """
+    return games.parse(value)

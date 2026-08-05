@@ -826,13 +826,44 @@ class TestGameWideRules:
         reg = specs.load(library.root)
         assert reg.for_set(MTG, "ltr")[0].set_id == "ltr"
 
-    def test_a_whole_set_rule_with_no_set_is_refused(self, library: Library) -> None:
-        """It would claim every card of the game, which is what the game's own
-        fallback spec already is — a rule that restates the default only adds a
-        place for the two to disagree."""
+    def test_a_whole_set_rule_with_no_set_is_one_border_for_the_game(
+        self, library: Library
+    ) -> None:
+        """**One border for a whole game**, and it used to be refused.
+
+        The refusal said such a rule "would claim every card of the game, which is
+        what the game's own default spec already is", and both halves stopped being
+        true: the per-game fallback spec was deleted (an unmeasured printing resolves
+        to `Via.NONE` and refuses to be bordered), and a game a *library* defines has
+        one border and any number of sets declared over time — so the refusal left the
+        commonest case to be written one set at a time and silently unanswered on the
+        next set added.
+
+        A set the rule has never heard of is the case that matters: `wild-9` resolves
+        here without anybody having mentioned `wild`, which is exactly what a rule per
+        set cannot do.
+        """
         add(library.root, "mtg-mine", MTG)
-        with pytest.raises(ProxdexError, match="every card"):
-            specs.assign(library.root, "mtg-mine", MTG, "", Match.SET)
+        rule = specs.assign(library.root, "mtg-mine", MTG, "", Match.SET)
+        assert rule.is_global
+        assert rule.is_default
+        reg = specs.load(library.root)
+        assert spec_of(specs.resolve(reg, "wild-9", "wild", MTG)) == "mtg-mine"
+
+    def test_a_game_wide_default_beats_the_shipped_baseline(
+        self, library: Library
+    ) -> None:
+        """A rule is more specific than the baseline, whichever band it is in —
+        every rule is tried before `frames.baselines`. Without this, a library saying
+        "all my Magic cards take these numbers" would still be overruled on the one
+        era proxdex happens to ship."""
+        add(library.root, "mtg-mine", MTG)
+        specs.assign(library.root, "mtg-mine", MTG, "", Match.SET)
+        found = specs.resolve(
+            specs.load(library.root), "lea-1", "lea", MTG, traits={"frame": "1993"}
+        )
+        assert spec_of(found) == "mtg-mine"
+        assert found.via is specs.Via.SET_DEFAULT
 
     def test_adding_a_set_default_does_not_delete_a_global_one(
         self, library: Library
@@ -845,6 +876,79 @@ class TestGameWideRules:
         specs.assign(library.root, "mtg-extended", MTG, "", Match.EFFECT, "extendedart")
         specs.assign(library.root, "mtg-mine", MTG, "ltr", Match.SET)
         assert len(specs.load(library.root).rules) == 2
+
+
+class TestTheShippedRulesAreVisible:
+    """`specs.shipped_rules` — the baseline, rendered as the rules it is.
+
+    `frames.BASELINE` decides the border of thirteen Pokémon sets and five Magic frame
+    generations, and it was the one input to a fit that no screen showed: the specs are
+    listed, a library's own rules are listed, the resolution names its `Via`, and an
+    empty Rules tab therefore read as "nothing decides these borders". It is *shown*
+    rather than copied into `frames/rules.json` — a copy would be frozen at the version
+    that wrote it, and would not learn the next era somebody measures.
+
+    So what has to hold is that the rows describe the same answer `resolve` gives, and
+    that the override each row offers really does win.
+    """
+
+    def test_every_row_names_a_spec_a_fresh_library_has(self, library: Library) -> None:
+        """These are offered as the spec of a pre-filled rule, so a row naming
+        something not in the registry would offer a rule that cannot be saved."""
+        reg = specs.load(library.root)
+        assert specs.shipped_rules()
+        for row in specs.shipped_rules():
+            assert reg.get(row.spec) is not None, row
+
+    def test_nothing_is_stored_in_the_library(self, library: Library) -> None:
+        """The whole point of showing rather than materializing."""
+        assert specs.shipped_rules()
+        assert specs.load(library.root).rules == ()
+        assert not specs.rules_path(library.root).exists()
+
+    def test_a_row_is_one_baseline_entry_keyed_one_way(self) -> None:
+        """One row per entry, not per set: `pokemon-wotc` covers thirteen sets and is
+        one measurement, so thirteen rows would print one fact thirteen times."""
+        entries = sum(len(v) for v in frames.BASELINE.values())
+        rows = specs.shipped_rules()
+        assert len(rows) == entries  # every entry keys exactly one way — pinned above
+        wotc = next(r for r in rows if r.spec == "pokemon-wotc")
+        assert wotc.key is frames.Key.SET
+        assert "base1" in wotc.subjects
+        assert len(wotc.subjects) > 1
+
+    def test_the_first_row_for_a_set_is_the_spec_a_card_of_it_gets(self) -> None:
+        """The order is `BASELINE`'s, which is the order `baselines` offers in — so
+        the row a reader sees first is the one their card is really fitted to, and the
+        e-Card rows do not read as two contradictory claims."""
+        rows = [
+            r
+            for r in specs.shipped_rules(POKEMON)
+            if r.key is frames.Key.SET and "ecard1" in r.subjects
+        ]
+        assert [r.spec for r in rows] == list(frames.baselines("ecard1", POKEMON))
+
+    def test_the_override_it_offers_is_the_one_that_wins(
+        self, library: Library
+    ) -> None:
+        """`Shipped.match` is what the UI's Override button fills the form with, so a
+        rule of that kind has to beat the row it came from. A set-keyed row is
+        overridden by that set's own default and a generation-keyed row by a game-wide
+        `frame` rule — both are rules, and every rule is tried before the baseline."""
+        add(library.root, "mtg-mine", MTG)
+        by_generation = next(
+            r
+            for r in specs.shipped_rules(MTG)
+            if r.key is frames.Key.GENERATION and "1993" in r.subjects
+        )
+        assert by_generation.match is Match.FRAME
+        specs.assign(library.root, "mtg-mine", MTG, "", by_generation.match, "1993")
+        found = specs.resolve(
+            specs.load(library.root), "arn-1", "arn", MTG, traits={"frame": "1993"}
+        )
+        assert spec_of(found) == "mtg-mine"
+        # and the row it overrode is still offered, so the choice stays visible
+        assert by_generation.spec in {c.spec.id for c in found.alternatives}
 
 
 class TestFrameTreatments:

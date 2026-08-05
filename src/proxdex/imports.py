@@ -23,7 +23,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from proxdex.games import GameId
+from proxdex import games
 from proxdex.library import (
     FRONT,
     Library,
@@ -60,6 +60,13 @@ class Disposition(StrEnum):
     NO_SIDE = "no-side"  # the card has no such face
     UNMATCHED = "unmatched"  # no card id in the name and none assigned
     NOT_IMAGE = "not-image"  # not a card image by its suffix
+    #: a custom game, and the id's set is not one that game declares. Only reachable
+    #: for a game whose sets are *declared* — the two built-in games have no such
+    #: list, and the provider lookup is what proves the id there. It exists because
+    #: the alternative is worse than an error: with no provider to contradict a typo,
+    #: `mystet-4` would file happily into a brand-new set called `mystet` and read as
+    #: success, and nothing downstream would ever mention it again.
+    UNKNOWN_SET = "unknown-set"
 
     @property
     def writes(self) -> bool:
@@ -78,6 +85,7 @@ class Disposition(StrEnum):
             Disposition.NO_SIDE,
             Disposition.UNMATCHED,
             Disposition.NOT_IMAGE,
+            Disposition.UNKNOWN_SET,
         }
 
 
@@ -105,9 +113,18 @@ class Item:
 
     name: str  # the file, as a path or a bare name
     id: str | None = None
-    game: GameId | None = None
+    game: str | None = None
     stage: Stage | None = None
     face: int | None = None  # 0-based, like everywhere inside proxdex
+    #: what to call the card, for a **custom** game only — there is no provider to
+    #: ask, and the name becomes part of the folder name. Empty means the card id,
+    #: which is a poor label but an honest one. Ignored for the built-in games,
+    #: whose names come from the lookup that proves the id exists.
+    card_name: str = ""
+    #: how many printed sides a card this run creates has, for a custom game. One
+    #: unless said otherwise; two makes a double-faced card whose second side gets
+    #: its own pipeline, exactly as a transform card's does.
+    faces: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +143,7 @@ class Assignment:
     guessed_id: bool
     id: str | None = None
     card_name: str = ""
-    game: GameId | None = None
+    game: str | None = None
     dest: Path | None = None
     discards: tuple[Stage, ...] = ()
     reason: str = ""
@@ -141,7 +158,7 @@ class Assignment:
             "disposition": self.disposition.value,
             "id": self.id,
             "card_name": self.card_name,
-            "game": self.game.value if self.game else None,
+            "game": self.game or None,
             "stage": self.stage.label,
             "face": self.face + 1,  # 1-based at the boundary, like `--face`
             "guessed_id": self.guessed_id,
@@ -278,8 +295,11 @@ def plan(
     #: slot is a folder's most ordinary hazard (``art.png`` beside ``art (1).png``)
     #: and the loser used to be overwritten in silence.
     claimed: dict[_Slot, int] = {}
+    # loaded once for the whole run rather than per file: it reads `games/*.json`,
+    # and a two-hundred-file folder would otherwise re-read them two hundred times
+    known = games.load(lib.root)
     for index, item in enumerate(items):
-        found = _assign(lib, item, on_existing)
+        found = _assign(lib, item, on_existing, known)
         slot: _Slot | None = (
             (found.id, int(found.stage), found.face)
             if found.disposition.writes and found.id is not None
@@ -301,7 +321,7 @@ def plan(
 
 
 def _assign(  # noqa: PLR0911 (a decision table: one return per disposition)
-    lib: Library, item: Item, on_existing: OnExisting
+    lib: Library, item: Item, on_existing: OnExisting, known: games.Registry
 ) -> Assignment:
     """One file's destination, ignoring the rest of the run."""
     stem = Path(item.name).stem
@@ -325,13 +345,44 @@ def _assign(  # noqa: PLR0911 (a decision table: one return per disposition)
     card = lib.find(cid)
     if card is None:
         if guessed:
+            # the way out differs by game, and naming the wrong one is worse than
+            # naming none: `fetch` cannot help a game with no provider
+            gid = item.game or lib.default_game
+            known_game = known.get(gid)
+            fix = (
+                "confirm the id"
+                if known_game is not None and known_game.custom
+                else "confirm the id, or fetch it first"
+            )
             return at(
                 disposition=Disposition.MISSING,
-                reason=f"no card folder for {cid} — confirm the id, or fetch it first",
+                reason=f"no card folder for {cid} — {fix}",
             )
         # the id was given, so the import may look it up and make the folder;
         # what that folder is called is not knowable without the lookup
-        return at(disposition=Disposition.CREATE, game=item.game or lib.default_game)
+        gid = item.game or lib.default_game
+        found = known.get(gid)
+        if found is not None and found.custom:
+            # **A custom game has no provider to contradict a typo**, which is the
+            # whole reason its sets are declared. For the built-in games the lookup
+            # is the proof the id exists (and the placeholder check backs it up); here
+            # nothing would ever object, so `mystet-4` would create a set called
+            # `mystet` holding one card and read as a clean import.
+            set_id = cid.rsplit("-", 1)[0]
+            if found.set_of(set_id) is None:
+                declared = ", ".join(one.id for one in found.sets) or "none yet"
+                return at(
+                    disposition=Disposition.UNKNOWN_SET,
+                    game=gid,
+                    reason=f"{found.name} has no set '{set_id}' — declared: {declared}",
+                )
+            return at(
+                disposition=Disposition.CREATE,
+                game=gid,
+                # the set's name is known without a lookup, so the destination is too
+                card_name=item.card_name,
+            )
+        return at(disposition=Disposition.CREATE, game=gid)
 
     if face not in card.faces:
         return at(

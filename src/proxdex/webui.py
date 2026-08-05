@@ -47,6 +47,7 @@ from proxdex import (
     bleed,
     browse,
     calibrate,
+    config,
     doctor,
     frames,
     games,
@@ -63,9 +64,8 @@ from proxdex import (
     steps,
 )
 from proxdex import sheet as sheet_mod
-from proxdex.config import Config, Faces, Orientation, PageSize
+from proxdex.config import Config, Faces
 from proxdex.errors import ConfigError, FileError, ProxdexError
-from proxdex.games import GameId
 from proxdex.library import FRONT, STAGE_BY_LABEL, Card, Library, Stage, Step
 
 _STAGES = steps.STAGES
@@ -117,6 +117,17 @@ SpecName = Annotated[
 ]
 #: a rule id, as `specs.Rule` numbers them
 RuleName = Annotated[str, PathParam(pattern=r"^r\d{1,6}$")]
+#: a game id. Open for the same reason `SpecName` is — a library defines its own
+#: games — so what is pinned here is the *shape*, since it reaches the CLI as argv
+#: and is written into a `.game` marker. Whether a game by that id exists is the
+#: CLI's answer (`cli._game`), which is the one place that list is read, so the API
+#: cannot come to a different verdict than the command it shells out to.
+GameName = Annotated[str, Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=32)]
+#: a set id of a custom game. Looser than a game id (it is half of a card id) and
+#: pinned here for the same reason: it reaches the CLI as argv and names a folder.
+SetName = Annotated[
+    str, PathParam(pattern=r"^[a-z0-9]+(?:[-.][a-z0-9]+)*$", max_length=24)
+]
 Side = Annotated[int, Field(ge=1, le=_MAX_FACE)]
 #: a stage by the name every other surface spells it with. :class:`Stage` is an
 #: IntEnum, so the closed set of *labels* has to be written out for a request
@@ -197,7 +208,7 @@ class KnownCard(Body):
 
 class FetchBody(Body):
     ids: list[CardId] = Field(min_length=1, max_length=512)
-    game: GameId | None = None
+    game: GameName | None = None
     face: Side | None = None
     #: also fetch the cards these are printed alongside — both meld halves and
     #: the melded card, the tokens they make
@@ -226,7 +237,7 @@ class SpecBody(Body):
 
     id: SpecName
     name: str = Field(default="", max_length=80)
-    game: GameId | None = None
+    game: GameName | None = None
     top: Annotated[float, Field(ge=0, le=20)]
     right: Annotated[float, Field(ge=0, le=20)]
     bottom: Annotated[float, Field(ge=0, le=20)]
@@ -252,7 +263,7 @@ class SpecBody(Body):
         if self.name:
             args += ["--name", self.name]
         if self.game is not None:
-            args += ["--game", self.game.value]
+            args += ["--game", self.game]
         if self.oversized:
             args.append("--oversized")
         return args
@@ -269,7 +280,7 @@ class RuleBody(Body):
     set: str = Field(default="", max_length=16, pattern=r"^[A-Za-z0-9]*$")
     match: specs.Match = specs.Match.SET
     value: str = Field(default="", max_length=200)
-    game: GameId | None = None
+    game: GameName | None = None
 
     def argv(self) -> list[str]:
         args = [
@@ -284,7 +295,7 @@ class RuleBody(Body):
         if self.value:
             args += ["--value", self.value]
         if self.game is not None:
-            args += ["--game", self.game.value]
+            args += ["--game", self.game]
         return args
 
 
@@ -319,14 +330,15 @@ class SheetBody(Body):
     #: which cards to impose, with copies. Empty means every card that is ready,
     #: exactly as `proxdex sheet <name>` with no ids does.
     cards: list[SheetCard] = Field(default_factory=list, max_length=512)
-    faces: Faces | None = None
-    page: PageSize | None = None
-    orientation: Orientation | None = None
-    dpi: Annotated[int, Field(ge=72, le=4800)] | None = None
-    cols: Annotated[int, Field(ge=1, le=12)] | None = None
-    rows: Annotated[int, Field(ge=1, le=12)] | None = None
-    bleed: Annotated[float, Field(ge=0, le=20)] | None = None
-    guides: bool | None = None
+    #: every page setting, keyed by its **config field name** and checked against
+    #: `Config.run_options(Run.SHEET)` — see :func:`_overrides_for`. One field rather
+    #: than one per setting, because there were eight named ones and twenty settings a
+    #: print run reads that no request could reach; a dict derived from the declaration
+    #: cannot fall behind it. An absent key means "use the library's setting", which is
+    #: the whole point: a run changes one number, it does not restate the config.
+    overrides: dict[str, str | float | bool | None] = Field(
+        default_factory=dict, max_length=64
+    )
     profile: str | None = Field(default=None, max_length=64)
     #: card backs, when they land on a different medium than the fronts. Empty or
     #: absent means "the same profile", which is the ordinary case.
@@ -334,27 +346,25 @@ class SheetBody(Body):
     notes: str = Field(default="", max_length=2000)
 
     def argv(self) -> list[str]:
-        """This run as CLI arguments — the one place the flags are spelled."""
+        """This run as CLI arguments — the one place the flags are spelled.
+
+        Spelled from `RunOption.flag`, so the browser cannot send an option the CLI
+        does not have. That is not a theoretical worry: it is the bug the step panels
+        already had, where a multi-word key was dashed in one place and not the other.
+        """
         args = [c.argv for c in self.cards]
-        args += ["--faces", (self.faces or Faces.FRONTS).value]
         if self.profile:
             args += ["--profile", self.profile]
         if self.back_profile:
             args += ["--back-profile", self.back_profile]
-        if self.page is not None:
-            args += ["--page", self.page.value]
-        if self.orientation is not None:
-            args += ["--orientation", self.orientation.value]
-        if self.dpi is not None:
-            args += ["--dpi", str(self.dpi)]
-        if self.cols is not None:
-            args += ["--cols", str(self.cols)]
-        if self.rows is not None:
-            args += ["--rows", str(self.rows)]
-        if self.bleed is not None:
-            args += ["--bleed", f"{self.bleed:g}"]
-        if self.guides is not None:
-            args.append("--guides" if self.guides else "--no-guides")
+        for opt in Config.run_options(config.Run.SHEET):
+            value = self.overrides.get(opt.key)
+            if value is None or value == "":
+                continue
+            if opt.kind is config.OptKind.BOOL:
+                args.append(f"--{opt.flag}" if value else f"--no-{opt.flag}")
+            else:
+                args += [f"--{opt.flag}", _flag_value(value)]
         if self.notes:
             args += ["--notes", self.notes]
         return args
@@ -371,15 +381,23 @@ class ImportItem(Body):
 
     name: str = Field(min_length=1, max_length=255)
     id: CardId | None = None
-    game: GameId | None = None
+    game: GameName | None = None
     stage: StageLabel | None = None
     face: Side | None = None
+    #: what to call the card, for a game with no provider. Ignored for the built-in
+    #: games, whose names come from the lookup that proves the id exists — so it is
+    #: sent for every row and only *means* anything for a custom one.
+    card_name: str = Field(default="", max_length=120)
+    #: how many printed sides a card this run creates has (a custom game only)
+    faces: Side = 1
 
     def item(self) -> imports.Item:
         return imports.Item(
             name=self.name,
             id=self.id,
             game=self.game,
+            card_name=self.card_name,
+            faces=self.faces,
             stage=STAGE_BY_LABEL[self.stage] if self.stage else None,
             face=self.face - 1 if self.face is not None else None,
         )
@@ -426,6 +444,42 @@ class RenameBody(Body):
     name: str = Field(min_length=1, max_length=48)
 
 
+class GameBody(Body):
+    """Define or edit a game of your own. Every field is optional on an edit."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=60)
+    id_example: str | None = Field(default=None, max_length=48)
+    notes: str | None = Field(default=None, max_length=8000)
+
+    def argv(self) -> list[str]:
+        args: list[str] = []
+        if self.name is not None:
+            args += ["--name", self.name]
+        if self.id_example is not None:
+            args += ["--id-example", self.id_example]
+        if self.notes is not None:
+            args += ["--notes", self.notes]
+        return args
+
+
+class GameSetBody(Body):
+    """One set of a custom game, as its owner declares it."""
+
+    name: str = Field(min_length=1, max_length=60)
+    total: Annotated[int, Field(ge=0, le=100_000)] = 0
+    #: free text, and deliberately not a `date`: a set whose release nobody recorded
+    #: keeps an empty string rather than acquiring a date pydantic invented
+    released: str = Field(default="", max_length=32)
+
+    def argv(self) -> list[str]:
+        args = ["--name", self.name]
+        if self.total:
+            args += ["--total", str(self.total)]
+        if self.released:
+            args += ["--released", self.released]
+        return args
+
+
 class RoundBody(Body):
     """Whether a calibration round feeds the fit."""
 
@@ -433,7 +487,7 @@ class RoundBody(Body):
 
 
 class BackBody(Body):
-    game: GameId | None = None
+    game: GameName | None = None
     url: str | None = Field(default=None, max_length=2048)
 
 
@@ -722,6 +776,13 @@ def create_app(lib: Library) -> FastAPI:
                 # Config field — so the settings screen never invents its own
                 if field in docs:
                     described[f"{name}.{key}"] = docs[field]
+        # **The one setting whose options are not knowable from the dataclass.**
+        # `library_game` used to be a `GameId`, so `_field_options` read them off the
+        # enum and the screen drew a dropdown for free. It is a plain name now — a
+        # library defines its own games — so the values come from *this library* and
+        # are injected here, which is the same thing `/api/meta` does for `--frame`.
+        # Without it the field silently became a free-text box you could typo.
+        options.setdefault("library.game", list(games.load(lib.root).ids))
         return {
             "root": str(lib.root),
             "sections": sections,
@@ -773,6 +834,14 @@ def create_app(lib: Library) -> FastAPI:
                     )
                 )
         for section, key, value in updates:
+            # An **optional** setting cleared is unset, and TOML spells unset by the key
+            # not being there — there is no `None` to write, so this removes it. Same
+            # rule `config set key=` follows, and the same distinction the sheet
+            # builder's controls draw between "clear this" and "store a blank".
+            if value is None:
+                if section in doc and key in doc[section]:
+                    del doc[section][key]
+                continue
             if section not in doc:
                 doc[section] = tomlkit.table()
             doc[section][key] = value
@@ -794,20 +863,17 @@ def create_app(lib: Library) -> FastAPI:
             "active_profile": cfg.print_profile,
             "active_back_profile": cfg.print_back_profile,
             "faces": [f.value for f in Faces],
-            "pages": [p.value for p in PageSize],
-            "orientations": [o.value for o in Orientation],
-            # what a sheet run defaults to, so the builder opens on this
-            # library's own settings instead of inventing its own
-            "sheet": {
-                "faces": cfg.sheet_faces.value,
-                "page": cfg.sheet_page.value,
-                "orientation": cfg.sheet_orientation.value,
-                "dpi": cfg.sheet_dpi,
-                "cols": cfg.sheet_cols,
-                "rows": cfg.sheet_rows,
-                "bleed": cfg.bleed_mm,
-                "guides": cfg.sheet_guides,
-            },
+            # **Every page setting a print run can override, described.** The sheet
+            # builder renders its controls from this and spells none of them itself —
+            # the same relationship the step panels have with `steps.py`, and the
+            # reason a setting becomes overridable on the page the moment
+            # `run=Run.SHEET` is added to it. `current` is *this library's* value,
+            # which is what a row shows as its default; an absent override means
+            # exactly that value, so the builder never has to send one.
+            "sheet_options": [
+                {**opt.json(), "current": _current_text(cfg, opt)}
+                for opt in Config.run_options(config.Run.SHEET)
+            ],
             "stages": [s.label for s in _STAGES],
             "steps": [s.value for s in Step],
             # the import vocabulary: what to do about a stage that already exists,
@@ -826,11 +892,21 @@ def create_app(lib: Library) -> FastAPI:
                 ],
                 "suffixes": sorted(imports.IMAGE_SUFFIXES),
             },
+            # every game this library has, its own included. `provider` is what a
+            # screen branches on: a game with none cannot be searched or browsed, so
+            # those screens offer only the games that can answer.
             "games": [
-                {"id": g.id.value, "name": g.name, "example": g.id_example}
-                for g in games.GAMES.values()
+                {
+                    "id": g.id,
+                    "name": g.name,
+                    "example": g.example,
+                    "provider": g.provider,
+                    "custom": g.custom,
+                    "sets": [one.json() for one in g.sets],
+                }
+                for g in games.load(lib.root).games
             ],
-            "default_game": lib.default_game.value,
+            "default_game": lib.default_game,
             "frames": [_guide_json(g) for g in specs.load(lib.root).specs.values()],
             # the print-kind vocabulary, so the UI names a layout the same way
             # the CLI does instead of keeping its own copy
@@ -895,7 +971,7 @@ def create_app(lib: Library) -> FastAPI:
                     "id": card.id,
                     "name": card.name.title(),
                     "set": card.set_id,
-                    "game": card.game.value,
+                    "game": card.game,
                     # one entry per printable side, front first. A single-faced
                     # card still has exactly one, so nothing has to special-case.
                     "faces": [
@@ -1009,16 +1085,31 @@ def create_app(lib: Library) -> FastAPI:
         if not _ID_OK.match(cid):
             return {"error": f"{cid}: not a card id"}
         card = lib.find(cid)
-        try:
-            detail = sources.details(
-                cid, Config.load(lib.root), card.game if card else None
+        mine = games.load(lib.root).get(card.game) if card else None
+        if card is not None and mine is not None and mine.custom:
+            # **A state, not an error.** A custom game has no provider, so asking one
+            # is the only part of this panel that cannot work — and reporting it as a
+            # failure would put a red box on every card of your own game forever. The
+            # card is described from what proxdex already knows instead: no fact groups
+            # and no outbound links, because those are the provider's and there is
+            # none. Same call `proxdex show` makes (`cli._detail`).
+            detail = sources.CardDetail(
+                meta=sources.local_meta(
+                    cid, mine, name=card.name.title(), faces=len(card.faces)
+                ),
+                source=mine.source,
             )
-        except (requests.RequestException, ProxdexError) as exc:
-            return {"error": str(exc)}
+        else:
+            try:
+                detail = sources.details(
+                    cid, Config.load(lib.root), card.game if card else None
+                )
+            except (requests.RequestException, ProxdexError) as exc:
+                return {"error": str(exc)}
         return {
             "id": detail.meta.id,
             "name": detail.meta.name,
-            "game": detail.meta.game.value,
+            "game": detail.meta.game,
             "set": detail.meta.set_name,
             "source": detail.source,
             "layout": detail.meta.layout.value,
@@ -1084,8 +1175,8 @@ def create_app(lib: Library) -> FastAPI:
             # third copy of the same fact could only ever be the wrong one
             "card_w_mm": trim_w,
             "card_h_mm": trim_h,
-            "game": card.game.value,
-            "game_name": games.get(card.game).name,
+            "game": card.game,
+            "game_name": games.load(lib.root).name_of(card.game),
             # frame-size guide: inner border inset [top,right,bottom,left], plus
             # how much to trust it — the UI warns on an unmeasured set.
             "guide": _guide_json(guide) if guide else None,
@@ -1117,11 +1208,11 @@ def create_app(lib: Library) -> FastAPI:
         for card in lib.cards():
             found = _resolution(reg, card)
             resolved.append((card.id, found))
-            key = (card.game.value, card.set_id)
+            key = (card.game, card.set_id)
             row = held.setdefault(
                 key,
                 {
-                    "game": card.game.value,
+                    "game": card.game,
                     "set": card.set_id,
                     "cards": 0,
                     "spec": found.spec.id if found.spec else "",
@@ -1164,15 +1255,16 @@ def create_app(lib: Library) -> FastAPI:
 
         Its own route rather than part of `/api/frames`, because it costs a provider
         request per game (the set list, cached a day) and the other three tabs must
-        not wait on one. Both games in one answer: "have we covered everything?" is a
+        not wait on one. Every game in one answer: "have we covered everything?" is a
         question about the whole of what proxdex can border, and asking it a game at a
-        time is how a gap in the one you were not looking at stays invisible.
+        time is how a gap in the one you were not looking at stays invisible. A custom
+        game is in it too, and costs no request at all — its sets are declared.
         """
         cfg = Config.load(lib.root)
         reg = specs.load(lib.root)
         held = browse.owned([card.set_id for card in lib.cards()])
         out: list[dict[str, Any]] = []
-        for game in GameId:
+        for game in games.load(lib.root).games:
             try:
                 out.append(inventory.coverage(game, cfg, reg, held).json())
             except (requests.RequestException, ProxdexError) as exc:
@@ -1180,7 +1272,7 @@ def create_app(lib: Library) -> FastAPI:
                 # the same reason a facet whose catalog request failed is dropped
                 out.append(
                     {
-                        "game": game.value,
+                        "game": game.id,
                         "error": f"could not list this game's sets (try again): {exc}",
                     }
                 )
@@ -1284,7 +1376,7 @@ def create_app(lib: Library) -> FastAPI:
         return {
             "id": r.id,
             "name": r.name,
-            "game": r.game.value,
+            "game": r.game,
             "set": r.set_name,
             "set_id": r.set_id,
             "year": r.year,
@@ -1386,7 +1478,7 @@ def create_app(lib: Library) -> FastAPI:
                     cid,
                     *_side(body.face),
                     "--game",
-                    GameId.POKEMON.value,
+                    games.GameId.POKEMON.value,
                     "--name",
                     k.name,
                 ]
@@ -1423,7 +1515,7 @@ def create_app(lib: Library) -> FastAPI:
             return {"ok": True, "log": ""}
         args = ["fetch", *ids, *_side(body.face)]
         if body.game is not None:
-            args += ["--game", body.game.value]
+            args += ["--game", body.game]
         if body.related:
             args.append("--related")
         return run_cli(args, watch=watch)
@@ -1443,8 +1535,10 @@ def create_app(lib: Library) -> FastAPI:
         file: Annotated[UploadFile, File()],
         cid: Annotated[str, Form(alias="id", pattern=_ID_OK.pattern)],
         stage: Annotated[StageLabel, Form()] = "original",
-        game: Annotated[GameId | None, Form()] = None,
+        game: Annotated[GameName | None, Form()] = None,
         face: Annotated[int | None, Form(ge=1, le=_MAX_FACE)] = None,
+        card_name: Annotated[str, Form(max_length=120)] = "",
+        faces: Annotated[int, Form(ge=1, le=_MAX_FACE)] = 1,
         on_existing: Annotated[imports.OnExisting, Form()] = (
             imports.OnExisting.OVERWRITE
         ),
@@ -1465,7 +1559,14 @@ def create_app(lib: Library) -> FastAPI:
                 "--move",
             ]
             if game is not None:
-                args += ["--game", game.value]
+                args += ["--game", game]
+            # a custom game has no lookup to name the card or count its sides, so
+            # both come from the row. Sent only when they say something, so the argv
+            # for every ordinary import is byte-for-byte what it was.
+            if card_name:
+                args += ["--card-name", card_name]
+            if faces > 1:
+                args += ["--faces", str(faces)]
             return run_cli([*args, *_side(face)])
         finally:
             tmp.unlink(missing_ok=True)
@@ -1516,7 +1617,7 @@ def create_app(lib: Library) -> FastAPI:
 
     # ---- produce -----------------------------------------------------------
     @app.post("/api/sheet")
-    def api_sheet(body: SheetBody) -> dict[str, Any]:
+    def api_sheet(body: SheetBody) -> Any:
         """Impose the run, and say which PDF came out of it.
 
         ``--no-open`` is not a preference here, it is a correction: `sheet`'s
@@ -1524,6 +1625,8 @@ def create_app(lib: Library) -> FastAPI:
         server, which is not the machine you are looking at. The browser's own
         equivalent is the link this returns — see `_written`.
         """
+        if bad := _bad_override(body):
+            return _bad(bad)
         res = run_cli(["sheet", body.name, *body.argv(), "--no-open"])
         if res["ok"]:
             res["batch"] = _written()
@@ -1560,6 +1663,8 @@ def create_app(lib: Library) -> FastAPI:
         comes from `sheet.plan`, the same function the real run uses, so the page
         count the builder promises is the page count you get.
         """
+        if bad := _bad_override(body):
+            return _bad(bad)
         cfg = Config.load(lib.root)
         _apply_overrides(cfg, body)
         if body.cards:
@@ -1612,13 +1717,15 @@ def create_app(lib: Library) -> FastAPI:
     @app.post("/api/back")
     def api_back(body: BackBody) -> dict[str, Any]:
         game = body.game or lib.default_game
-        args = ["back", "--game", game.value]
+        known = games.load(lib.root)
+        found = known.get(game)
+        args = ["back", "--game", game]
         if body.url:
             return run_cli([*args, "--url", body.url])
-        if games.get(game).back_url is None:
+        if found is None or found.back_url is None:
             return {
                 "ok": False,
-                "log": f"no downloadable back for {games.get(game).name} — "
+                "log": f"no downloadable back for {known.name_of(game)} — "
                 "upload your own scan",
             }
         return run_cli(args)
@@ -1631,7 +1738,7 @@ def create_app(lib: Library) -> FastAPI:
         tmp = _spool(file)
         want = games.coerce(game, lib.default_game)
         try:
-            return run_cli(["back", "--game", want.value, "--file", str(tmp)])
+            return run_cli(["back", "--game", want, "--file", str(tmp)])
         finally:
             tmp.unlink(missing_ok=True)
 
@@ -1654,6 +1761,58 @@ def create_app(lib: Library) -> FastAPI:
         if path.suffix != ".pdf" or not path.is_file():
             return Response(status_code=404)
         return FileResponse(path, media_type="application/pdf")
+
+    # ---- games -------------------------------------------------------------
+    # A game a library defined is a file in it, like a profile — so reads are
+    # computed here and every write shells out, which is what keeps `game add` the
+    # only implementation of what defining a game means.
+    @app.get("/api/games")
+    def api_games() -> dict[str, Any]:
+        cfg = Config.load(lib.root)
+        known = games.load(lib.root)
+        held: dict[str, int] = {}
+        for card in lib.cards():
+            held[card.game] = held.get(card.game, 0) + 1
+        return {
+            "default": cfg.library_game,
+            # the same broken reference `profiles.dangling` and `frames check`
+            # report: a name in a text file outliving the thing it names
+            "dangling": games.dangling(lib.root, cfg),
+            "reserved": sorted(games.RESERVED),
+            # named rather than swallowed — a game silently absent takes its cards'
+            # frame specs with it, and they then refuse to border for no stated reason
+            "unreadable": list(known.unreadable),
+            "games": [
+                {**one.json(), "cards": held.get(one.id, 0)} for one in known.games
+            ],
+        }
+
+    @app.post("/api/games/{game_id}")
+    def api_game_new(game_id: GameName, body: GameBody) -> Any:
+        if not body.name:
+            return _bad("a game needs a name")
+        return run_cli(["game", "add", game_id, *body.argv()])
+
+    @app.patch("/api/games/{game_id}")
+    def api_game_edit(game_id: GameName, body: GameBody) -> dict[str, Any]:
+        args = body.argv()
+        if not args:
+            return {"ok": True, "log": "nothing to change"}
+        return run_cli(["game", "edit", game_id, *args])
+
+    @app.delete("/api/games/{game_id}")
+    def api_game_rm(game_id: GameName) -> dict[str, Any]:
+        return run_cli(["game", "rm", game_id, "--yes"])
+
+    @app.post("/api/games/{game_id}/sets/{set_id}")
+    def api_game_set(
+        game_id: GameName, set_id: SetName, body: GameSetBody
+    ) -> dict[str, Any]:
+        return run_cli(["game", "set", "add", game_id, set_id, *body.argv()])
+
+    @app.delete("/api/games/{game_id}/sets/{set_id}")
+    def api_game_set_rm(game_id: GameName, set_id: SetName) -> dict[str, Any]:
+        return run_cli(["game", "set", "rm", game_id, set_id, "--yes"])
 
     # ---- print profiles ----------------------------------------------------
     # Reads are computed here (a profile is a file in the library, like a card);
@@ -1869,35 +2028,61 @@ def _field_options() -> dict[str, list[str]]:
     """
     out: dict[str, list[str]] = {}
     for name, hint in get_type_hints(Config).items():
-        if isinstance(hint, type) and issubclass(hint, Enum):
-            out[name] = [str(m.value) for m in hint]
-        elif get_origin(hint) is Literal:
-            out[name] = [str(a) for a in get_args(hint)]
+        # an optional setting is still a closed set — `GuideStyle | None` must draw the
+        # same dropdown `GuideStyle` does, or the backs' guide style silently becomes a
+        # free-text box you can typo
+        bare = config.optional_of(hint) or hint
+        if isinstance(bare, type) and issubclass(bare, Enum):
+            out[name] = [str(m.value) for m in bare]
+        elif get_origin(bare) is Literal:
+            out[name] = [str(a) for a in get_args(bare)]
     return out
+
+
+def _current_text(cfg: Config, opt: config.RunOption) -> str:
+    """This library's value for one overridable setting, as a control reads it.
+
+    The *library's*, not the dataclass' — a row's "default" has to be what leaving it
+    alone will actually do, and a library that set `[sheet] cols = 4` would otherwise
+    be told its default was 3 while printing 4.
+    """
+    value = getattr(cfg, opt.key)
+    # an optional setting left unset has no text of its own — the control shows what
+    # unset *does* (`RunOption.auto`) instead, so this must not offer the word "None"
+    if value is None:
+        return ""
+    if isinstance(value, Enum):
+        return str(value.value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
+def _flag_value(value: str | float | bool) -> str:
+    """One override as the CLI reads it. ``%g`` for a float, so 1.5 stays 1.5 and
+    8.0 becomes 8 rather than reaching argv as ``8.0`` for an int-typed flag."""
+    if isinstance(value, bool):  # before the numeric case: a bool *is* an int
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
+def _bad_override(body: SheetBody) -> str:
+    """This run's overrides, checked at the boundary — `config.bad_run_value`."""
+    return config.bad_run_value(config.Run.SHEET, body.overrides)
 
 
 def _apply_overrides(cfg: Config, body: SheetBody) -> None:
     """This run's overrides on a loaded config — planning only, never written.
 
-    The real run gets them by argv (`SheetBody.argv`), so the plan and the print
-    are configured the same way and cannot drift.
+    The real run gets them by argv (`SheetBody.argv`), so the plan and the print are
+    configured the same way and cannot drift. Not merely "the same way": literally the
+    same function the CLI's `_overrides` calls.
     """
-    if body.faces is not None:
-        cfg.sheet_faces = body.faces
-    if body.page is not None:
-        cfg.sheet_page = body.page
-    if body.orientation is not None:
-        cfg.sheet_orientation = body.orientation
-    if body.dpi is not None:
-        cfg.sheet_dpi = body.dpi
-    if body.cols is not None:
-        cfg.sheet_cols = body.cols
-    if body.rows is not None:
-        cfg.sheet_rows = body.rows
-    if body.bleed is not None:
-        cfg.bleed_mm = body.bleed
-    if body.guides is not None:
-        cfg.sheet_guides = body.guides
+    config.apply_run(cfg, config.Run.SHEET, body.overrides)
 
 
 def _side(face: int | None) -> list[str]:
@@ -1940,7 +2125,7 @@ def _guide_json(guide: frames.FrameGuide) -> dict[str, Any]:
     return {
         "id": guide.id,
         "name": guide.name,
-        "game": guide.game.value if guide.game else None,
+        "game": guide.game,
         "inset": list(guide.inset),
         "mm": list(guide.mm()),
         "card_mm": list(guide.card_mm),

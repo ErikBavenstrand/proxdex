@@ -203,6 +203,98 @@ class TestAFillOnlyMattersWhereBorderIsInvented:
         assert min(plan.ext.values()) > 10  # type: ignore[attr-defined]
 
 
+class TestAZeroTargetInventsNothing:
+    """`bleed.by_resize` / `reshape_only` — the fix for a *visible* defect.
+
+    A spec of 0 on all four edges is a card with no border: a full-bleed printing, or a
+    game of your own whose cards carry none. With the stretch on, the fit is pure
+    geometry — crop to the marks, resize to the trim — and cardbleed has no area to
+    fill. It fills anyway: its synthesis pass rewrites the outermost pixels whether or
+    not there is anything to synthesize, which on a card whose art reaches the edge is a
+    smeared line down two edges. Flat test colour hides it completely, which is why this
+    test uses a **gradient with marked outer rows** and asserts on the pixels.
+
+    The stretch stays the caller's choice. Unticked, a zero target really does need
+    border invented to reach the aspect, and that goes through cardbleed as before.
+    """
+
+    FULL_BLEED = SHIPPED[GuideId.BORDERLESS.value]
+    NONE = (0.0, 0.0, 0.0, 0.0)
+
+    @pytest.fixture
+    def art(self, tmp_path: Path) -> Path:
+        """Art to all four edges, with a distinct outermost row top and bottom."""
+        a = np.zeros((825, 600, 3), np.uint8)
+        yy, xx = np.mgrid[0:825, 0:600]
+        a[..., 0] = xx * 255 // 599
+        a[..., 1] = yy * 255 // 824
+        a[..., 2] = 128
+        a[0, :] = (255, 0, 255)
+        a[-1, :] = (0, 255, 255)
+        Image.fromarray(a).save(path := tmp_path / "bleed.png")
+        return path
+
+    def plan(self, *, stretch: bool) -> object:
+        return bleed.fit_plan(
+            600, 825, self.FULL_BLEED, self.NONE, TRIM, stretch=stretch
+        )
+
+    def test_a_stretched_zero_target_is_written_by_resizing(self) -> None:
+        assert bleed.by_resize(self.FULL_BLEED, self.plan(stretch=True))  # type: ignore[arg-type]
+
+    def test_without_the_stretch_it_extends_and_goes_through_cardbleed(self) -> None:
+        """The other half of the choice: with no stretch the trim cannot match the
+        art's aspect, so border has to be invented and this must *not* take the
+        resize path."""
+        plan = self.plan(stretch=False)
+        assert bleed.extends(plan)  # type: ignore[arg-type]
+        assert not bleed.by_resize(self.FULL_BLEED, plan)  # type: ignore[arg-type]
+
+    def test_a_bordered_spec_never_takes_the_resize_path(self) -> None:
+        """Gated on the spec being frameless, not on `extends` alone: a bordered card
+        whose marks already exceed its target also invents nothing, but there cardbleed
+        is squaring die-cut corners, which is real work on a real border."""
+        assert not bleed.by_resize(
+            ECARD, bleed.fit_plan(600, 825, ECARD, ON_SPEC, TRIM, stretch=True)
+        )  # type: ignore[arg-type]
+
+    def test_the_cards_own_edge_pixels_survive(self, art: Path, tmp_path: Path) -> None:
+        """The defect, in the terms it was found in: cardbleed's fit buried the
+        outermost rows under invented ones."""
+        plan = self.plan(stretch=True)
+        bleed.reshape_only(art, out := tmp_path / "out.png", self.NONE, plan)  # type: ignore[arg-type]
+        got = np.asarray(Image.open(out).convert("RGB"))
+        mid = got.shape[1] // 2
+        assert tuple(got[0][mid]) == (255, 0, 255)
+        assert tuple(got[-1][mid]) == (0, 255, 255)
+
+    def test_it_is_a_resize_of_the_art_and_nothing_else(
+        self, art: Path, tmp_path: Path
+    ) -> None:
+        """No pixel invented anywhere — the whole claim, checked against Pillow's own
+        resize of the same source. cardbleed's path differed from this by up to 255
+        levels along two edges."""
+        plan = self.plan(stretch=True)
+        bleed.reshape_only(art, out := tmp_path / "out.png", self.NONE, plan)  # type: ignore[arg-type]
+        with Image.open(out) as im:
+            got = np.asarray(im.convert("RGB"), np.int16)
+            size = im.size
+        with Image.open(art) as src:
+            want = np.asarray(
+                src.convert("RGB").resize(size, Image.Resampling.LANCZOS), np.int16
+            )
+        assert np.abs(got - want).max() == 0
+
+    def test_the_aspect_is_exactly_the_trim(self, art: Path, tmp_path: Path) -> None:
+        """What the stretch is *for*, and the reason a resize is acceptable here at
+        all: the output is the card's proportions to the pixel."""
+        plan = self.plan(stretch=True)
+        bleed.reshape_only(art, out := tmp_path / "out.png", self.NONE, plan)  # type: ignore[arg-type]
+        with Image.open(out) as im:
+            w, h = im.size
+        assert w / h == pytest.approx(TRIM[0] / TRIM[1], abs=1e-3)
+
+
 class TestTheKnobsActuallyReachCardbleed:
     """A tuning that changed no pixels would be the whole feature failing silently."""
 

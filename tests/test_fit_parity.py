@@ -77,6 +77,14 @@ CASES = (
     Case("lopsided marks", 745, 1040, SKEW, MTG),
     Case("oversized scan", 1050, 1500, SQUARE, WOTC),
     Case("tiny scan", 210, 293, ORDINARY, MTG),
+    # A **zero target** — a full-bleed printing, or a game of your own whose cards
+    # carry no border. Both stretch states, because they are genuinely different fits
+    # there and `bleed.by_resize` reads this plan to decide whether anything is being
+    # invented: stretched it must come out at the marked art's own size with the
+    # extensions at nothing, unstretched it must extend to reach the aspect.
+    Case("zero target, stretched", 600, 825, NOTHING, NOTHING, stretch=True),
+    Case("zero target, not stretched", 600, 825, NOTHING, NOTHING),
+    Case("zero target, marks inside it", 745, 1040, ORDINARY, NOTHING, stretch=True),
 )
 
 

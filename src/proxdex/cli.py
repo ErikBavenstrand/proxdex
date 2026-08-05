@@ -4557,8 +4557,10 @@ def _profile_note(prof: profiles.Profile) -> None:
         console.print(
             f"[cyan]◐[/] profile [bold]{prof.name}[/] — measured over "
             f"{len(prof.live)} round(s){muted}, last print off by mean "
-            f"{residual.mean:.1f} RGB over {residual.measured} reachable patch(es)"
+            f"{residual.de00_mean:.2f} ΔE00 over {residual.measured} reachable "
+            f"patch(es), neutrals {residual.cast.text}"
         )
+        _cast_drift(prof)
     elif not prof.recipe.neutral:
         console.print(
             f"[cyan]◐[/] profile [bold]{prof.name}[/] — set by hand: "
@@ -4949,7 +4951,7 @@ def profile_list(ctx: click.Context) -> None:
             f"[bold]{prof.name}[/]" if prof.stored else f"[dim]{prof.name}[/]",
             prof.how if prof.stored else "[dim]nothing (identity)[/]",
             _round_count(prof),
-            f"mean {residual.mean:.1f} / max {residual.max:.1f}"
+            f"mean {residual.de00_mean:.1f} / max {residual.de00_max:.1f}"
             if residual
             else "[dim]not measured[/]",
             _one_line(prof.notes),
@@ -5010,7 +5012,7 @@ def profile_show(ctx: click.Context, name: str | None) -> None:
             str(rnd.n) if rnd.enabled else f"[dim]{rnd.n}[/]",
             rnd.slot.text,
             rnd.date,
-            f"{e.mean:.1f} / {e.max:.1f}",
+            f"{e.de00_mean:.1f} / {e.de00_max:.1f}",
             f"{pull:.1f}" if pull is not None else "[dim]—[/]",
             _one_line(rnd.note),
         )
@@ -5023,7 +5025,7 @@ def profile_show(ctx: click.Context, name: str | None) -> None:
             "medium. [dim]`proxdex calibrate enable --round N` puts one back.[/]"
         )
         return
-    trend = " → ".join(f"{prof.score(r).mean:.1f}" for r in live)
+    trend = " → ".join(f"{prof.score(r).de00_mean:.1f}" for r in live)
     console.print(f"[dim]mean error by live round: {trend} (lower is truer)[/]")
     console.print(
         "[dim]✓ = in the fit, · = switched off. Pull is how far the correction "
@@ -5560,12 +5562,12 @@ def cal_add(
     e = prof.score(rnd)
     trend = ""
     if before is not None:
-        delta = before.mean - e.mean
+        delta = before.de00_mean - e.de00_mean
         arrow = "[green]↓[/]" if delta > 0 else "[yellow]↑[/]"
         trend = f"  {arrow} {abs(delta):.1f} from round {rnd.n - 1}"
     console.print(
         f"[green]✓[/] round {rnd.n} recorded (slot {where.text}): this print was "
-        f"off by mean {e.mean:.1f} / max {e.max:.1f} RGB over {e.measured} "
+        f"off by mean {e.de00_mean:.1f} / max {e.de00_max:.2f} ΔE00 over {e.measured} "
         f"reachable patch(es){trend}"
     )
     if e.clipped:
@@ -5608,13 +5610,27 @@ _CAL_SUSPECT_RATIO = 2.0
 _CAL_SUSPECT_FLOOR = 5.0
 
 
+def _cast_drift(prof: profiles.Profile) -> None:
+    """Say so when the neutral axis is getting *worse* round by round.
+
+    The one line that would have caught `holo-plain`: it printed yellower every round
+    while the single error figure fell, so nothing objected. A mean and a cast are
+    different questions, and this is the second one.
+    """
+    drift = prof.drift
+    if drift is None:
+        return
+    err.print(f"[yellow]⚠[/] {drift.text}")
+    err.print(f"[dim]{drift.hint}[/]")
+
+
 def _suspect_round(prof: profiles.Profile, rnd: profiles.Round) -> None:
     """Say so when a round looks like a bad scan rather than a bad printer."""
     others = [r for r in prof.rounds if r.n != rnd.n]
     if not others:
         return
-    best = min(others, key=lambda r: prof.score(r).mean)
-    mine, theirs = prof.score(rnd).mean, prof.score(best).mean
+    best = min(others, key=lambda r: prof.score(r).de00_mean)
+    mine, theirs = prof.score(rnd).de00_mean, prof.score(best).de00_mean
     limit = max(theirs * _CAL_SUSPECT_RATIO, theirs + _CAL_SUSPECT_FLOOR)
     if mine <= limit:
         return
@@ -5665,10 +5681,10 @@ def _switch(ctx: click.Context, name: str | None, which: int, *, on: bool) -> No
         f"{len(prof.live)} of {len(prof.rounds)} round(s) now feed the correction"
     )
     after = prof.residual
-    if before is not None and after is not None and before.mean != after.mean:
+    if before is not None and after is not None and before.de00_mean != after.de00_mean:
         console.print(
-            f"[dim]the newest live round's error reads {after.mean:.1f} now, "
-            f"was {before.mean:.1f}[/]"
+            f"[dim]the newest live round's error reads {after.de00_mean:.1f} now, "
+            f"was {before.de00_mean:.1f}[/]"
         )
     if not prof.live:
         err.print(
@@ -5706,8 +5722,8 @@ def cal_proof(ctx: click.Context, name: str | None, out: Path | None) -> None:
     calibrate_mod.proof_sheet(last.scanned).save(dst)
     e = prof.score(last)
     console.print(
-        f"[green]wrote[/] {dst} [dim]— round {last.n}, off by mean {e.mean:.1f} / "
-        f"max {e.max:.1f} RGB[/]"
+        f"[green]wrote[/] {dst} [dim]— round {last.n}, off by mean {e.de00_mean:.1f} / "
+        f"max {e.de00_max:.2f} ΔE00[/]"
     )
 
 

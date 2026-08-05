@@ -26,13 +26,17 @@ neutrality and printer gamut.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
 from PIL import Image, ImageDraw, ImageFont
 
+from proxdex import colour
+from proxdex.colour import Cast
 from proxdex.config import Config
 from proxdex.errors import ProxdexError
 
@@ -67,6 +71,18 @@ class Chart:
     @property
     def target(self) -> Patches:
         return np.array(self.patches, np.float32)
+
+    @property
+    def neutrals(self) -> NDArray[np.intp]:
+        """Which patches are *meant* to be grey — where a cast is measured.
+
+        A property rather than the ``slice(0, 16)`` that used to be spelled at each
+        call site, because the whole point of a patch set is that a later one can be
+        shaped differently, and an implicit index is what breaks in silence when it is.
+        """
+        arr = self.target
+        same = (arr[:, 0] == arr[:, 1]) & (arr[:, 1] == arr[:, 2])
+        return np.nonzero(same)[0]
 
     def centers(self) -> list[tuple[float, float]]:
         x0, y0, x1, y1 = _GRID
@@ -314,16 +330,23 @@ def fit(scanned: Patches, sent: Patches) -> Correction:
 class Error:
     """How far a print landed from the target, over the colours it could reach.
 
-    Both halves matter. A medium has a *gamut*: white paper is not 255, no ink is
-    0, and a saturated colour can need more of one ink than exists — so some target
-    patches are unreachable no matter how good the calibration. Averaging those in
-    gives a number that can never fall and tells you nothing about whether the loop
-    is working. So ``mean``/``max`` cover the patches this medium can actually hit
-    (:func:`in_gamut`), and ``clipped`` says how many it cannot.
+    **Three numbers, never one.** This used to be a single Euclidean distance in RGB,
+    and one number is what let a diverging profile look converged: the real
+    ``holo-plain`` drove its neutral axis 32 levels toward yellow over four rounds
+    while that figure improved every round. RGB distance cannot see a cast, and a cast
+    is the first thing an eye sees.
+
+    So ``de00_mean``/``de00_max`` are CIEDE2000, the distance a print is really judged
+    by, and ``cast`` is measured off the **neutral patches alone**. A medium also has a
+    *gamut* — white paper is not 255, no ink is 0, and a saturated colour can need more
+    of one ink than exists — so those cover the patches this medium can actually hit
+    (:func:`reachable`) and ``clipped`` says how many it cannot, because averaging in
+    colours no ink can make gives a number that can never fall.
     """
 
-    mean: float
-    max: float
+    de00_mean: float
+    de00_max: float
+    cast: Cast = field(default_factory=Cast)
     #: patches the error was measured over
     measured: int = 0
     #: target patches outside what this medium can print — a fact about the paper
@@ -334,10 +357,15 @@ class Error:
     def total(self) -> int:
         return self.measured + self.clipped
 
-    def json(self) -> dict[str, float]:
+    @property
+    def text(self) -> str:
+        return f"ΔE00 {self.de00_mean:.2f} · {self.cast.text}"
+
+    def json(self) -> dict[str, Any]:
         return {
-            "mean": self.mean,
-            "max": self.max,
+            "de00_mean": self.de00_mean,
+            "de00_max": self.de00_max,
+            "cast": self.cast.json(),
             "measured": self.measured,
             "clipped": self.clipped,
         }
@@ -346,61 +374,104 @@ class Error:
     def read(cls, data: object) -> Error:
         raw: dict[str, object] = data if isinstance(data, dict) else {}
         return cls(
-            mean=_float(raw.get("mean")),
-            max=_float(raw.get("max")),
+            de00_mean=_float(raw.get("de00_mean")),
+            de00_max=_float(raw.get("de00_max")),
+            cast=Cast.read(raw.get("cast")),
             measured=int(_float(raw.get("measured"))),
             clipped=int(_float(raw.get("clipped"))),
         )
 
 
-def reachable(
-    correction: Correction | None, wanted: Patches | None = None
-) -> NDArray[np.bool_]:
-    """Which target patches a medium with this response can print at all.
+#: how many directions the reachability hull is tested along. In three dimensions a
+#: couple of hundred well-spread normals bound a hull closely, and the approximation is
+#: deliberately an *outer* one — see :func:`reachable`.
+_HULL_DIRECTIONS = 256
 
-    Reachability is decided by inverting the *measured* response: ask what value
-    each target would have to be sent as, and call it reachable when that value
-    fits in 0..255. So it is a measurement of this paper and ink, not an assumption
-    about printers.
 
-    It has to be the response and not a range, because a gamut is a solid, not a
-    box. Comparing each channel against the darkest and brightest the print
-    returned — which is what this did first — passes every colour that is inside
-    the box on all three channels and still unprintable: a saturated blue at
-    mid-lightness needs more cyan than exists, and no correction invents ink. Those
-    patches counted as reachable and held a real profile's error at 17.7 mean RGB
-    while the colours it could actually hit sat at 12.7.
+def _directions(count: int = _HULL_DIRECTIONS) -> NDArray[np.float64]:
+    """Roughly-even unit vectors on the sphere — a golden-angle spiral.
+
+    Deterministic, because a gamut that came out differently on two reads of the same
+    file would make every residual incomparable with itself.
+    """
+    i = np.arange(count, dtype=np.float64) + 0.5
+    z = 1.0 - 2.0 * i / count
+    r = np.sqrt(np.maximum(0.0, 1.0 - z * z))
+    phi = i * math.pi * (3.0 - math.sqrt(5.0))
+    return np.stack([r * np.cos(phi), r * np.sin(phi), z], axis=-1)
+
+
+def reachable(scanned: Patches, wanted: Patches | None = None) -> NDArray[np.bool_]:
+    """Which target colours this medium demonstrably reaches, **measured from scans**.
+
+    A colour is reachable when it lies inside the solid the medium has been *seen* to
+    produce: the convex hull, in Lab, of every patch that came back. So it depends on
+    the measurements and on nothing else.
+
+    It used to be decided by inverting the fitted correction — asking what send each
+    target would need and calling it reachable if that landed in 0..255 — and that is
+    circular, because the mask came from the same fit it was then used to score.
+    Measured: refitting over 20 patches instead of 80 moved the reported gamut from
+    **37 to 49 patches on identical scan data**, so no two residuals were comparable.
+
+    It has to be a solid and not a per-channel range, because a gamut *is* a solid: a
+    saturated blue at mid-lightness can sit inside the box on all three channels and
+    still need more cyan than exists. A real matte profile reported 17.7 mean error over
+    "76 reachable" patches while the 67 it could truly hit sat at 12.7.
+
+    The hull is tested by support functions along :data:`_HULL_DIRECTIONS` fixed
+    normals, which bounds it from *outside* — a colour just past the hull may pass. That
+    is the safe direction deliberately: too generous a gamut can only inflate the
+    reported error, never hide it.
 
     Nothing measured means nothing ruled out.
     """
     goal = target() if wanted is None else wanted
-    if correction is None:
+    seen = np.asarray(scanned, np.float32).reshape(-1, 3)
+    if not len(seen):
         return np.ones(len(goal), dtype=np.bool_)
-    need = _features(goal) @ correction.coef
-    inside = (need >= 0.0) & (need <= _SEND_MAX)
+    hull = colour.to_lab(seen)
+    want = colour.to_lab(np.asarray(goal, np.float32))
+    dirs = _directions()
+    support = (hull @ dirs.T).max(axis=0)
+    inside = (want @ dirs.T) <= support + 1e-9
     return np.asarray(inside.all(axis=1), dtype=np.bool_)
 
 
 def score(
-    scanned: Patches, reach: NDArray[np.bool_], wanted: Patches | None = None
+    scanned: Patches,
+    reach: NDArray[np.bool_],
+    wanted: Patches | None = None,
+    white: Patches | None = None,
 ) -> Error:
-    """RGB distance from the target over ``reach`` — the patches that count.
+    """ΔE00 from the target over ``reach``, plus the cast off the neutrals.
 
     The mask is an argument because *whose* gamut it is matters. A medium has one
     gamut, so every round of a calibration is scored against the same one (see
     :meth:`proxdex.profiles.Profile.gamut`); scoring each round against its own
     scan compares means over different patch sets, and the trend then moves when
     the set moves rather than when the print improves.
+
+    ``white`` is the substrate, and passing it is what makes the answer a statement
+    about the *print* rather than about the paper. A blue holographic sticker judged
+    against an absolute neutral reports a large cast that no ink can remove; judged
+    against itself it reports the calibration.
     """
     goal = target() if wanted is None else wanted
-    d = np.sqrt(((scanned - goal) ** 2).sum(axis=1))
+    seen = np.asarray(scanned, np.float32)
+    if white is not None:
+        seen = colour.relative_to(seen, np.asarray(white, np.float32))
+    d = colour.delta_e00(
+        colour.to_lab(seen), colour.to_lab(np.asarray(goal, np.float32))
+    )
     inside = d[reach]
     if not inside.size:  # nothing reachable — report the whole thing rather than
         inside = d  # claim a clean sheet on no evidence
         reach = np.ones_like(reach)
     return Error(
-        mean=float(inside.mean()),
-        max=float(inside.max()),
+        de00_mean=float(inside.mean()),
+        de00_max=float(inside.max()),
+        cast=Cast.of(colour.to_lab(seen[chart().neutrals])),
         measured=int(reach.sum()),
         clipped=int((~reach).sum()),
     )

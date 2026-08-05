@@ -40,8 +40,9 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from proxdex import calibrate
+from proxdex import calibrate, colour
 from proxdex.calibrate import GRID, Coef, Correction, Error, Patches, Slot
+from proxdex.colour import Cast
 from proxdex.config import Config
 from proxdex.errors import ProxdexError
 from proxdex.media import RECIPE_KEYS, Recipe
@@ -64,6 +65,57 @@ _FLAT_ROUNDS = 3
 #: the scored mean by 0.1), so a round can be *measured* to have gained 0.3 and still
 #: not be worth having gained it.
 _FLAT_GAIN = 0.5
+#: how many rounds it takes before a growing cast is a trend rather than one sheet
+_DRIFT_ROUNDS = 3
+#: how much neutral chroma has to have been *gained* over the best earlier round to
+#: call it drift. Half a ΔE00 is under what an eye can see side by side, so this is not
+#: "the print is bad" — it is "the direction of travel is wrong", which is the thing
+#: worth knowing three rounds in rather than after four sheets of holographic sticker.
+_DRIFT_GAIN = 0.5
+
+
+@dataclass(frozen=True, slots=True)
+class Drift:
+    """The correction is being driven further off neutral each round.
+
+    Kept separate from :class:`Plateau` because they answer different questions, and
+    the pair of them is the point: *did it stop improving* and *is it going the wrong
+    way* used to be one number, which is how a profile that asked for more yellow every
+    round reported progress.
+    """
+
+    first: int
+    last: int
+    #: neutral chroma the demand has gained since the best earlier round
+    grew: float
+    #: how far off neutral the printer is now being driven to make a grey
+    cast: Cast
+
+    @property
+    def text(self) -> str:
+        return (
+            f"the correction is driven further off neutral every round — grown "
+            f"{self.grew:.2f} since round {self.first}, now asking "
+            f"{self.cast.text} for a grey. It is chasing something the paper "
+            f"cannot give"
+        )
+
+    @property
+    def hint(self) -> str:
+        return (
+            "the substrate is probably tinted, and aiming at an absolute neutral on "
+            "tinted stock asks for ink that does not exist — see docs/calibration.md"
+        )
+
+    def json(self) -> dict[str, Any]:
+        return {
+            "first": self.first,
+            "last": self.last,
+            "grew": self.grew,
+            "cast": self.cast.json(),
+            "text": self.text,
+            "hint": self.hint,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +153,7 @@ class Plateau:
             else f"rounds {self.first} to {self.last}"
         )
         return (
-            f"{span} improved the fit by {max(self.gain, 0.0):.1f} RGB in total, "
+            f"{span} improved the fit by {max(self.gain, 0.0):.2f} ΔE00 in total, "
             f"{self.per_round:.1f} a round"
         )
 
@@ -263,11 +315,65 @@ class Profile:
         different patch sets — 63 to 68 of 80 on a real matte — so the number moved
         when the set moved rather than when the print got better.
         """
-        return calibrate.reachable(self.correction)
+        live = self.live
+        if not live:
+            return calibrate.reachable(np.zeros((0, 3), np.float32))
+        return calibrate.reachable(np.concatenate([r.scanned for r in live]))
 
     def score(self, rnd: Round) -> Error:
         """How far that round's print landed from the target, over this gamut."""
         return calibrate.score(rnd.scanned, self.gamut)
+
+    @property
+    def casts(self) -> list[Cast]:
+        """The cast of what came *back*, per live round — how grey the print looks."""
+        return [self.score(r).cast for r in self.live]
+
+    @property
+    def demands(self) -> list[Cast]:
+        """The cast of what was *sent*, per live round — how hard the printer is being
+        driven off neutral in order to make a neutral.
+
+        This is the diagnostic, and picking the wrong one of these two is a mistake
+        worth recording: the first version of :attr:`drift` watched :attr:`casts`, and
+        on the real ``holo-plain`` profile that **improves** every round (chroma 9.05,
+        6.42, 5.76, 5.77) because the fit really is dragging the *scan* toward neutral.
+        What diverges is the demand — the blue-minus-red of what it sends for a neutral
+        went 0, -28.33, -30.75, -32.42, monotonically more yellow ink. So a detector
+        built on the scan would have passed the exact profile it exists to catch.
+        """
+        return [
+            Cast.of(colour.to_lab(r.sent[calibrate.chart().neutrals]))
+            for r in self.live
+        ]
+
+    @property
+    def drift(self) -> Drift | None:
+        """Whether the correction is being driven *further* off neutral each round.
+
+        The signal that was missing, and its absence is the whole reason the rebuild
+        happened: ``holo-plain`` asked the printer for more yellow every round while the
+        single RGB figure it reported fell, so every surface called it convergence and
+        :attr:`plateau` stood ready to certify it.
+
+        A print landing nearer neutral and a correction working ever harder to put it
+        there are different facts, and the second one means the fit is chasing something
+        the paper cannot give — a tinted substrate, aimed at as though it were white.
+        So this is reported wherever a residual is, and :attr:`plateau` refuses while it
+        is true.
+        """
+        demands = self.demands
+        if len(demands) < _DRIFT_ROUNDS:
+            return None
+        grew = demands[-1].chroma - min(c.chroma for c in demands[:-1])
+        if grew < _DRIFT_GAIN:
+            return None
+        return Drift(
+            first=self.live[0].n,
+            last=self.live[-1].n,
+            grew=grew,
+            cast=demands[-1],
+        )
 
     @property
     def residual(self) -> Error | None:
@@ -292,8 +398,12 @@ class Profile:
         if len(live) <= _FLAT_ROUNDS:
             return None
         head, tail = live[:-_FLAT_ROUNDS], live[-_FLAT_ROUNDS:]
-        best_before = min(self.score(r).mean for r in head)
-        best_after = min(self.score(r).mean for r in tail)
+        if self.drift is not None:
+            # flat *and* drifting is not converged, it is stuck pulling the wrong way.
+            # Certifying it is what would have told you `holo-plain` was finished.
+            return None
+        best_before = min(self.score(r).de00_mean for r in head)
+        best_after = min(self.score(r).de00_mean for r in tail)
         gain = best_before - best_after
         if gain >= _FLAT_GAIN * len(tail):
             return None
@@ -400,6 +510,7 @@ class Profile:
             "calibrated": self.calibrated,
             "residual": None if residual is None else residual.json(),
             "plateau": None if plateau is None else plateau.json(),
+            "drift": None if (drift := self.drift) is None else drift.json(),
             "next_slot": self.next_slot.json(),
             "grid": list(self.grid),
             "stored": self.stored,

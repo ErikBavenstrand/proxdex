@@ -39,9 +39,19 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
+from PIL import Image
 
-from proxdex import calibrate, colour
-from proxdex.calibrate import GRID, Coef, Correction, Error, Patches, Slot
+from proxdex import calibrate, colour, media
+from proxdex.calibrate import (
+    GRID,
+    Coef,
+    Correction,
+    Error,
+    Intent,
+    Patches,
+    Slot,
+    Substrate,
+)
 from proxdex.colour import Cast
 from proxdex.config import Config
 from proxdex.errors import ProxdexError
@@ -188,6 +198,10 @@ class Round:
     date: str = ""
     scan: str = ""
     note: str = ""
+    #: the paper this round was printed on, read off its own bare patches. Per round
+    #: rather than per profile because it is also how two rounds are put into the same
+    #: instrument state — see :meth:`Profile.normalised`.
+    substrate: Substrate = field(default_factory=Substrate)
     #: whether this round feeds the fit. A round is never deleted — a bad one is
     #: switched off, so you can see what it was doing and put it back.
     enabled: bool = True
@@ -203,6 +217,7 @@ class Round:
             "scan": self.scan,
             "note": self.note,
             "enabled": self.enabled,
+            "substrate": self.substrate.json(),
             "sent": _rows(self.sent),
             "scanned": _rows(self.scanned),
         }
@@ -225,6 +240,7 @@ class Round:
             date=_text(raw.get("date")),
             scan=_text(raw.get("scan")),
             note=_text(raw.get("note")),
+            substrate=Substrate.read(raw.get("substrate")),
             enabled=raw.get("enabled") is not False,
         )
 
@@ -236,6 +252,10 @@ class Profile:
     name: str
     notes: str = ""
     recipe: Recipe = field(default_factory=Recipe)
+    #: how much of the paper's own colour to accept rather than fight. Fully relative
+    #: by default: on tinted stock, aiming at an absolute neutral is what asks for ink
+    #: that does not exist.
+    intent: Intent = field(default_factory=Intent)
     grid: tuple[int, int] = GRID
     rounds: list[Round] = field(default_factory=list)
     #: the slot the last emitted chart was rendered into, so reading its scan
@@ -278,12 +298,71 @@ class Profile:
         """
         return self._fit(self.live)
 
+    @property
+    def substrate(self) -> Substrate:
+        """The paper, pooled over every live round that measured it.
+
+        One profile, one substrate — it is a property of the stock, not of a sheet. The
+        median over rounds rather than the newest, so one odd scan cannot redefine
+        what the paper is.
+        """
+        seen = [r.substrate for r in self.live if r.substrate.measured]
+        if not seen:
+            return Substrate()
+        whites = np.array([s.white for s in seen], np.float32)
+        blacks = np.array([s.black for s in seen], np.float32)
+        return Substrate(
+            white=tuple(float(v) for v in np.median(whites, axis=0)),  # type: ignore[arg-type]
+            black=tuple(float(v) for v in np.median(blacks, axis=0)),  # type: ignore[arg-type]
+            spread=max(s.spread for s in seen),
+            patches=sum(s.patches for s in seen),
+        )
+
+    def aim(self, goal: Patches) -> Patches:
+        """What to ask the paper for — the target through this profile's intent."""
+        return calibrate.aim(goal, self.substrate, self.intent)
+
+    def normalised(self, rnd: Round) -> Patches:
+        """One round's scan, put back into the same instrument state as the others.
+
+        Rounds get scanned on different days, and nothing used to account for it: the
+        four real ``holo-plain`` rounds' bare-paper readings drift **9 levels (6%)** and
+        were pooled as though the lamp had not moved. Scaling each round by the ratio of
+        its own paper to the profile's paper removes exactly that, in linear light.
+
+        Second-order on the real profile — normalising alone moved the send tilt only
+        -34.23 to -33.61, so it did not cause the cast — but it is unmeasured error
+        pooled as signal, which is its own problem.
+        """
+        mine, ours = rnd.substrate, self.substrate
+        if not (mine.measured and ours.measured):
+            return rnd.scanned
+        ratio = colour.linearize(np.array(ours.white, np.float32)) / np.maximum(
+            colour.linearize(np.array(mine.white, np.float32)), 1e-6
+        )
+        return colour.encode(colour.linearize(rnd.scanned) * ratio)
+
     def _fit(self, rounds: Sequence[Round]) -> Correction | None:
         if not rounds:
             return None
-        scanned = np.concatenate([r.scanned for r in rounds])
+        scanned = np.concatenate([self.normalised(r) for r in rounds])
         sent = np.concatenate([r.sent for r in rounds])
         return calibrate.fit(scanned, sent)
+
+    def render(self, im: Image.Image) -> Image.Image:
+        """What this profile does to a picture on the way to paper.
+
+        The one place a correction meets an image, so the aim, the fit and the gamut
+        compression cannot be applied in one order here and another there. A measured
+        correction supersedes the hand-set recipe, because one was printed and scanned
+        and the other was a judgement.
+        """
+        corr = self.correction
+        if corr is None:
+            return media.compensate(im, self.recipe)
+        arr = np.asarray(im.convert("RGB"), np.float32)
+        goal = self.aim(arr.reshape(-1, 3)).reshape(arr.shape)
+        return Image.fromarray(corr.send(goal).round().astype(np.uint8))
 
     def influence(self, n: int) -> float | None:
         """How much round ``n`` moves the correction — its weight in the answer.
@@ -451,6 +530,7 @@ class Profile:
         *,
         scan: str = "",
         note: str = "",
+        substrate: Substrate | None = None,
     ) -> Round:
         """Record a measured round. The correction refits from all of them."""
         rnd = Round(
@@ -461,6 +541,7 @@ class Profile:
             date=date.today().isoformat(),
             scan=scan,
             note=note,
+            substrate=substrate if substrate is not None else Substrate.of(scanned),
         )
         self.rounds.append(rnd)
         self.pending = None
@@ -491,6 +572,7 @@ class Profile:
             "name": self.name,
             "notes": self.notes,
             "recipe": self.recipe.json(),
+            "intent": self.intent.json(),
             "grid": list(self.grid),
             "pending": None if self.pending is None else self.pending.json(),
             "rounds": [r.json() for r in self.rounds],
@@ -505,6 +587,8 @@ class Profile:
             "notes": self.notes,
             "how": self.how,
             "recipe": self.recipe.json(),
+            "intent": self.intent.json(),
+            "substrate": self.substrate.json(),
             "rounds": len(self.rounds),
             "live": len(self.live),
             "calibrated": self.calibrated,
@@ -613,6 +697,7 @@ def read(root: Path, name: str) -> Profile | None:
         name=slug(_text(raw.get("name")) or path.stem),
         notes=_text(raw.get("notes")),
         recipe=Recipe.read(raw.get("recipe")),
+        intent=Intent.read(raw.get("intent")),
         grid=_grid(raw.get("grid")),
         rounds=rounds,
         pending=None if pending is None else Slot.read(pending),

@@ -53,6 +53,8 @@ _TO_XYZ = np.array(
     ],
     np.float64,
 )
+#: XYZ back to sRGB primaries — inverted once here rather than at every call
+_FROM_XYZ = np.linalg.inv(_TO_XYZ)
 #: D65 white, the reference every Lab value here is relative to
 _D65 = np.array([0.9504559, 1.0, 1.0890578], np.float64)
 
@@ -94,6 +96,23 @@ def to_lab(rgb: RGB) -> Lab:
         ],
         axis=-1,
     )
+
+
+def from_lab(lab: Lab) -> RGB:
+    """CIE L\\*a\\*b\\* → sRGB 0..255, the inverse of :func:`to_lab`.
+
+    Needed to *space a ramp perceptually*: a neutral ramp even in L\\* is the one an eye
+    reads as even, and the previous chart's ``linspace(4, 252)`` in code values crowded
+    almost all of its perceptual movement into the highlights.
+    """
+    arr = np.asarray(lab, np.float64)
+    fy = (arr[..., 0] + 16.0) / 116.0
+    fx = fy + arr[..., 1] / 500.0
+    fz = fy - arr[..., 2] / 200.0
+    f = np.stack([fx, fy, fz], axis=-1)
+    cubed = f**3
+    r = np.where(cubed > _LAB_EPS, cubed, (116.0 * f - 16.0) / _LAB_KAPPA)
+    return encode((r * _D65) @ _FROM_XYZ.T)
 
 
 def relative_to(rgb: RGB, white: RGB) -> RGB:

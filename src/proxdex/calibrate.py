@@ -27,7 +27,8 @@ neutrality and printer gamut.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -54,15 +55,58 @@ _GRID = (0.12, 0.16, 0.88, 0.90)  # x0, y0, x1, y1 patch region
 _LABEL_Y = 0.115
 
 
+class Role(StrEnum):
+    """What a patch is *for*.
+
+    Every stage of the model selects patches by role, never by index arithmetic. The
+    previous chart was a bare tuple of colours with ``slice(0, 16)`` spelled at each
+    call site to mean "the greys", which is precisely the implicit index that breaks in
+    silence the moment the patch set changes shape — and the patch set had to change
+    shape, because it could not measure the substrate or linearize a channel.
+    """
+
+    #: bare paper: no ink at all. The reference the whole profile hangs from.
+    SUBSTRATE = "substrate"
+    #: one channel swept with the others at full — i.e. one ink's own ramp
+    RAMP_R = "ramp-r"
+    RAMP_G = "ramp-g"
+    RAMP_B = "ramp-b"
+    #: the grey axis, spaced in L*
+    NEUTRAL = "neutral"
+    #: the heaviest ink each way — the black point and the ink limit
+    MAX_INK = "max-ink"
+    #: a duplicate of another patch, placed far from it, to measure read noise
+    REPEAT = "repeat"
+    #: the interior of the colour cube
+    LATTICE = "lattice"
+
+    @property
+    def ramp_channel(self) -> int | None:
+        """Which channel this role sweeps, or None if it is not a channel ramp."""
+        return {Role.RAMP_R: 0, Role.RAMP_G: 1, Role.RAMP_B: 2}.get(self)
+
+
+@dataclass(frozen=True, slots=True)
+class Patch:
+    """One patch: the colour to send, and what it is being sent for."""
+
+    rgb: tuple[int, int, int]
+    role: Role
+    #: for :attr:`Role.REPEAT`, the index of the patch it duplicates; -1 otherwise
+    of: int = -1
+
+
 @dataclass(frozen=True, slots=True)
 class Chart:
     """The patch target: what it prints, and how it is laid out."""
 
     cols: int
     rows: int
-    patches: tuple[tuple[int, int, int], ...]
+    patches: tuple[Patch, ...]
     #: white gutter around each patch, as a share of its cell. Enough that wet ink
-    #: from a neighbour cannot reach the sampled centre.
+    #: from a neighbour cannot reach the sampled centre — and wide enough that the
+    #: flare each patch picks up from its surroundings is *the same* for all of them,
+    #: which is what makes a substrate-relative reading cancel it.
     pad: float
 
     def __len__(self) -> int:
@@ -70,19 +114,36 @@ class Chart:
 
     @property
     def target(self) -> Patches:
-        return np.array(self.patches, np.float32)
+        return np.array([p.rgb for p in self.patches], np.float32)
+
+    def of_role(self, *roles: Role) -> NDArray[np.intp]:
+        """The indices of every patch serving one of ``roles``."""
+        want = set(roles)
+        return np.array(
+            [i for i, p in enumerate(self.patches) if p.role in want], np.intp
+        )
 
     @property
     def neutrals(self) -> NDArray[np.intp]:
-        """Which patches are *meant* to be grey — where a cast is measured.
+        """Which patches are meant to be grey — where a cast is measured."""
+        return self.of_role(Role.NEUTRAL)
 
-        A property rather than the ``slice(0, 16)`` that used to be spelled at each
-        call site, because the whole point of a patch set is that a later one can be
-        shaped differently, and an implicit index is what breaks in silence when it is.
-        """
-        arr = self.target
-        same = (arr[:, 0] == arr[:, 1]) & (arr[:, 1] == arr[:, 2])
-        return np.nonzero(same)[0]
+    @property
+    def substrate(self) -> NDArray[np.intp]:
+        """Which patches are bare paper."""
+        return self.of_role(Role.SUBSTRATE)
+
+    @property
+    def ramps(self) -> dict[int, NDArray[np.intp]]:
+        """Per channel, the indices of that channel's own ramp."""
+        return {
+            channel: self.of_role(role)
+            for role, channel in (
+                (Role.RAMP_R, 0),
+                (Role.RAMP_G, 1),
+                (Role.RAMP_B, 2),
+            )
+        }
 
     def centers(self) -> list[tuple[float, float]]:
         x0, y0, x1, y1 = _GRID
@@ -98,53 +159,182 @@ class Chart:
         return out
 
 
-#: the neutral ramp spans the full range: the grey axis is where tone response
-#: bends hardest and where the eye is least forgiving, and it is the one line
-#: through the cube every printer can follow to both ends
-_GREYS = 16
 #: the colour lattice is pulled *inside* the printable box on purpose. Corner
 #: colours (pure red, 255 white) are unreachable on paper, so a patch spent there
 #: is a patch that measures nothing; this range measured best on a narrow-gamut
 #: matte, a wide-gamut glossy and a flat plain-paper press alike.
 _LATTICE_LO, _LATTICE_HI = 50, 200
-_LATTICE_STEPS = 4
 
 
-def _patches() -> tuple[tuple[int, int, int], ...]:
-    """80 patches: a 16-step neutral ramp, then a 4×4×4 lattice of the interior.
+def _lstar_ramp(steps: int) -> list[tuple[int, int, int]]:
+    """A neutral ramp spaced evenly in **L\\***, not in device code values.
 
-    A lattice rather than a hand-picked set because the correction has to be true
-    *between* the samples, and that is decided by coverage of the volume, not by
-    how many colours you can name.
-
-    80 is where accuracy stops improving. Patch area is the budget: six charts to
-    an A4 sheet puts these at 5.1mm of ink with 1.1mm gutters — 121px across on a
-    600dpi scan, against a sampling window of ~70px — and going denser loses more
-    to read noise and neighbour bleed than the extra coverage buys back. Measured
-    against three simulated presses, a 228-patch chart was *worse* than this one
-    and a 512-patch near-continuous one was worse than a 36-patch chart of
-    primaries. A continuous gradient is worse still: there is no flat area to
-    average, and 1% of geometric error becomes a correlated 2.3 levels of error in
-    the value you attribute to every reading. Nor does the density justify a 3-D
-    LUT — one lost to this polynomial at every density tried.
+    It used to be ``linspace(4, 252)``, which is even in the numbers and badly uneven
+    in what an eye sees: after a printer's tone response most of the perceptual
+    movement is crowded into the highlights, which is *also* where a tinted substrate
+    shows through hardest — the real holographic sticker reads +57.75 blue-minus-red in
+    the highlights against +5.50 in the shadows. So the one region that most needed
+    samples had the fewest.
     """
-    greys = [
-        (round(v), round(v), round(v))
-        for v in np.linspace(4, 252, _GREYS, dtype=np.float64)
+    lab = np.zeros((steps, 3), np.float64)
+    lab[:, 0] = np.linspace(2.0, 98.0, steps)
+    return [tuple(round(float(v)) for v in row) for row in colour.from_lab(lab)]  # type: ignore[misc]
+
+
+def _channel_ramp(channel: int, steps: int) -> list[tuple[int, int, int]]:
+    """One channel swept while the others stay at full — the ink's own ramp.
+
+    In an RGB send, *reducing* a channel is *adding* its complementary ink, so these
+    three are the cyan, magenta and yellow ramps. Without them no per-channel
+    linearization is possible at all, which is step two of every industry workflow and
+    which the previous chart simply could not do: it had a neutral ramp and a lattice,
+    and neither isolates one ink.
+    """
+    out: list[tuple[int, int, int]] = []
+    for v in np.linspace(0.0, 255.0, steps):
+        rgb = [255, 255, 255]
+        rgb[channel] = round(float(v))
+        out.append((rgb[0], rgb[1], rgb[2]))
+    return out
+
+
+#: bare paper, and the heaviest ink each way. The substrate patch is the reference the
+#: whole profile hangs from (see :class:`Substrate`) and the previous chart had none —
+#: its lightest patch was *printed* at 252, which is ink, not paper.
+_MAX_INK: tuple[tuple[int, int, int], ...] = (
+    (0, 0, 0),
+    (0, 255, 255),
+    (255, 0, 255),
+    (255, 255, 0),
+    (0, 0, 255),
+    (255, 0, 0),
+)
+
+
+class SurveySize(StrEnum):
+    """How much paper one characterization costs.
+
+    A sheet of holographic sticker is not free, so this is a choice with its
+    consequence stated rather than a constant. The ramps, the neutral ramp, the
+    substrate patches and the max-ink patches are **the same at every size** — they are
+    what the linearization, the grey balance and the substrate term are built from, and
+    there is no patch to save there. Only the interior lattice shrinks.
+    """
+
+    FULL = "full"
+    HALF = "half"
+    QUARTER = "quarter"
+
+    @property
+    def grid(self) -> tuple[int, int]:
+        """Patch columns and rows."""
+        return {
+            SurveySize.FULL: (18, 26),
+            SurveySize.HALF: (18, 13),
+            SurveySize.QUARTER: (12, 13),
+        }[self]
+
+    @property
+    def lattice(self) -> int:
+        """Steps per axis of the interior lattice — 7³, 5³ or 4³."""
+        return {SurveySize.FULL: 7, SurveySize.HALF: 5, SurveySize.QUARTER: 4}[self]
+
+    @property
+    def ramp(self) -> int:
+        """Steps in each single-channel ramp."""
+        return {SurveySize.FULL: 17, SurveySize.HALF: 13, SurveySize.QUARTER: 9}[self]
+
+    @property
+    def neutrals(self) -> int:
+        return {SurveySize.FULL: 21, SurveySize.HALF: 21, SurveySize.QUARTER: 15}[self]
+
+    @property
+    def repeats(self) -> int:
+        return {SurveySize.FULL: 12, SurveySize.HALF: 8, SurveySize.QUARTER: 6}[self]
+
+    @property
+    def page_fraction(self) -> tuple[float, float]:
+        """How much of the printable box it covers, as (width, height) shares."""
+        return {
+            SurveySize.FULL: (1.0, 1.0),
+            SurveySize.HALF: (1.0, 0.5),
+            SurveySize.QUARTER: (0.5, 0.5),
+        }[self]
+
+
+def survey(size: SurveySize = SurveySize.FULL) -> Chart:
+    """The characterization target: every role, at this density.
+
+    Substrate patches are **interleaved** rather than grouped, so they sample the paper
+    at points spread across the sheet — which is the only handle there is on a flatbed's
+    centre-to-edge non-uniformity, measured in the literature at up to ΔE 5. Any cell
+    left over after the content is filled with one more substrate patch, so no cell is
+    wasted and the white reference gets denser rather than the grid getting ragged.
+    """
+    cols, rows = size.grid
+    content: list[Patch] = []
+    content += [Patch(rgb=v, role=Role.NEUTRAL) for v in _lstar_ramp(size.neutrals)]
+    for channel, role in enumerate((Role.RAMP_R, Role.RAMP_G, Role.RAMP_B)):
+        content += [Patch(rgb=v, role=role) for v in _channel_ramp(channel, size.ramp)]
+    content += [Patch(rgb=v, role=Role.MAX_INK) for v in _MAX_INK]
+    steps = [
+        round(float(v)) for v in np.linspace(_LATTICE_LO, _LATTICE_HI, size.lattice)
     ]
-    steps = [round(v) for v in np.linspace(_LATTICE_LO, _LATTICE_HI, _LATTICE_STEPS)]
-    lattice = [(r, g, b) for r in steps for g in steps for b in steps]
-    return tuple(greys + lattice)
+    content += [
+        Patch(rgb=(r, g, b), role=Role.LATTICE)
+        for r in steps
+        for g in steps
+        for b in steps
+    ]
+    # repeats are duplicates of content patches placed far from their originals, so the
+    # spread between a pair measures read noise and cross-sheet drift rather than
+    # anything about the colour
+    stride = max(1, len(content) // max(1, size.repeats))
+    repeats = [
+        Patch(rgb=content[i * stride].rgb, role=Role.REPEAT, of=i * stride)
+        for i in range(size.repeats)
+        if i * stride < len(content)
+    ]
+    content += repeats
+
+    cells = cols * rows
+    spare = max(0, cells - len(content))
+    # interleave: one substrate patch every `gap` content patches
+    gap = max(1, len(content) // spare) if spare else len(content) + 1
+    laid: list[Patch] = []
+    placed = 0
+    for i, patch in enumerate(content):
+        if placed < spare and i % gap == 0:
+            laid.append(Patch(rgb=(255, 255, 255), role=Role.SUBSTRATE))
+            placed += 1
+        laid.append(patch)
+    laid += [Patch(rgb=(255, 255, 255), role=Role.SUBSTRATE)] * (spare - placed)
+    laid = laid[:cells]
+    # `of` was recorded against the pre-interleave list, so it has to be remapped once
+    # the final order is known — otherwise a repeat names whatever landed at that index,
+    # which is a silently wrong pairing and exactly the class of bug `Role` exists to
+    # prevent. Found by the test that asserts a repeat matches the patch it duplicates.
+    moved = {id(p): i for i, p in enumerate(laid)}
+    fixed = [
+        replace(patch, of=moved.get(id(content[patch.of]), -1))
+        if patch.role is Role.REPEAT and 0 <= patch.of < len(content)
+        else patch
+        for patch in laid
+    ]
+    return Chart(cols=cols, rows=rows, patches=tuple(fixed), pad=0.16)
 
 
-CHART = Chart(cols=8, rows=10, patches=_patches(), pad=0.09)
+#: the verification chart: small, one slot of the sheet grid, six to a sheet. Its job is
+#: to *confirm* a model rather than to build one, so it is a coarse lattice plus enough
+#: neutrals to see a cast and enough substrate to have its own white.
+CHART = survey(SurveySize.QUARTER)
 
 
 def chart() -> Chart:
     return CHART
 
 
-def chart_patches() -> tuple[tuple[int, int, int], ...]:
+def chart_patches() -> tuple[Patch, ...]:
     return CHART.patches
 
 
@@ -243,6 +433,12 @@ def _features(arr: RGB) -> RGB:
     return np.stack([o, r, g, b, r * r, g * g, b * b, r * g, g * b, b * r], axis=-1)
 
 
+#: bisection steps for the gamut compression below. Twelve halvings resolve the
+#: chroma scale to 1/4096, far finer than a send value can express.
+_COMPRESS_STEPS = 12
+#: the largest value a channel can be sent as — the edge of the reachable solid
+_SEND_MAX = 255.0
+
 #: the coefficients that change nothing — features(v) @ IDENTITY == v
 IDENTITY: Coef = np.zeros((10, 3), np.float32)
 IDENTITY[1, 0] = IDENTITY[2, 1] = IDENTITY[3, 2] = 255.0
@@ -266,9 +462,98 @@ class Correction:
     def apply(self, arr: RGB) -> RGB:
         return (_features(arr) @ self.coef).clip(0, 255).astype(np.float32)
 
+    def raw(self, arr: RGB) -> RGB:
+        """The send this correction asks for, **before** anything is clamped."""
+        return (_features(arr) @ self.coef).astype(np.float32)
+
+    def send(self, arr: RGB) -> RGB:
+        """The value to send, with the unreachable compressed rather than clamped.
+
+        A per-channel clamp is what put the yellow on the cards, and it is visible in
+        one line of the real profile: a 200-grey wanted send (273, 264, 299) and got
+        (255, 255, 255) — 44 of blue refused against 18 of red, so the hue moved. Per
+        channel, clipping "favors preserving high saturation" and wrecks lightness; the
+        CIE's own anchors for doing it properly (HPMINDE, SGCK) both hold **hue**
+        constant and give up chroma.
+
+        So a colour whose send does not fit is pulled toward the neutral axis of its own
+        lightness, at constant hue, by the least amount that makes it fit — found by
+        bisection because the response is a polynomial and there is no closed form.
+        Anything still out of range after all its chroma is gone is a *lightness* the
+        medium does not have, and only then is it clamped.
+        """
+        want = np.asarray(arr, np.float32)
+        flat = want.reshape(-1, 3)
+        out = self.raw(flat)
+        bad = ((out < 0.0) | (out > _SEND_MAX)).any(axis=-1)
+        if not bad.any():
+            return out.clip(0, 255).reshape(want.shape).astype(np.float32)
+
+        lab = colour.to_lab(flat[bad])
+        lab = self._give_up_chroma(lab)
+        lab = self._give_up_lightness(lab)
+        out[bad] = self.raw(colour.from_lab(lab))
+        return out.clip(0, 255).reshape(want.shape).astype(np.float32)
+
+    def _fits(self, lab: colour.Lab) -> NDArray[np.bool_]:
+        asked = self.raw(colour.from_lab(lab))
+        return np.asarray(
+            ((asked >= 0.0) & (asked <= _SEND_MAX)).all(axis=-1), dtype=np.bool_
+        )
+
+    def _give_up_chroma(self, lab: colour.Lab) -> colour.Lab:
+        """Pull toward the neutral axis of the same lightness, at constant hue."""
+        lo = np.zeros(len(lab), np.float64)
+        hi = np.ones(len(lab), np.float64)
+        for _ in range(_COMPRESS_STEPS):
+            mid = (lo + hi) / 2.0
+            trial = lab.copy()
+            trial[:, 1:] *= (1.0 - mid)[:, None]
+            fits = self._fits(trial)
+            hi = np.where(fits, mid, hi)
+            lo = np.where(fits, lo, mid)
+        out = lab.copy()
+        out[:, 1:] *= (1.0 - hi)[:, None]
+        return out
+
+    def _give_up_lightness(self, lab: colour.Lab) -> colour.Lab:
+        """For what still does not fit, move along L\\* — never per channel.
+
+        This half was missing from the first version, and its absence left the real
+        measured failure unfixed. The real case is a **neutral**: a 200-grey wanted send
+        (273, 264, 299) and got (255, 255, 255), 44 of blue refused against 18 of red. A
+        neutral has no chroma to give up, so chroma compression does nothing at all for
+        it and the per-channel clamp — the thing that moves the hue — happens anyway.
+
+        What a neutral out of range really means is a *lightness* this medium does not
+        have, so the answer is to move along its own axis until it does. The send is
+        monotone in L\\* along the neutral axis, so which way to go is decided by which
+        end the send overflowed.
+        """
+        stuck = ~self._fits(lab)
+        if not stuck.any():
+            return lab
+        asked = self.raw(colour.from_lab(lab))
+        # too much ink asked for → go lighter; too little → go darker
+        toward = np.where(asked.max(axis=-1) > _SEND_MAX, 0.0, 100.0)
+        toward = np.where(asked.min(axis=-1) < 0.0, 100.0, toward)
+        lo = np.zeros(len(lab), np.float64)
+        hi = np.ones(len(lab), np.float64)
+        for _ in range(_COMPRESS_STEPS):
+            mid = (lo + hi) / 2.0
+            trial = lab.copy()
+            trial[:, 0] = lab[:, 0] * (1.0 - mid) + toward * mid
+            fits = self._fits(trial)
+            hi = np.where(fits, mid, hi)
+            lo = np.where(fits, lo, mid)
+        out = lab.copy()
+        moved = lab[:, 0] * (1.0 - hi) + toward * hi
+        out[:, 0] = np.where(stuck, moved, lab[:, 0])
+        return out
+
     def apply_to_image(self, im: Image.Image) -> Image.Image:
         arr = np.asarray(im.convert("RGB"), np.float32)
-        return Image.fromarray(self.apply(arr).round().astype(np.uint8))
+        return Image.fromarray(self.send(arr).round().astype(np.uint8))
 
     def json(self) -> list[list[float]]:
         return [[float(v) for v in row] for row in self.coef]
@@ -284,13 +569,191 @@ class Correction:
         return cls(coef=arr)
 
 
+# ------------------------------------------------------------- the substrate ----
+#: within-patch/inter-patch disagreement above which the bare-paper readings are not
+#: describing one colour. Either the scanner is very non-uniform across the sheet (the
+#: literature measures up to ΔE 5 centre-to-edge on a flatbed) or the substrate is
+#: gonioapparent — a holographic or metallic stock whose colour depends on the angle it
+#: is lit and viewed at, which one fixed scanning geometry cannot measure at all.
+SUBSTRATE_UNEVEN = 4.0
+
+
+@dataclass(frozen=True, slots=True)
+class Substrate:
+    """The paper itself: bare, and under the heaviest ink it takes.
+
+    The chart is covered in unprinted paper — every gutter and margin — and the previous
+    one measured none of it, which is why nothing knew that ``holo-plain``'s stock is
+    blue. Its lightest patch was *printed* at 252, which is ink, not substrate.
+
+    Three separate facts come out of the bare patches, all free and all needing no
+    reference target: what the paper *is* (which is what a relative aim needs), a
+    per-round white (so rounds scanned on different days are not pooled as though the
+    lamp had not moved), and how much the readings disagree **across the sheet**, which
+    is the only honest signal that a reading is not a measurement.
+    """
+
+    white: tuple[float, float, float] = (255.0, 255.0, 255.0)
+    black: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    #: the largest ΔE00 between any two bare-paper readings on this sheet
+    spread: float = 0.0
+    #: how many bare patches it was measured over
+    patches: int = 0
+
+    @property
+    def measured(self) -> bool:
+        return self.patches > 0
+
+    @property
+    def cast(self) -> Cast:
+        """How far the bare paper is off neutral — what no ink can remove."""
+        return Cast.of(colour.to_lab(np.array([self.white], np.float32)))
+
+    @property
+    def even(self) -> bool:
+        return self.spread < SUBSTRATE_UNEVEN
+
+    @property
+    def text(self) -> str:
+        w = " ".join(f"{v:.0f}" for v in self.white)
+        return f"paper {w} — {self.cast.hue}, spread {self.spread:.2f} ΔE00"
+
+    @property
+    def warning(self) -> str:
+        """Said out loud when the paper cannot be measured at one geometry."""
+        if self.even:
+            return ""
+        return (
+            f"the bare-paper readings disagree by {self.spread:.2f} ΔE00 across this "
+            "sheet, so they are not describing one colour — either the scan is very "
+            "uneven or the stock is holographic/metallic, whose colour depends on the "
+            "angle it is lit at and which one scanning geometry cannot measure"
+        )
+
+    def json(self) -> dict[str, Any]:
+        return {
+            "white": list(self.white),
+            "black": list(self.black),
+            "spread": self.spread,
+            "patches": self.patches,
+            "cast": self.cast.json(),
+            "even": self.even,
+            "text": self.text,
+            "warning": self.warning,
+        }
+
+    @classmethod
+    def read(cls, data: object) -> Substrate:
+        raw: dict[str, object] = data if isinstance(data, dict) else {}
+        return cls(
+            white=_triple(raw.get("white"), 255.0),
+            black=_triple(raw.get("black"), 0.0),
+            spread=_float(raw.get("spread")),
+            patches=int(_float(raw.get("patches"))),
+        )
+
+    @classmethod
+    def of(cls, scanned: Patches, spec: Chart | None = None) -> Substrate:
+        """Read the paper off a scanned chart's bare and max-ink patches."""
+        card = spec or chart()
+        seen = np.asarray(scanned, np.float32)
+        bare = card.substrate
+        inked = card.of_role(Role.MAX_INK)
+        if not len(bare) or len(seen) < len(card):
+            return cls()
+        whites = seen[bare]
+        lab = colour.to_lab(whites)
+        spread = 0.0
+        if len(lab) > 1:
+            pairs = colour.delta_e00(lab[:, None, :], lab[None, :, :])
+            spread = float(pairs.max())
+        black = (
+            tuple(float(v) for v in seen[inked].min(axis=0))
+            if len(inked)
+            else (0.0, 0.0, 0.0)
+        )
+        return cls(
+            white=tuple(float(v) for v in np.median(whites, axis=0)),  # type: ignore[arg-type]
+            black=black,  # type: ignore[arg-type]
+            spread=spread,
+            patches=len(bare),
+        )
+
+
+# ----------------------------------------------------------------- the aim ----
+@dataclass(frozen=True, slots=True)
+class Intent:
+    """How much of the paper's own colour to accept rather than fight.
+
+    ``1.0`` — the default — aims **relative to the substrate**: a card's white prints as
+    the paper's white, because on a blue holographic sticker that *is* white and no ink
+    makes it whiter. Your eye adapts to the sheet in your hand, which is what ordinary
+    relative-colorimetric rendering assumes.
+
+    ``0.0`` is the old behaviour, aiming at an absolute neutral, and it is reachable
+    deliberately rather than by default — because on the real sticker it is what drove
+    the fit to demand a\\* +4.27 b\\* +10.62 for a grey, pinning red and green at the
+    ceiling so that the per-channel clip turned every highlight yellow.
+
+    Anything between is a partial adaptation, which is a legitimate preference and what
+    a perceptual intent does. Black point compensation is deliberately **not** offered:
+    it was tried and measured, and it roughly doubled ΔE00 (7.56 → 16.92) by lifting the
+    whole shadow end. Map the white; do not map the black.
+    """
+
+    adaptation: float = 1.0
+
+    @property
+    def relative(self) -> bool:
+        return self.adaptation > 0.0
+
+    @property
+    def text(self) -> str:
+        if self.adaptation >= 1.0:
+            return "relative to the paper (a card's white prints as the paper's white)"
+        if self.adaptation <= 0.0:
+            return "absolute (aims at a neutral white the paper may not reach)"
+        return f"{self.adaptation:.0%} of the way toward the paper's own white"
+
+    def json(self) -> dict[str, Any]:
+        return {
+            "adaptation": self.adaptation,
+            "relative": self.relative,
+            "text": self.text,
+        }
+
+    @classmethod
+    def read(cls, data: object) -> Intent:
+        raw: dict[str, object] = data if isinstance(data, dict) else {}
+        if "adaptation" not in raw:
+            return cls()
+        return cls(adaptation=min(1.0, max(0.0, _float(raw.get("adaptation")))))
+
+
+def aim(goal: Patches, substrate: Substrate, intent: Intent) -> Patches:
+    """What to actually ask the paper for, given what the paper is.
+
+    Blended in **linear light**, so the white end lands exactly on the measured paper at
+    full adaptation and exactly on the target at none.
+
+    Measured on the real ``holo-plain`` rounds, this one change takes the mid-grey send
+    from (232, 189, 166) to (139.5, 137.5, 144.4), the neutral ramp's blue-minus-red
+    tilt from -34.23 to +2.06, and the number of patches whose send clips from 48 of 80
+    to 5 of 80 — refitting evidence already on disk, with nothing new printed.
+    """
+    if not intent.relative or not substrate.measured:
+        return np.asarray(goal, np.float32)
+    lin_goal = colour.linearize(goal)
+    lin_white = colour.linearize(np.array(substrate.white, np.float32))
+    scale = (1.0 - intent.adaptation) + intent.adaptation * lin_white
+    return colour.encode(lin_goal * scale)
+
+
 #: below this many usable samples, take the clipped ones back rather than fit a
 #: 10-term polynomial to almost nothing
 _MIN_SAMPLES = 12
 #: what counts as pinned against the bottom or top of what can be sent
 _FLOOR, _CEILING = 0.5, 254.5
-#: the largest value a channel can be sent as — the edge of the reachable solid
-_SEND_MAX = 255.0
 
 
 def usable(sent: Patches) -> NDArray[np.bool_]:
@@ -477,6 +940,16 @@ def score(
     )
 
 
+def _triple(value: object, default: float) -> tuple[float, float, float]:
+    """Three finite numbers out of untrusted JSON, or the default for each."""
+    raw: list[object] = value if isinstance(value, list) else []
+    out = [
+        _float(raw[i]) if i < len(raw) and isinstance(raw[i], (int, float)) else default
+        for i in range(3)
+    ]
+    return (out[0], out[1], out[2])
+
+
 def _float(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return 0.0
@@ -485,16 +958,23 @@ def _float(value: object) -> float:
 
 
 # ------------------------------------------------------------ chart render ----
-def sent_patches(correction: Correction | None) -> Patches:
-    """What this round actually puts on paper: the target, through what we know."""
-    goal = target()
-    return goal if correction is None else correction.apply(goal)
+def sent_patches(correction: Correction | None, goal: Patches | None = None) -> Patches:
+    """What this round actually puts on paper: the aim, through what we know.
+
+    ``goal`` is the *aim* rather than the bare target, so a profile printing relative to
+    its own substrate asks the paper for what it can give. Passing nothing keeps
+    the absolute target, which is what round one has to print — there is no substrate
+    reading yet, and getting one is what round one is for.
+    """
+    want = target() if goal is None else np.asarray(goal, np.float32)
+    return want if correction is None else correction.send(want)
 
 
 def render_chart(
     correction: Correction | None = None,
     label: str = "",
     size: tuple[int, int] = (CANVAS_W, CANVAS_H),
+    goal: Patches | None = None,
 ) -> Image.Image:
     """The chart itself. ``label`` is printed above the patches.
 
@@ -524,7 +1004,7 @@ def render_chart(
     cw = (x1 - x0) / spec.cols * width
     ch = (y1 - y0) / spec.rows * height
     pad = min(cw, ch) * spec.pad
-    for i, color in enumerate(sent_patches(correction).round().astype(int)):
+    for i, color in enumerate(sent_patches(correction, goal).round().astype(int)):
         col, row = i % spec.cols, i // spec.cols
         px = (x0 + col / spec.cols * (x1 - x0)) * width
         py = (y0 + row / spec.rows * (y1 - y0)) * height
@@ -559,6 +1039,7 @@ def chart_page(
     slot: Slot | None = None,
     grid: tuple[int, int] = GRID,
     label: str = "",
+    goal: Patches | None = None,
 ) -> Image.Image:
     """A full print page with the chart in ``slot`` and every other slot blank.
 
@@ -574,7 +1055,7 @@ def chart_page(
     inset_y = (y1 - y0) * _CELL_INSET * ph
     box_w = round((x1 - x0) * pw - 2 * inset_x)
     box_h = round((y1 - y0) * ph - 2 * inset_y)
-    art = render_chart(correction, label, fit_size((box_w, box_h)))
+    art = render_chart(correction, label, fit_size((box_w, box_h)), goal)
     page.paste(
         art,
         (

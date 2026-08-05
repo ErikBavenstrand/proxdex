@@ -5383,10 +5383,7 @@ def profile_strip(
 
 def _apply_profile(im: Image.Image, prof: profiles.Profile) -> Image.Image:
     """What a sheet would do to this image through that profile."""
-    correction = prof.correction
-    if correction is not None:
-        return correction.apply_to_image(im)
-    return media.compensate(im, prof.recipe)
+    return prof.render(im)
 
 
 def _pick(value: float | None, current: float) -> float:
@@ -5486,7 +5483,12 @@ def cal_chart(
     correction = None if raw else prof.correction
     label = prof.chart_label(where)
     page = calibrate_mod.chart_page(
-        cfg, correction, slot=where, grid=prof.grid, label=label
+        cfg,
+        correction,
+        slot=where,
+        grid=prof.grid,
+        label=label,
+        goal=prof.aim(calibrate_mod.target()),
     )
     dst = out or profiles.profiles_dir(lib.root) / (
         f"{prof.name}_round{len(prof.rounds) + 1}.{'png' if as_png else 'pdf'}"
@@ -5552,12 +5554,21 @@ def cal_add(
     # what this print was asked to be: the chart was rendered through whatever was
     # known then, which is exactly the correction fitted over the rounds recorded
     # so far — the round being added is not in that fit yet
-    sent = calibrate_mod.sent_patches(prof.correction)  # the current chart
+    sent = calibrate_mod.sent_patches(  # the current chart
+        prof.correction, prof.aim(calibrate_mod.target())
+    )
     scanned = calibrate_mod.read_scan(
         scan_path, cfg, slot=None if whole else where, grid=prof.grid
     )
     before = prof.residual
-    rnd = prof.add_round(scanned, sent, where, scan=scan_path.name, note=note.strip())
+    rnd = prof.add_round(
+        scanned,
+        sent,
+        where,
+        scan=scan_path.name,
+        note=note.strip(),
+        substrate=calibrate_mod.Substrate.of(scanned),
+    )
     profiles.save(lib.root, prof)
     e = prof.score(rnd)
     trend = ""

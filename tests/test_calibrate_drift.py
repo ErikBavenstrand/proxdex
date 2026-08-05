@@ -63,8 +63,28 @@ class TestAResidualIsThreeNumbers:
         err = prof.residual
         assert err is not None
         assert err.de00_mean > 0.0
-        assert err.cast.patches == len(calibrate.chart().neutrals)
+        assert err.cast.patches > 0
         assert err.total == len(goal)
+
+    def test_the_cast_covers_the_neutrals_this_medium_can_reach(self) -> None:
+        """And **only** those, which is a correction rather than a detail.
+
+        The neutral ramp is spaced in L\\* from 2 to 98 on purpose, so on any real stock
+        its ends are outside the printable range: those patches come back at the ink
+        floor or at the paper, carrying whatever hue *those* have. Averaging them in
+        reports a cast the print does not have anywhere anyone can see it — measured on
+        the simulated blue sticker, every neutral read a\\* +5.10 (red) where the
+        printable ones read a\\* +0.86 (neutral), so the number on screen contradicted
+        the sheet in hand. The error was already masked this way; the cast was not.
+        """
+        goal = calibrate.target()
+        greys = calibrate.chart().neutrals
+        prof = Profile(name="p", rounds=[_round(1, goal, _tinted(0.6))])
+        err = prof.residual
+        assert err is not None
+        reach = prof.gamut.holds(goal)
+        assert err.cast.patches == int(reach[greys].sum())
+        assert err.cast.patches <= len(greys)
 
     def test_a_perfect_print_is_zero_and_neutral(self) -> None:
         goal = calibrate.target()

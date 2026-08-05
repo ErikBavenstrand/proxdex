@@ -192,6 +192,22 @@ until it reaches paper or a pasted link:
   It reads `pyproject.toml` rather than trying the import, because in the
   environment the suite runs in every import works — which is exactly how `sheet`
   shipped twice with an undeclared `tomlkit`.
+- `tests/test_calibrate_model.py` — the press model, and it is the one file here that
+  pins something nobody could re-check *at all*: whether splitting a colour correction
+  into ink limit → linearization → grey balance → colour transform actually helps. The
+  evidence that started that rebuild was four stored rounds of one profile, which is one
+  sample of one medium and cannot answer it, so the answer comes from
+  **`tests/press_sim.py`** — a Murray-Davies press whose paper shows through in proportion
+  to how little ink covers it (measured at +49.9 blue-minus-red in the highlights against
+  +2.0 in the shadows, against the real profile's +57.75 / +5.50) and a scanner wrong in
+  the way the literature says a flatbed is wrong. Every threshold in it is a number that
+  was measured. Four things earn their place: the split really beats the polynomial on
+  **all four** press × scanner combinations and each stage really reduces the next one's
+  residual (a stage that helped one medium and hurt the other would be invisible over a
+  single case); a colour the model cannot make is compressed and not sent, **including**
+  when its send is in range and the transform is extrapolating; a verification round can
+  **fail** (1.6 on the press a model was measured on, 18.4 on another); and the two
+  rejected hypotheses stay rejected, so nobody rebuilds them.
 
 Everything else is still verified by running commands against a **throwaway
 library** (never the user's real one at `~/Documents/Pokémon Proxies`): a temp dir
@@ -2233,7 +2249,12 @@ that split, both found by driving it in a browser: patching a table that does no
 yet drew **nothing at all** on the first files ever dropped (`paintOrPatchImport` guards
 on the row count the table was built for), and the bar cannot be patched wholesale
 either, because it holds the bulk-id text box; its **print
-screen** is `proxdex profile` + `proxdex calibrate`, one control per verb. Going the other way, `SheetBody.cards` lets the UI impose a
+screen** is `proxdex profile` + `proxdex calibrate`, one control per verb — the paper as a
+swatch beside its own reading (`profile show`'s **Paper** line), the aim as a slider
+(`profile intent`), the survey with its density (`calibrate survey --size`), the check
+distinct from the round list (`calibrate verify`), one row per stage of the model
+(`profile show --stages`), and the assumed-reference warning with a way out
+(`calibrate reference`). Going the other way, `SheetBody.cards` lets the UI impose a
 *selection with copies* (`sheet <name> <id[:n]...>`), `FetchBody.related` is
 `fetch --related`. Border is the one step with **no** bulk action, on both sides: it has
 to be told where each card's border is, one card at a time.
@@ -2573,6 +2594,14 @@ precisely when the absence was the thing worth naming.
 scanned, the other was typed — and the by-hand numbers are then kept only as the
 record of where it started.
 
+**`Profile.render` is the one place a correction meets an image**, and it applies the aim,
+the model and the gamut compression in one order: there is no second path where they could
+be applied in another. A profile also carries the two things the numbers *mean* — its
+`Intent` (how much of the paper's colour to accept) and its `Reference` (whether the
+scanner has been characterized at all) — because a residual is not interpretable without
+them, which is why `profile show` prints all three above the rounds rather than beside
+them.
+
 **The by-hand route has to be judged on paper, so it gets tools for that.**
 `profile strip` (`media.vary` → `sheet.labelled_page`) prints one page of the same
 card at a row of values for **one** knob, each tile at true card size and labelled
@@ -2590,76 +2619,161 @@ the back profile whatever the faces mode; a fronts-only run prints no backs, so
 `/api/sheet/plan` reports no back profile at all rather than naming a correction
 that never happens.
 
-**Calibration is a loop on one sheet (`calibrate.py`).** `chart_page` renders a
-page with the chart in **one `Slot`** of a 2×3 grid, so you print, scan, record,
-then feed the *same paper* back in and print the next slot — six rounds per A4.
-Every round keeps both halves of the evidence (`sent` and `scanned` patches) and
-the correction is refitted over **all** rounds at once (`calibrate.fit`), so a
-round makes it truer instead of replacing what came before; round 1 prints the raw
-target, every later round prints the target through what is known, which samples
-the space where the cards live. Nothing is cached that cannot be rederived from
-the measurements — `Profile.correction` refits on read.
+**Calibration is one survey, one verification, and refinement only while it buys
+something (`calibrate.py`, `press.py`).** The old shape — print six charts on one sheet
+and watch a number fall — existed only because 80 patches cannot characterize anything,
+and it is what let the real `holo-plain` profile drive its neutral axis 32 levels toward
+yellow while every figure on screen fell. **The whole account is `docs/calibration.md`**,
+which is the plan, the measurements and the record of what each stage bought; the short
+version:
 
-**The chart's patches are placed by measurement (`calibrate.Chart`, `CHART`).**
-80 patches — a 16-step neutral ramp plus a 4×4×4 lattice over 50..200 — and every
-part of that is a measured choice, not taste. The lattice is pulled *inside* the
-printable box because a patch at pure red or 255 white clips and is dropped from
-the fit: an earlier 36-patch chart of primaries wasted 24 that way, leaving ~12
-usable samples for a 10-parameter model (same press, same code path: it settled at
-2.31 mean RGB, this one at 1.36). Density is bounded by patch *area*, not by how
-many colours you can name — 228 patches measured worse than 80, and 512 worse than
-36, because read noise and neighbour bleed grow faster than coverage helps. A
-continuous gradient is worse than either: nothing flat to average, and 1% of
-geometric error is a correlated 2.3 levels in every reading. A 3-D LUT lost to the
-polynomial at every density tried. **Do not "just add patches", and do not reach
-for a spectrum.** Changing the patch set invalidates stored rounds — `_read_patches`
-rejects any whose shape no longer matches, and `Profile.unreadable` counts them so
-it is never silent.
+```
+survey   (one sheet, uncorrected, ~468 patches)  -> the model
+verify   (one slot, the model's own predictions) -> the number that can FAIL
+refine   (one slot each, adaptive, optional)     -> only while checking says so
+```
 
-**One medium, one gamut, and the loop says when it is done.** Reachability is a
-fact about the paper and the inks, not about one sheet, so it is read from every
-live round pooled (`Profile.gamut`) and every round is scored against that same
-mask (`Profile.score` → `calibrate.score`, which takes the mask as an argument
-precisely so *whose* gamut it is has to be stated). Scoring each round against its
-own scan made the trend compare means over different patch sets — 63 to 68 of 80 on
-a real matte — so the number moved when the set moved rather than when the print
-improved. `Profile.plateau` then names the tail of rounds that bought nothing
-(`_FLAT_ROUNDS` in a row under `_FLAT_GAIN` mean RGB each, judged on the *best*
-round either side so one bad sheet is not read as progress stopping), and
-`calibrate add` says so **instead of** inviting the next round. That threshold is a
-judgement about your paper and your afternoon, not a noise floor — read noise
-barely survives a mean over ~70 patches (one level per patch moves it by 0.1).
+**A round records which chart it printed, and it had to.** `ChartId` is the closed set of
+targets code names — the verification chart and one per survey density — and every patch
+array is validated against **the chart the round itself names**. Against one global
+length, a 468-patch survey round was written and then read back as *unreadable*: a verb
+whose output the loader silently discards. A `Pending` (slot + chart + **the patches that
+really went on the paper** + purpose) is what an emitting verb leaves behind, and
+recording the send rather than recomputing it at `add` time is deliberate — a survey
+prints uncorrected while a check prints through the model, the model moves the moment
+another round is added, and the aim moves with the intent, so any recomputation pairs
+scanned patches with targets they were never sent.
 
-**A round is switched off, never deleted (`Round.enabled`, `Profile.live`).** The
-correction fits over the live rounds and refits on every read, so switching a
-round back on restores exactly what it was doing — which is the only way to
-compare with and without. `Profile.influence(n)` refits without one round and
-reports how far the correction moves (its *pull*): a round pulling much harder
-than its neighbours is either the most informative measurement or an outlier.
-Measured on a deliberately botched scan: pull 17.7 against 5.6 / 5.4 / 4.4.
-Numbering never shifts, because nothing is removed.
+**`Purpose` decides whether a round feeds the fit or judges it**, and it is deliberately
+*not* the chart id: a refinement round and a check print the same small chart, and what
+differs is what is done with the answer. A refinement round is more evidence, so it
+re-fits and can only ever agree with itself; a **check** prints what the model predicts,
+is scored, and is kept **out** of the fit, because a model that trains on its own exam
+cannot fail it. `Profile.verified` is that number and `plateau` is judged on it once there
+are any (`Plateau.on_checks` says which, since the word converged means something much
+weaker otherwise). Measured on the harness: a model fitted on one press verifies at **1.6**
+on that press and **18.4** on another.
 
-Three things there were got wrong once and must stay right: the ridge is **small
-and absolute** (`_RIDGE`, not proportional to the sample count — a ridge that
-grows with the data damps every round you add, which is backwards for a loop that
-exists to improve with measurement); samples whose *send* value is pinned at 0 or
-255 are **dropped from the fit** (`usable` — several wanted colours clip to the
-same send, so the pair says nothing about the invertible response and only drags
-the polynomial); and the reported error covers only the patches the medium can
-**reach**, with the clipped count named separately — paper is not 255 and ink is
-not 0, and averaging in colours that can never be hit gives a number that can
-never fall. **A gamut is a solid, not a box**: `in_gamut` decides reachability by
-inverting the print's *own* response (fit its pairs, ask what send each target
-would need, reachable iff that lands in 0..255). Comparing each channel against
-the print's extremes — which is what it did first — passes every colour that is
-inside the box on all three channels and still unprintable, i.e. every saturated
-one: a real matte profile reported 17.7 mean RGB over "76 reachable" patches while
-the 67 it could actually hit sat at 12.7, blaming the calibration for missing
-colours the inks do not contain. Verified end to end
-against a simulated press: `21.5 → 5.0 → 4.0 → 3.7 → 3.3 → 2.9` mean RGB over six
-rounds, and `~4.6` with scanner noise. A bad round (a crooked scan) is ruinous at
-any ridge weight, so the defence is naming it (`calibrate add` compares against
-the best round so far) and being able to hold it out (`calibrate disable`).
+**The staged press model (`press.py`) replaced one degree-2 polynomial doing four jobs.**
+Ink limit → linearization → grey balance → colour transform, in that order, each fitted on
+what the ones before it could not remove, because **a stage downstream cannot repair a
+stage upstream** and a cast has to be attributable to *one* of them. The polynomial
+survives as the last stage. `PressModel.residuals` is one row per stage and
+`profile show --stages` prints them.
+
+Measured on the stage-0 harness (`tests/press_sim.py` — a Murray-Davies press whose paper
+shows through in proportion to how little ink covers it, plus a scanner wrong in the way
+the literature says a flatbed is wrong), the split beats the polynomial on every
+combination: matte/honest 2.22 → **1.34**, matte/biased 4.99 → **3.87**, holo/honest
+4.98 → **3.64**, holo/biased 10.05 → **6.42** ΔE00, with each stage really reducing the
+next one's residual (23.30 → 6.34 → 3.03 → 2.68). On the blue sticker through an honest
+scanner a grey ramp comes off with **no visible cast**, which is the point of the whole
+exercise; what a biased one leaves behind is the reference below.
+
+Two properties are load-bearing. **Every stage's inverse is arithmetic, not a second
+fit** — bisection on a monotone curve, the mirrored solve on the grey axis — because two
+independently fitted directions are free to disagree and a round-trip error nobody
+measured is a fit that lies about what it will print. Only the colour transform has no
+closed-form inverse, so it is fitted both ways and **reports** its round-trip error. And
+**only an uncorrected round can linearize**: a ramp printed through a correction is no
+longer a sweep of one channel, so a profile with no direct round gets identity curves and
+is *told* so (`PressModel.staged`) rather than getting a linearization inferred from the
+wrong patches. That is why the survey prints raw.
+
+**The chart is a described patch set, not a tuple of colours (`calibrate.Chart`,
+`Role`).** Every stage selects patches by **role** — `substrate`, `ramp_r/g/b`, `neutral`,
+`max_ink`, `repeat`, `lattice` — never by index arithmetic, because `_GREYS = slice(0, 16)`
+spelled at each call site is exactly the implicit index a chart change breaks in silence.
+The survey carries bare-paper patches woven through it (the only handle on a flatbed's
+centre-to-edge non-uniformity), a ramp per ink (without which no per-channel linearization
+is possible at all — step two of every industry workflow), an **L\*-spaced** neutral ramp
+(the old `linspace(4, 252)` crowded its perceptual movement into the highlights, which is
+where a tinted substrate shows through hardest), max-ink patches and the interior lattice.
+`SurveySize` is `full`/`half`/`quarter` and **only the lattice shrinks** — the rest is what
+the later stages are built from, and there is no patch to save there.
+
+Density is still bounded by patch *area*, not by how many colours you can name: 228
+patches measured worse than 80, and 512 worse than 36, because read noise and neighbour
+bleed grow faster than coverage helps. A continuous gradient is worse than either, and a
+3-D LUT lost to the polynomial at every density tried. **Do not "just add patches", and do
+not reach for a spectrum.**
+
+**The chart's canvas height follows its patch grid, and `survey_rect` is one function the
+writer and the reader both use.** One fixed 1200×1350 canvas drew an 18×26 survey's
+patches half as tall as they are wide; and since a chart is letterboxed inside its box
+when its grid is not the box's shape, a reader cropping the *box* hands
+`detect_fiducials` a band of blank paper. Same argument as `imports.plan` and `sheet.plan`.
+
+**One medium, one gamut, and it is a `Gamut` solid rather than a mask.** Reachability is a
+fact about the paper and the inks, read from every round that put ink on paper — but a
+profile's rounds no longer share a patch set, so a boolean array of one length cannot
+answer for another. `Gamut.holds(wanted)` answers for whatever it is handed, bounding the
+hull from *outside*, which is the safe direction: too generous a gamut can only inflate
+the reported error, never hide it.
+
+**Compression asks two questions, and that was a measured defect.** "The send came out in
+range" is necessary and not sufficient: a degree-2 transform extrapolating past the region
+it was fitted over returns a perfectly valid-looking send for a colour the paper cannot
+make. On the simulated sticker a wanted dark orange went out as (21, 66, 95) — heavy ink
+for a light colour — and came back **blue** at ΔE00 63.6. So `PressModel` carries the
+region it was measured over (`reach`) and `calibrate.compress` takes a `Fits` predicate;
+`Sender` is a protocol and the compression is **one function** both models call, because
+compression living on one of them is a second implementation waiting to happen on the
+other. Its lightness give-up tries **both** directions and takes the smaller move — the
+direction used to be inferred from which end the send overflowed, which says nothing about
+a colour whose send is in range, and on a medium whose white is L\* 74 it pushed such
+colours further out every time.
+
+**The reported cast covers the neutrals this medium can reach**, for exactly the reason
+the error does. The ramp is L\*-spaced from 2 to 98 on purpose, so on any real stock its
+ends clip to the ink floor and carry *that* hue: measured, the reported cast read
+a\* +5.10 (red) where the printable neutrals read a\* +0.86 (neutral) — a number on screen
+contradicting the sheet in hand.
+
+**Adaptive placement moves only the lattice (`calibrate.adaptive`).** A fixed lattice
+spends patches on colours the paper cannot make (43 of 80 clipped on foil), so a
+refinement or verification chart puts its interior patches where the model is least
+certain and inside the measured gamut — the `targen -c` mechanism. The greys, the ramps,
+the substrate and the max-ink patches **stay put**, so two checks remain comparable on
+everything a trend is read from, and the placement is deterministic or two verification
+errors are not comparable at all.
+
+**A round is switched off, never deleted (`Round.enabled`, `Profile.live`).** The model
+fits over the live rounds and refits on every read, so switching a round back on restores
+exactly what it was doing — the only way to see what it was doing. `Profile.influence(n)`
+refits without one round and reports how far the answer moves (its *pull*): measured on a
+deliberately botched scan, 17.7 against 5.6 / 5.4 / 4.4. Numbering never shifts.
+
+Three things that were got wrong once and must stay right: the ridge is **small and
+absolute** (not proportional to the sample count — a ridge that grows with the data damps
+every round you add, which is backwards for a loop that exists to improve with
+measurement); samples whose *send* is pinned at 0 or 255 are **dropped** (`usable` —
+several wanted colours clip to the same send, so the pair says nothing about the
+invertible response); and the error covers only the patches the medium can **reach**, with
+the clipped count named separately. A bad round is ruinous at any ridge weight, so the
+defence is naming it (`calibrate add` compares against the best round so far) and being
+able to hold it out (`calibrate disable`).
+
+**`calibrate.Reference` is the missing transform, named rather than tuned around — and it
+is never silent.** The root cause of the whole rebuild is that `fit` learns *scanner
+reading → send* and `render` then feeds it *sRGB card pixels*; nothing establishes those
+are the same space, and they are not, so the loop converges on "the print **scans as** the
+target" when what anyone wants is "the print **looks like** the card". On matte a decent
+scanner is near enough that the two nearly coincide; on a coloured or specular stock they
+diverge, and the divergence is the cast. Every profile has a `Reference`, it is the
+identity until a target is read, and `assumed` is reported wherever the profile is named —
+the same treatment a dangling `[print] profile` gets, because §1.1 did its damage as an
+*unstated* assumption.
+
+`ReferenceTarget` is the **ColorChecker** and deliberately not IT8.7/2: an IT8's 264
+patches are batch-specific and ship with a data file per production run, so hardcoding
+"the" values would be inventing a measurement. Its published values are D50/2° and
+everything here is D65, so `colour.from_lab_d50` Bradford-adapts them — which moves the
+chart's **blue** patch 4.82 ΔE00 and its white 0.16, i.e. precisely the region a blue
+substrate is the whole discussion about. `ASSUMED_FLOOR` (10) and `REFERENCE_FLOOR` (4.9)
+are the literature's numbers for what an uncharacterized flatbed costs and what a matrix
+profile recovers, and both are quoted so the offer says what it is worth rather than
+implying a flatbed becomes a colorimeter.
 
 ## Conventions
 

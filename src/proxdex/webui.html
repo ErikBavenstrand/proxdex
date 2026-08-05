@@ -1187,6 +1187,25 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { background: #fff; }
 .tbl tr.muted td, .calslot.muted b { opacity: .45; }
 .recipe { display: grid; gap: var(--s2); grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); }
 img.proof { width: 100%; max-width: 32rem; border: 1px solid var(--rule); border-radius: .25rem; }
+/* the paper itself, as a swatch: the one fact on this screen you can judge by eye, and
+   the one nothing measured before. Ringed in `--rule-2` for the reason the card tiles
+   are — a near-white stock has no visible edge against the panel otherwise. */
+.medrow { display: flex; align-items: center; gap: var(--s3); }
+.medswatch { flex: 0 0 3rem; height: 3rem; border-radius: .25rem;
+  border: 1px solid var(--rule-2); background-image:
+    linear-gradient(45deg, var(--stock-3) 25%, transparent 25%, transparent 75%, var(--stock-3) 75%),
+    linear-gradient(45deg, var(--stock-3) 25%, transparent 25%, transparent 75%, var(--stock-3) 75%);
+  background-size: .75rem .75rem; background-position: 0 0, .375rem .375rem; }
+/* one row per stage of the model, so a cast belongs to a stage and not to "the fit" */
+.stagerow { display: flex; align-items: baseline; gap: var(--s2); padding: .25rem 0;
+  border-bottom: 1px solid var(--rule); }
+.stagerow:last-child { border-bottom: 0; }
+.stagerow b { flex: 0 0 9rem; font-size: .8125rem; }
+.stagerow .faint { flex: 1 1 auto; min-width: 0; font-size: .75rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stagerow .mono { flex: 0 0 auto; font-size: .75rem; }
+.stagerow.muted { opacity: .5; }
+.aimslider { max-width: 14rem; }
 
 .picklist { max-height: 15rem; overflow: auto; border: 1px solid var(--rule); border-radius: .375rem; }
 .pickrow {
@@ -7358,6 +7377,7 @@ async function paintProfile(){
     </div>` : ''}
 
     ${p.stored ? byHandPanel(p) : ''}
+    ${p.stored ? mediumPanel(p) : ''}
     ${p.stored ? calibrationPanel(p) : ''}`;
 }
 
@@ -7420,11 +7440,97 @@ function getStrip(){
     + `?vary=${encodeURIComponent(vary)}&steps=${encodeURIComponent(steps)}`, '_blank');
 }
 
+/* The three facts every number below depends on: what the paper *is*, what the print is
+   aiming at, and whether the scanner has been characterized at all.
+
+   Above the rounds and not beside them, because a residual is not interpretable without
+   them: the same print scores differently against an absolute neutral and against the
+   stock it is on, and the scanner decides what "measured" even means. The assumed
+   reference gets the same treatment a dangling `[print] profile` does — it is an
+   assumption, and it did its damage by going unstated. */
+function mediumPanel(p){
+  const s = p.substrate, ref = p.reference, aim = p.intent;
+  const swatch = s.measured
+    ? `rgb(${s.white.map(v => Math.round(v)).join(',')})` : 'transparent';
+  const pct = Math.round((aim.adaptation || 0) * 100);
+  return `
+    <div class="panel p-3 mb-3">
+      <div class="eyebrow mb-2">This medium</div>
+      <div class="medrow">
+        <div class="medswatch" style="background:${swatch}"
+             title="${s.measured ? esc(s.text) : 'not measured yet'}"></div>
+        <div>
+          <div class="eyebrow mb-0">Paper</div>
+          ${s.measured ? `<div class="mono">${s.white.map(v => v.toFixed(0)).join(' ')}
+            <span class="faint">${esc(s.cast.hue)}, spread ${s.spread.toFixed(2)} ΔE00</span></div>`
+            : `<p class="hint mb-0">Not measured. The survey chart reads it off its own
+               bare patches, and the aim stays absolute until it does.</p>`}
+          ${s.warning ? `<p class="hint mb-0" style="color:var(--hold)">${esc(s.warning)}</p>` : ''}
+        </div>
+      </div>
+      <hr class="rule my-3">
+      <div class="eyebrow mb-1">Aim</div>
+      <div class="d-flex gap-2 align-items-center flex-wrap">
+        <input type="range" class="form-range aimslider" id="pf_aim" min="0" max="100"
+               step="5" value="${pct}" aria-label="how much of the paper's colour to accept"
+               oninput="paintAim(this.value)">
+        <span class="mono" id="pf_aimval" style="min-width:3rem">${pct}%</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="saveAim()">Set the aim</button>
+      </div>
+      <p class="hint mb-0 mt-1" id="pf_aimtext">${esc(aim.text)}</p>
+      <p class="hint mb-0 faint"><b>100%</b> aims relative to the paper — a card's white
+        prints as the paper's white, which on a tinted stock is the only honest answer
+        because no ink makes it whiter. <b>0%</b> aims at an absolute neutral: that is
+        what a real foil profile was doing, and it drove the fit to demand a* +4.27
+        b* +10.62 for a grey, pinning two channels at the ceiling so every highlight came
+        off yellow.</p>
+      <hr class="rule my-3">
+      <div class="eyebrow mb-1">Scanner</div>
+      <p class="hint mb-1" ${ref.assumed ? 'style="color:var(--hold)"' : ''}>${esc(ref.text)}</p>
+      ${ref.assumed ? `<p class="hint mb-2 faint">${esc(ref.warning)}</p>` : ''}
+      <div class="d-flex gap-2 align-items-center flex-wrap">
+        <input class="form-control form-control-sm" type="file" id="pf_ref"
+               accept="image/*" style="max-width:16rem">
+        <button class="btn btn-sm btn-outline-secondary" onclick="addReference()">Read a ColorChecker</button>
+        ${ref.assumed ? '' : `<button class="btn btn-sm btn-ghost"
+           onclick="clearReference()">Back to assuming sRGB</button>`}
+      </div>
+    </div>`;
+}
+function paintAim(value){
+  const pct = Number(value);
+  $('#pf_aimval').textContent = `${pct}%`;
+  $('#pf_aimtext').textContent = pct >= 100
+    ? "relative to the paper (a card's white prints as the paper's white)"
+    : pct <= 0 ? 'absolute (aims at a neutral white the paper may not reach)'
+    : `${pct}% of the way toward the paper's own white`;
+}
+async function saveAim(){
+  const body = {adaptation: Number($('#pf_aim').value) / 100};
+  if(await act(`/api/profile/${encodeURIComponent(state.profile)}`, body, 'Aim saved'))
+    reloadProfiles();
+}
+async function addReference(){
+  const inp = $('#pf_ref');
+  if(!inp || !inp.files[0]) return toast('Choose a scan of the target first.');
+  const fd = new FormData();
+  fd.append('file', inp.files[0]);
+  fd.append('target', 'colorchecker');
+  return postForm(`/api/calibrate/reference/${encodeURIComponent(state.profile)}`, fd);
+}
+async function clearReference(){
+  if(await act(`/api/calibrate/reference/${encodeURIComponent(state.profile)}`,
+               {_method: 'DELETE'}, 'Back to assuming sRGB')) reloadProfiles();
+}
+
 /* The calibration loop, as a screen: where the next chart goes, what every round
    measured, and how the error fell. */
 function calibrationPanel(p){
   const rounds = p.rounds_detail || [];
-  const worst = Math.max(1, ...rounds.filter(r => r.enabled).map(r => r.error.de00_mean));
+  const live = rounds.filter(r => r.enabled);
+  const checks = live.filter(r => r.purpose === 'verify');
+  const trend = checks.length ? checks : live.filter(r => r.purpose !== 'verify');
+  const worst = Math.max(1, ...trend.map(r => r.error.de00_mean));
   const used = new Map(rounds.map(r => [`${r.slot[0]},${r.slot[1]}`, r]));
   const [cols, rows] = p.grid;
   const cells = [];
@@ -7439,7 +7545,8 @@ function calibrationPanel(p){
       <b>${r ? r.n : (next ? '→' : '')}</b>
       <span class="mono">${col + 1},${row + 1}</span></div>`);
   }
-  const res = p.residual;
+  const res = p.residual, checked = p.verified, model = p.model;
+  const surveyed = !!(model && model.staged);
   return `
     <div class="panel p-3 mb-3">
       <div class="d-flex align-items-baseline gap-2 mb-1">
@@ -7452,6 +7559,18 @@ function calibrationPanel(p){
         res.cast.visible ? 'var(--hold)' : 'var(--txt)'}">${res.cast.hue}</b>
         <span class="mono faint">a* ${res.cast.a.toFixed(2)} b* ${res.cast.b.toFixed(2)}</span>
         — a mean hides a cast, and a cast is the first thing you see.</p>` : ''}
+      ${/* the third number, and the only one that can fail: printed through the finished
+            model and scored on how far its own predictions landed. Its absence is why a
+            profile could drive itself 32 levels toward yellow and look converged. */''}
+      ${checked ? `<p class="hint mb-2"><b style="color:var(--proof)">Verified</b> at mean
+        <b class="mono">${checked.de00_mean.toFixed(1)}</b> ΔE00 over ${checked.measured}
+        patch(es) it had to predict, neutrals <span class="mono">a*
+        ${checked.cast.a.toFixed(2)} b* ${checked.cast.b.toFixed(2)}</span>.
+        <span class="faint">Every other figure here is the fit judged against the data it
+        was fitted on, which can only ever agree with itself.</span></p>`
+        : (res ? `<p class="hint mb-2" style="color:var(--hold)"><b>Never verified.</b>
+          Every figure here is the fit measured against its own measurements. Print a
+          check to get a number that can fail.</p>` : '')}
       ${p.drift ? `<p class="hint mb-2" style="color:var(--hold)">
         <b>${esc(p.drift.text)}</b><br><span class="faint">${esc(p.drift.hint)}</span></p>` : ''}
       <p class="hint">Print the chart on this medium, scan it with auto-correction
@@ -7478,10 +7597,32 @@ function calibrationPanel(p){
             : `${p.free_slots.length} slot(s) left. Next: <span class="mono">${p.next_slot[0] + 1},${p.next_slot[1] + 1}</span>.`}</p>
         </div>
         <div class="vstack gap-2">
-          <div class="eyebrow">Next round${p.plateau ? ' — optional now' : ''}</div>
-          <button class="btn btn-sm ${p.plateau ? 'btn-outline-secondary' : 'btn-primary'}"
-                  onclick="getChart()">Get chart for round ${rounds.length + 1}</button>
-          <label class="eyebrow mb-0" for="pf_scan">then add the scan</label>
+          <div class="eyebrow">${surveyed ? 'Next chart' : 'Start here'}</div>
+          ${surveyed ? '' : `
+            <div class="d-flex gap-2">
+              <select class="form-select form-select-sm" id="pf_size" style="max-width:9rem"
+                      aria-label="how much paper the survey costs">
+                <option value="full" selected>full — 1 sheet</option>
+                <option value="half">half — 3 slots</option>
+                <option value="quarter">quarter — 2 slots</option>
+              </select>
+              <button class="btn btn-sm btn-primary" onclick="getSurvey()">Get the survey</button>
+            </div>
+            <p class="hint mb-0">The characterization run, printed <b>uncorrected</b> and
+              once per medium: bare paper (which is what tells proxdex your stock is
+              tinted), a ramp per ink so each can be linearized, an L*-spaced grey axis,
+              the heaviest ink each way, and the colour lattice. Only the lattice shrinks
+              at a smaller size — the rest is what the model is built from.</p>`}
+          ${surveyed ? `
+            <button class="btn btn-sm ${p.checks ? 'btn-outline-secondary' : 'btn-primary'}"
+                    onclick="getVerify()">Get a check</button>
+            <p class="hint mb-0">Prints what the model <b>predicts</b> and scores where it
+              landed — the one number here that can fail. It is kept out of the fit, since
+              a model marking its own homework cannot fail it.</p>
+            <button class="btn btn-sm btn-ghost" onclick="getChart()">Another refinement round</button>`
+            : ''}
+          <label class="eyebrow mb-0" for="pf_scan">then add the scan${
+            p.pending ? ` <span class="faint">(${pendingKind(p)} is outstanding)</span>` : ''}</label>
           <input class="form-control form-control-sm" type="file" id="pf_scan" accept="image/*">
           <div class="d-flex gap-2 align-items-center">
             <select class="form-select form-select-sm" id="pf_slot" style="max-width:11rem">
@@ -7495,20 +7636,45 @@ function calibrationPanel(p){
         </div>
       </div>
 
+      ${model && model.staged ? `
+        <hr class="rule my-3">
+        <div class="eyebrow mb-1">The model, stage by stage</div>
+        <p class="hint">Ink limit, then linearization, then grey balance, then the colour
+          transform — in that order, each fitted on what the ones before it could not
+          remove. The split is what makes a cast attributable to <b>one</b> of them
+          instead of to "the fit".</p>
+        ${model.stages.map(s => `
+          <div class="stagerow ${s.measured ? '' : 'muted'}">
+            <b>${esc(s.label)}</b>
+            <span class="faint">${esc(s.blurb)}</span>
+            <span class="mono">${s.measured
+              ? (s.note ? esc(s.note)
+                : `${s.before.toFixed(2)} → ${s.after.toFixed(2)} (${
+                   s.gained >= 0 ? '+' : ''}${s.gained.toFixed(2)})`)
+              : 'not measured'}</span>
+          </div>`).join('')}` : ''}
+
       ${rounds.length ? `
         <hr class="rule my-3">
-        <div class="eyebrow mb-1">How the error fell</div>
-        <div class="trend">${rounds.filter(r => r.enabled).map(r => `
+        ${/* the checks when there are any, else the fit's own rounds — never both in one
+              row of bars. A survey's uncorrected 19.4 beside two checks' 4.1 and 3.2
+              reads as "the error fell" when those are three different measurements of
+              different things, and the only one that can fail is the last two. */''}
+        <div class="eyebrow mb-1">${trend.length && trend[0].purpose === 'verify'
+          ? 'How the checks landed' : 'How the fit’s own error fell'}</div>
+        <div class="trend">${trend.map(r => `
           <div class="tbar" title="round ${r.n}: mean ${r.error.de00_mean.toFixed(1)} ΔE00">
             <i style="height:${Math.max(4, r.error.de00_mean / worst * 100)}%"></i>
             <span class="mono">${r.error.de00_mean.toFixed(1)}</span>
           </div>`).join('')}</div>
         <div class="tblwrap mt-2"><table class="tbl">
-          <thead><tr><th>Round</th><th>Slot</th><th>Date</th><th>Mean / max ΔE00</th>
+          <thead><tr><th>Round</th><th>Chart</th><th>Slot</th><th>Date</th><th>Mean / max ΔE00</th>
             <th title="How far the correction moves if this round is left out">Pull</th>
             <th>Note</th><th></th></tr></thead>
           <tbody>${rounds.map(r => `<tr class="${r.enabled ? '' : 'muted'}">
             <td class="mono">${r.enabled ? r.n : `${r.n} · off`}</td>
+            <td class="faint">${esc(r.chart_label)}${
+              r.purpose === 'verify' ? ' <span class="chip">check</span>' : ''}</td>
             <td class="mono">${esc(r.slot_text)}</td>
             <td class="faint">${esc(r.date)}</td>
             <td class="mono">${r.error.de00_mean.toFixed(1)} / ${r.error.de00_max.toFixed(1)}</td>
@@ -7532,9 +7698,9 @@ function calibrationPanel(p){
                src="/api/calibrate/proof/${encodeURIComponent(p.name)}/${state.proofOf}">
           <p class="hint mb-0 mt-1">Top of each pair is the target, bottom is the
             scan. This is where a cast or a crushed shadow shows itself.</p>` : ''}
-        ${res ? `<p class="hint mb-0 mt-2">Every round is scored over the same
-          ${res.measured} of ${res.measured + res.clipped} patches — one medium, one
-          gamut.${res.clipped ? ` The other ${res.clipped} are outside what this
+        ${res ? `<p class="hint mb-0 mt-2">Scored over ${res.measured} of
+          ${res.measured + res.clipped} patches — one medium, one gamut, measured from
+          the scans.${res.clipped ? ` The other ${res.clipped} are outside what this
           medium can print at all: paper is not 255, ink is not 0, and a saturated
           colour can need more of one ink than exists. That floor is the paper's,
           not the calibration's.` : ''}</p>` : ''}`
@@ -7543,10 +7709,20 @@ function calibrationPanel(p){
 }
 /* Which slot the scan is expected to be: the one the last chart was rendered for
    if a chart is still outstanding, else the next blank one. Chosen for you,
-   because getting it wrong reads the wrong square of paper. */
+   because getting it wrong reads the wrong square of paper.
+
+   `pending` is an object now — a slot *and* which chart is on it, since a survey and a
+   verification chart are different patch sets and reading one as the other samples the
+   gutters. It was a bare `[col, row]`, so this read `undefined[0]`. */
 function expectedSlot(p){
-  const s = p.pending || p.next_slot;
+  const s = (p.pending && p.pending.slot) || p.next_slot;
   return `${s[0] + 1},${s[1] + 1}`;
+}
+/* What the outstanding chart is, in words — so the Add control says which of the two
+   kinds of round the scan about to be uploaded will become. */
+function pendingKind(p){
+  if(!p.pending) return '';
+  return p.pending.purpose === 'verify' ? 'a check' : 'a measurement';
 }
 function allSlots(p){
   const out = [];
@@ -7594,12 +7770,38 @@ async function saveRecipe(){
   if(await act(`/api/profile/${encodeURIComponent(state.profile)}`, body, 'Recipe saved'))
     reloadProfiles();
 }
-function getChart(){
+function getChart(){ openChart('chart'); }
+function getVerify(){ openChart('verify'); }
+function getSurvey(){
+  const size = ($('#pf_size') || {}).value || 'full';
+  openChart('survey', `size=${encodeURIComponent(size)}`);
+}
+/* One opener for all three charts. Each records which slot it went in *and* which chart
+   it is, so the scan needs no answer — and the survey has no slot to pick, since it
+   spends the ones its own region covers. */
+function openChart(kind, extra){
   const p = state.profileDetail;
   const slot = p.next_slot ? `${p.next_slot[0] + 1},${p.next_slot[1] + 1}` : '';
-  window.open(`/api/calibrate/chart/${encodeURIComponent(p.name)}?slot=${encodeURIComponent(slot)}`, '_blank');
-  // the chart records which slot it was rendered for, so the scan needs no answer
+  const query = kind === 'survey' ? (extra || '')
+    : `slot=${encodeURIComponent(slot)}`;
+  window.open(`/api/calibrate/${kind}/${encodeURIComponent(p.name)}?${query}`, '_blank');
   setTimeout(reloadProfiles, 600);
+}
+/* Upload a file to a CLI-backed endpoint. One helper, because there are two things you
+   feed this screen from a scanner — a chart and a reference target — and they answer the
+   same way: the verb's own log, which is the text the terminal would have printed. */
+async function postForm(url, form){
+  showBusy('calibrate');
+  let j = {ok:false, log:''};
+  try{
+    const r = await fetch(url, {method:'POST', body:form});
+    j = await r.json();
+  } catch(e){ j = {ok:false, log:String(e)}; }
+  hideBusy();
+  toast(j.ok ? tail(j.log) : 'Failed\n' + tail(j.log || JSON.stringify(j)),
+        j.ok ? 9000 : 14000);
+  reloadProfiles();
+  return j.ok;
 }
 async function addRound(){
   const inp = $('#pf_scan');
@@ -7609,16 +7811,7 @@ async function addRound(){
   fd.append('file', inp.files[0]);
   if(slot) fd.append('slot', slot); else fd.append('whole', 'true');
   fd.append('note', $('#pf_note').value || '');
-  showBusy('calibrate');
-  let j = {ok:false, log:''};
-  try{
-    const r = await fetch(`/api/calibrate/add/${encodeURIComponent(state.profile)}`,
-                          {method:'POST', body:fd});
-    j = await r.json();
-  } catch(e){ j = {ok:false, log:String(e)}; }
-  hideBusy();
-  toast(j.ok ? tail(j.log) : 'Failed\n' + tail(j.log || JSON.stringify(j)), j.ok ? 9000 : 14000);
-  reloadProfiles();
+  return postForm(`/api/calibrate/add/${encodeURIComponent(state.profile)}`, fd);
 }
 async function switchRound(n, on){
   const ok = await act(`/api/calibrate/round/${encodeURIComponent(state.profile)}/${n}`,

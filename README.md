@@ -1027,85 +1027,147 @@ not which value to keep. `--vary` takes `saturation`, `contrast`, `brightness` o
 The web UI has the same thing under **Print → By hand**: the four numbers, an
 inline before/after, and a strip to print.
 
-## Calibrating a medium (a loop, on one sheet of paper)
+## Calibrating a medium (measure once properly, then check)
 
-With a scanner, proxdex _measures_ the correction instead of guessing it. The
-loop is designed to be walked several times on **one sheet**: each round prints
-the chart into a different slot of a 2×3 grid, so six rounds fit an A4 page.
+With a scanner, proxdex _measures_ the correction instead of guessing it. The shape is
+the one every profiling tool uses: **characterize once, verify, and refine only while
+verifying says it is worth it.**
 
 ```bash
-proxdex calibrate chart                      # → profiles/<name>_round1.pdf, slot 1,1
+proxdex calibrate survey                     # → profiles/<name>_survey_full.pdf
 #   print it on the medium (colour management OFF)
-#   scan the whole page (scanner auto-correction OFF), then:
-proxdex calibrate add --scan scan.png        # records the round, refits, reports
-#   feed the SAME sheet back in and repeat — the next chart goes in slot 2,1
-proxdex profile show                         # watch the error fall
+#   scan the middle of the platen (auto-correction OFF), then:
+proxdex calibrate add --scan scan.png        # reads the paper, fits the model, reports
+proxdex profile show --stages                # what each stage of the model bought
+
+proxdex calibrate verify                     # → what the model PREDICTS, in one slot
+proxdex calibrate add --scan check.png       # scores how far those predictions landed
+
+proxdex calibrate chart                      # a refinement round, if the check asks for one
 proxdex calibrate proof                      # target vs scan, patch by patch
 proxdex calibrate disable --round 3          # a misfeed or a crooked scan
 proxdex calibrate enable  --round 3          # …and put it back
 ```
 
-Every round is **kept**, and the correction is refitted over all of them at once,
-so each round makes it truer rather than replacing what you measured last time.
-Round 1 prints the raw target, which measures how far off the medium is; every
-round after prints the target _through_ what is known so far, which samples the
-space where your cards actually live. Against a simulated press it converges
-`16.1 → 2.2 → 1.6 → 1.5 → 1.4` mean RGB.
+**Why not "print six charts and watch a number fall".** That was the old loop, and it is
+what let a real holographic-sticker profile ask its printer for **more yellow ink on every
+one of four rounds** while the single figure on screen improved every time. A refinement
+round re-fits the model with more data, so it can only ever agree with itself. There was no
+number in the system that could fail.
 
-**It also tells you when to stop.** A loop you are invited to repeat forever wastes
-paper: once three rounds in a row have improved the fit by under half a level each,
-`calibrate add` and `profile show` say so and stop suggesting the next chart —
-what is left is the medium's own gamut, and no amount of measuring puts ink in the
-printer that is not there. Measure again when the ink, the paper or the driver
-changes.
+`calibrate verify` is that number. It prints what the model predicts and scores where those
+predictions landed, and it is deliberately kept **out** of the fit — a model that trains on
+its own exam cannot fail it. `profile show` reports it separately, and "converged" is judged
+on the checks once there are any. The whole account, with the measurements, is in
+[`docs/calibration.md`](docs/calibration.md).
 
-**The error you are shown covers only colours this medium can reach.** White paper
-is not 255, ink is not 0, and a saturated blue at mid-lightness can need more cyan
-than exists — so those patches are named and excluded rather than averaged in,
-which would leave a floor that can never fall. Reachability is measured by
-inverting your print's own response, and it is a property of the _medium_, so every
-round is scored over the same patches: the trend moves when the print improves, not
-when the patch set does.
+### Three numbers, never one
 
-**The chart is 80 patches: a 16-step neutral ramp, then a 4×4×4 lattice of the
-cube's interior.** Two decisions there are worth knowing, because both were
-measured rather than assumed:
+- **ΔE00** — the perceptual distance the trade judges a print by, over the colours this
+  medium can actually reach.
+- **the cast** — the mean a\*/b\* of the neutral patches alone. A cast is the first thing
+  an eye sees and the thing a mean over hundreds of patches hides. It is what the old
+  single RGB figure could not see at all.
+- **the verification error** — how far the model's own predictions landed.
 
-- _The lattice is pulled inside the printable box on purpose._ Paper is not 255
-  and ink is not 0, so a patch at pure red or pure white measures nothing — it
-  clips, and gets dropped from the fit. The chart proxdex shipped through 0.5.0
-  spent 24 of its 36 patches that way, leaving ~12 usable samples to fit a
-  10-parameter model. Same press, same code: the old chart settled at 2.31 mean
-  RGB, this one at **1.36**.
-- _Denser is not better._ Patch area is the budget. At six charts per A4 these are
-  5.1 mm of ink with 1.1 mm gutters — 121 px across on a 600 dpi scan. Push to 228
-  patches and accuracy gets _worse_; a 512-patch near-continuous chart was worse
-  than the 36-patch one it would replace, because read noise and neighbour bleed
-  grow faster than coverage helps. A continuous gradient is worse again: there is
-  no flat area to average, and 1% of geometric error becomes a correlated 2.3
-  levels of error in every reading. (A 3-D LUT, which is what a dense lattice
-  would justify, also lost to the polynomial at every density tested.)
+### It measures the paper, and aims at what the paper can give
 
-**Rounds are never deleted.** A bad one — a misfeed, a scan with the scanner's
-auto-correction left on — is _switched off_: the correction refits without it, and
-switching it back on restores exactly what it was doing. That is the only way to
-see with and without. `proxdex profile show` also gives each round a **pull**: how
-far the correction moves if that round is left out. A round pulling much harder
-than its neighbours is either your most informative measurement or an outlier, and
-it is worth knowing which. In a run where round 3 was scanned with auto-correction
-on, its pull came out at 17.7 against 5.6 / 5.4 / 4.4 for the others.
+The survey is covered in bare, unprinted patches, so proxdex reads **your stock's own
+colour** off the chart. That matters because a white on a blue holographic sticker *is*
+blue-white — no ink makes it whiter — and demanding an absolute neutral demands the
+impossible. The bill for demanding it is paid in yellow across the whole tone range.
 
-The chart travels the same renderer as a card sheet, so the correction is
-measured on the exact path it is applied to. `proxdex sheet` then applies it, and
-the stored masters stay neutral — switching media is a different `--profile`, not
-a re-grade.
+```bash
+proxdex profile intent 1        # aim relative to the paper (the default)
+proxdex profile intent 0        # aim at an absolute neutral — reachable, never automatic
+proxdex profile intent 0.5      # half way
+```
 
-**Honest limits.** The scanner is the measuring device, so this makes prints true
-_as your scanner sees them_ — excellent for proxies, not colorimetric. Some
-target colours are simply outside a medium's gamut: paper is not 255 and ink is
-not 0, so those patches can never be hit, and proxdex says how many rather than
-folding them into an average that could never reach zero. And you **must** turn
-off the scanner's auto colour/contrast, or it fights the loop.
+`profile show` prints the paper it measured, the aim in force, and the state of the scanner
+reference above the rounds, because a residual is not interpretable without all three.
+
+### The model is four stages, and a cast belongs to one of them
+
+`ink limit → linearization → grey balance → colour transform`, in that order, each fitted
+on what the ones before it could not remove. This is the industry sequence and the reason
+for it is that **a stage downstream cannot repair a stage upstream**: one polynomial doing
+all four spends its parameters undoing them, and when the answer is wrong there is no way
+to say which of the four things it got wrong. `profile show --stages` prints one row each.
+
+Measured against a simulated press and scanner, the split beats the single polynomial it
+replaced on every combination tested — 2.22 → **1.34** ΔE00 on warm matte with an honest
+scanner, 10.05 → **6.42** on a blue holographic sticker with a biased one — and each stage
+really does reduce the residual the next one sees.
+
+### The chart, and what a sheet of it costs
+
+Two charts, because characterizing a medium and confirming a correction are different
+errands:
+
+- the **survey** gets a whole sheet: bare paper, a ramp per ink (without which no
+  per-channel linearization is possible at all), an L\*-spaced grey axis, the heaviest ink
+  each way, repeats to measure read noise, and the colour lattice. `--size full|half|quarter`
+  is the cost, and **only the lattice shrinks** — everything else is what the later stages
+  are built from;
+- the **verification chart** goes in one slot of the sheet grid, six to a page, and places
+  its interior patches where the model is least certain *and inside the gamut your medium
+  was measured to have*. A fixed lattice spends patches on colours the paper cannot make.
+
+Denser is not automatically better, and that is measured rather than assumed: patch **area**
+is the budget. 228 patches scored worse than 80, and a 512-patch near-continuous chart worse
+than the 36-patch one it would have replaced, because read noise and neighbour bleed grow
+faster than coverage helps. (A 3-D LUT, which a dense lattice would justify, also lost to
+the polynomial at every density tested.)
+
+### Rounds are never deleted
+
+A bad one — a misfeed, a scan with the scanner's auto-correction left on — is _switched
+off_: the model refits without it, and switching it back on restores exactly what it was
+doing. That is the only way to see with and without. `profile show` also gives each round a
+**pull**: how far the answer moves if that round is left out. A round pulling much harder
+than its neighbours is either your most informative measurement or an outlier, and it is
+worth knowing which. In a run where round 3 was scanned with auto-correction on, its pull
+came out at 17.7 against 5.6 / 5.4 / 4.4 for the others.
+
+The chart travels the same renderer as a card sheet, so the correction is measured on the
+exact path it is applied to. `proxdex sheet` then applies it, and the stored masters stay
+neutral — switching media is a different `--profile`, not a re-grade.
+
+### Honest limits, stated on every profile
+
+**Your scanner is not a colorimeter, and until you tell proxdex otherwise it assumes one
+thing that is not true**: that a scanner's reading and a card's sRGB pixel are the same
+kind of number. They are not — a flatbed's red, green and blue filters are not a linear
+transform of the eye's — so the loop converges on "the print **scans as** the target"
+when what you want is "the print **looks like** the card". On ordinary matte a decent
+scanner is close enough that the two nearly coincide, which is why matte profiles work. On
+a coloured or specular stock they diverge, and the divergence is the cast.
+
+proxdex says so wherever the profile is named, and one purchase removes it:
+
+```bash
+proxdex calibrate reference --scan it8.png   # a ColorChecker, scanned and cropped
+proxdex calibrate reference --clear          # back to assuming sRGB, deliberately
+```
+
+The literature puts an uncharacterized flatbed at around ΔE00 10 of error no calibration
+can remove, and a matrix off a published target at around 4.9.
+
+Three more, and none of them is fixable by measuring harder:
+
+- **some colours are outside a medium's gamut.** Paper is not 255, ink is not 0, and a
+  saturated blue at mid-lightness can need more cyan than exists. Those patches are named
+  and excluded rather than averaged in, which would leave a floor that can never fall. What
+  cannot be reached is **compressed toward the neutral axis at constant hue**, never clipped
+  one channel at a time — clipping is what turns a grey into a yellow.
+- **a hologram cannot be measured at one geometry.** Its colour depends on how it is lit and
+  viewed, which is why the trade uses sphere or multi-angle instruments. proxdex detects the
+  case (the bare-paper readings disagree across the sheet) and says so, rather than fitting
+  a confident polynomial to one slice of it.
+- **ink varies between cartridges**, so a profile describes the cartridge that printed it.
+  Record it in the notes, and measure again when the ink, the paper or the driver changes.
+
+And you **must** turn off the scanner's auto colour/contrast, or it fights the loop.
 
 ## Building a print sheet
 

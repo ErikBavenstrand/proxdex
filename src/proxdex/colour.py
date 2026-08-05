@@ -115,6 +115,62 @@ def from_lab(lab: Lab) -> RGB:
     return encode((r * _D65) @ _FROM_XYZ.T)
 
 
+#: D50, the printing world's white — and the one the published values of every reference
+#: target are given under, because that is the graphic-arts standard
+_D50 = np.array([0.9642957, 1.0, 0.8251046], np.float64)
+
+#: Bradford cone response, the CIE's recommended basis for chromatic adaptation
+_BRADFORD = np.array(
+    [
+        [0.8951000, 0.2664000, -0.1614000],
+        [-0.7502000, 1.7135000, 0.0367000],
+        [0.0389000, -0.0685000, 1.0296000],
+    ],
+    np.float64,
+)
+
+
+def _adaptation(src: XYZ, dst: XYZ) -> NDArray[np.float64]:
+    """The Bradford matrix taking XYZ under one white to XYZ under another."""
+    cone_src = _BRADFORD @ src
+    cone_dst = _BRADFORD @ dst
+    return np.linalg.inv(_BRADFORD) @ np.diag(cone_dst / cone_src) @ _BRADFORD
+
+
+#: D50 → D65, computed once. A reference target's numbers are published under D50 and
+#: everything in proxdex is D65-referred, so somewhere the two have to be reconciled —
+#: and doing it here rather than ignoring it matters, because the error a 15-degree
+#: white shift puts on the blues is several ΔE00, which is the same order as the whole
+#: thing a reference is being read to remove.
+_D50_TO_D65 = _adaptation(_D50, _D65)
+
+
+def from_lab_d50(lab: Lab) -> Lab:
+    """Lab measured under D50 → the same colour's Lab under D65.
+
+    Every reference target's published values are D50/2°, being graphic-arts numbers;
+    this module is D65 throughout, deliberately, because the card pixels and the
+    scanner's readings both are. So the two are reconciled in one place rather than by
+    each caller deciding whether it matters.
+    """
+    arr = np.asarray(lab, np.float64)
+    fy = (arr[..., 0] + 16.0) / 116.0
+    f = np.stack([fy + arr[..., 1] / 500.0, fy, fy - arr[..., 2] / 200.0], axis=-1)
+    cubed = f**3
+    r = np.where(cubed > _LAB_EPS, cubed, (116.0 * f - 16.0) / _LAB_KAPPA)
+    xyz = (r * _D50) @ _D50_TO_D65.T
+    ratio = xyz / _D65
+    g = np.where(ratio > _LAB_EPS, np.cbrt(ratio), (_LAB_KAPPA * ratio + 16.0) / 116.0)
+    return np.stack(
+        [
+            116.0 * g[..., 1] - 16.0,
+            500.0 * (g[..., 0] - g[..., 1]),
+            200.0 * (g[..., 1] - g[..., 2]),
+        ],
+        axis=-1,
+    )
+
+
 def relative_to(rgb: RGB, white: RGB) -> RGB:
     """``rgb`` as it reads once the eye has adapted to a sheet whose paper is ``white``.
 

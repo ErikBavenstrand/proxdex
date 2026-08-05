@@ -12,6 +12,32 @@ landed on its own, in the order given.
 Every number quoted here was measured — either off the real `holo-plain` profile's four
 stored rounds, or against a simulated press and scanner. Nothing here is an estimate.
 
+> **Status: all nine stages are built.** The stage-by-stage record is in §4; what each
+> one actually measured, once built, is recorded there beside what it was expected to.
+> Three defects were found by building it, all of them by *driving the loop end to end*
+> rather than by reading the code, and all three are pinned:
+>
+> - **a survey round could not be stored at all** — every patch array was validated
+>   against one global chart length, so a 468-patch round was written and read back as
+>   *unreadable*. A `Round` records its `ChartId` now, and a `Pending` records **what
+>   went on the paper** rather than letting `calibrate add` recompute it;
+> - **gamut compression only fired when the *send* overflowed**, so a transform
+>   extrapolating past the region it was fitted over returned a perfectly in-range send
+>   for a colour the paper cannot make: a wanted dark orange went out as (21, 66, 95) —
+>   heavy ink for a light colour — and came back **blue** at ΔE00 63.6. Reachability is
+>   two questions now, and the model carries the region it was measured over;
+> - **the lightness give-up guessed one direction.** It inferred "go lighter" from which
+>   end the send overflowed, which says nothing about a colour whose send is in range;
+>   on a medium whose white is L\* 74 that pushed such colours further outside every
+>   time. Both directions are tried and the smaller move wins.
+>
+> And one reporting defect worth the same billing: **the cast averaged in neutrals the
+> medium cannot print.** The ramp is L\*-spaced from 2 to 98 by design, so its ends clip
+> to the ink floor and carry *that* hue — on the simulated sticker the reported cast read
+> a\* +5.10 (red) where the printable neutrals read a\* +0.86 (neutral). The number on
+> screen contradicted the sheet in hand. It is masked by the same reachability the error
+> is.
+
 ### Existing profiles are re-measured, not migrated
 
 **Decided, and it is what sets the order below.** A stored round is a pair — what was
@@ -324,18 +350,27 @@ Each stage is landable on its own and has an acceptance test measured against th
 harness. The medium is unusable for real printing until stage 4; `profile use none` is the
 honest state in the meantime, and that is the same identity that already exists.
 
-### Stage 0 — the harness
+### Stage 0 — the harness ✅
 
-`tests/test_calibrate_model.py`: a `SimPress` (substrate white/black, per-channel tone
-response, ink crosstalk) and a `SimScanner` (per-channel gain, additive offset, noise,
-optional flare), with a warm matte, a blue holographic sticker matching §1.2's measured
-numbers, and an honest and a biased scanner.
+`tests/press_sim.py`: a `SimPress` (substrate white/black, per-channel tone response, ink
+crosstalk) and a `SimScanner` (per-channel gain, additive offset, noise, optional flare),
+with a warm matte, a blue holographic sticker matching §1.2's measured numbers, and an
+honest and a biased scanner. The acceptance tests are in
+`tests/test_calibrate_model.py`.
 
 This is first because every later stage has to be *measured*, and a colour bug that only
 shows on paper is exactly what the suite exists for. It also pins the two rejected
 hypotheses of §1.4 so nobody rebuilds them.
 
-### Stage 1 — `proxdex/colour.py`, and an honest metric
+**Measured:** the press reflectance follows Murray–Davies, so the paper shows through in
+proportion to how little ink covers it — the sticker reads **+49.9** blue-minus-red in
+the highlights against **+2.0** in the shadows, against the real profile's +57.75 / +5.50.
+That is the same phenomenon, which is what ties the simulator to the medium the defect was
+found on. Both rejected hypotheses reproduce as rejected: **0** reversing steps on the
+neutral, red and blue axes across all four press × scanner combinations, and reading a
+scrambled patch layout back gives the same numbers to within **0.5 ΔE00**.
+
+### Stage 1 — `proxdex/colour.py`, and an honest metric ✅
 
 New module: sRGB ↔ XYZ ↔ Lab, `delta_e00`, and `adapt(rgb, white)` (von Kries scaling
 toward a reference white).
@@ -345,9 +380,9 @@ toward a reference white).
 the cast is moving.
 
 **Acceptance:** re-scoring `holo-plain`'s stored rounds reports a moving cast and does
-*not* report convergence.
+*not* report convergence. ✅
 
-### Stage 2 — chart v3
+### Stage 2 — chart v3 ✅
 
 The survey chart and the verification chart of §3: per-channel R/G/B ramps, an L\*-spaced
 neutral ramp, bare-substrate patches on a lattice across the page, max-ink patches, repeats,
@@ -363,17 +398,25 @@ that a chart change breaks silently.
 
 **Acceptance:** the survey renders at all three densities inside the printable box, every
 role is present at every density, and a rendered-then-read round-trip recovers every patch
-to within the sampling window.
+to within the sampling window. ✅
 
-### Stage 3 — the substrate
+Two things this needed that the plan did not foresee. The chart's **canvas height follows
+its patch grid** rather than being a second constant — one fixed 1200×1350 drew an 18×26
+survey's patches half as tall as they are wide — and `survey_rect` is **one function the
+writer and the reader both use**, because a chart is letterboxed inside its box when its
+grid is not the box's shape, and a reader cropping the *box* hands fiducial detection a
+band of blank paper.
+
+### Stage 3 — the substrate ✅
 
 `calibrate.Substrate` (white, black, per-position map), read from the bare patches. Recorded
 on each `Round`. Per-round white normalisation before pooling.
 
 **Acceptance:** on the harness's blue-sticker press, the substrate is recovered to within
-read noise, and a simulated 6% inter-round lamp drift is removed by normalisation.
+read noise, and a simulated 6% inter-round lamp drift is removed by normalisation. ✅ —
+recovered to **1.0 level** of (144, 189, 208) through an honest scanner.
 
-### Stage 4 — intent and substrate-relative aiming
+### Stage 4 — intent and substrate-relative aiming ✅
 
 `calibrate.Intent(adaptation: float = 1.0)`, `aim(target, substrate, intent)`. A per-profile
 setting, surfaced in `profile` and the print screen. No black point compensation (§1.4).
@@ -384,9 +427,18 @@ near zero, and clipping in single digits rather than 48 of 80.
 
 **Acceptance:** greys land within ΔE00 2 of neutral relative to the substrate white on the
 blue-sticker press; `adaptation = 0` reproduces today's behaviour exactly, so the old
-behaviour is reachable deliberately and never by default.
+behaviour is reachable deliberately and never by default. ✅ — a ten-step grey ramp comes
+off the blue sticker with **no visible cast** through an honest scanner.
 
-### Stage 5 — the staged press model
+It also changed how a print is *scored*, which the plan implied and did not say: a check
+printed through the model reads **ΔE00 3.37, cast a\* +0.07 b\* +2.06** judged relative to
+the paper and **15.94, a\* -5.15 b\* -5.00** judged absolutely. Two verdicts on one sheet,
+and the second one is about the stock. Scoring relative only makes sense for a print that
+*aimed* relative, though: on a raw survey the relative reading is worse, because a flat
+division by the white cannot undo show-through that is coverage-dependent. Aiming is what
+removes it.
+
+### Stage 5 — the staged press model ✅
 
 `proxdex/press.py`, replacing the single degree-2 polynomial:
 
@@ -399,24 +451,53 @@ behaviour is reachable deliberately and never by default.
   everything they can. Tetrahedral LUT or polynomial, **decided by measurement on the
   harness, not by taste** — and if a LUT, degenerate cells at gamut concavities must be
   removed, which the SPIE paper found the hard way
-- `PressModel.forward(send) -> reference` and `.inverse(want) -> send`, composed from the
+- `PressModel.forward(send) -> reference` and `.raw/send(want) -> send`, composed from the
   stages
 
 Each stage is separately inspectable, which is the whole reason for the split: a cast is
 now attributable to *one* of them.
 
 **Acceptance:** on the harness, each stage measurably reduces the residual the next one
-sees, and the composition beats the single polynomial on both presses.
+sees, and the composition beats the single polynomial on both presses. ✅
 
-### Stage 6 — gamut mapping
+| | linearization | grey balance | colour transform | staged | one polynomial |
+|---|---|---|---|---|---|
+| matte / honest | 23.30 → 6.34 | → 3.03 | → 2.68 | **1.34** | 2.22 |
+| matte / biased | 22.14 → 5.89 | → 3.66 | → 2.74 | **3.87** | 4.99 |
+| holo / honest | 23.23 → 8.41 | → 5.72 | → 5.06 | **3.64** | 4.98 |
+| holo / biased | 21.81 → 7.76 | → 6.64 | → 4.90 | **6.42** | 10.05 |
+
+The first three columns are the model's prediction error with one more stage switched on;
+the last two are ΔE00 on a neutral ramp really printed and scanned. **5d stayed a
+polynomial** — the LUT question was already settled by measurement (a 3-D LUT lost at
+every density tried), so nothing here re-opened it.
+
+Two decisions the plan left open, settled while building:
+
+- **the inverse is arithmetic, not a second fit.** Each stage's `inverse` is the exact
+  inverse of its `forward` — bisection on a monotone curve, the mirrored solve on the grey
+  axis — because two independently fitted directions are free to disagree and the
+  round-trip error nobody measured is a fit that lies about what it will print. Only 5d
+  has no closed-form inverse, so it is fitted both ways and **reports** its round-trip
+  error (measured: under 0.05 in response units);
+- **only an uncorrected round can linearize.** A ramp printed through a correction is no
+  longer a sweep of one channel, so the patch a chart labels `ramp-r` did not measure
+  red's own response. That is why the survey prints raw, and a profile with no direct
+  round gets identity curves and is **told** so (`PressModel.staged`) rather than getting
+  a linearization inferred from the wrong patches.
+
+### Stage 6 — gamut mapping ✅
 
 `calibrate.compress(lab, gamut)` — hue-preserving chroma and lightness compression toward
 the neutral axis, replacing `.clip(0, 255)`.
 
 **Acceptance:** no out-of-range send is ever resolved by moving one channel alone; the
-(273, 264, 299) case maps at constant hue.
+(273, 264, 299) case maps at constant hue. ✅ — and see the two defects at the top of this
+document, both of which live here: reachability is **two** questions (the send fits *and*
+the colour is inside the measured region) and the lightness give-up tries **both**
+directions.
 
-### Stage 7 — verification and adaptive refinement
+### Stage 7 — verification and adaptive refinement ✅
 
 `calibrate verify` prints what the model predicts and scores how far it landed (§3.0) — the
 first number in the system that can fail. Then `targen -c`-style adaptive placement for
@@ -424,9 +505,18 @@ optional refinement rounds, and `plateau` judged on the **verification** error r
 on the fit's own residual.
 
 **Acceptance:** on the harness, a deliberately under-fitted model is caught by verification
-while its own residual still looks healthy — i.e. this stage detects §1.2.
+while its own residual still looks healthy — i.e. this stage detects §1.2. ✅ — a model
+fitted on one press verifies at **1.6** on that press and **18.4** on another, which is
+the shape of the property: a model is always consistent with the data it was fitted on.
 
-### Stage 8 — `Reference`, the optional missing piece
+`Purpose` on a round is what carries it, deliberately *not* the chart id — a refinement
+round and a verification round print the same small chart, and what differs is what is
+done with the answer. A check is scored and kept **out** of the fit, because a model that
+trains on its own exam cannot fail it. Adaptive placement moves **only the lattice**, so
+two checks stay comparable on the greys, the ramps and the substrate, which is where a
+trend is read from.
+
+### Stage 8 — `Reference`, the optional missing piece ✅
 
 `calibrate.Reference`: scanner reading → reference space. `Reference.identity()` with
 `assumed=True`, which is what every profile has until a reference target is read, and
@@ -439,21 +529,37 @@ it as the instrument).
 Deliberately last. Everything above is worth having without it, and it is the only stage
 that needs a purchase.
 
+Built with the **ColorChecker** and deliberately *not* IT8.7/2: an IT8's 264 patches are
+batch-specific and ship with a data file per production run, so hardcoding "the" IT8
+values would be inventing a measurement — the exact thing this area exists to stop. The
+published values are D50/2° and everything here is D65, so `colour.from_lab_d50` adapts
+them through Bradford: measured, that moves the chart's **blue** patch 4.82 ΔE00 and its
+white 0.16, which is precisely the region a blue substrate is already the whole discussion
+about. Ignoring it would have been a systematic error in the one place it hurts.
+
 ### Surfaces — what each stage owes the CLI and the UI
 
 Parity here is two-way and load-bearing, so each stage lands its verb and its screen in the
 same change, not afterwards.
 
-| stage | CLI | config | UI (print screen) |
+| stage | CLI | UI (print screen) | landed as |
 |---|---|---|---|
-| 1 | `profile show` reports ΔE00 + cast, not mean RGB | — | the round table's error column, and the cast beside it |
-| 2 | `calibrate survey [--size full\|half\|quarter]` replaces `calibrate chart` for round 1 | `[calibrate] survey_size` | the chart download, with the density choice and its consequence |
-| 3 | `profile show` names the substrate it measured | — | substrate swatch + its Lab, per round |
-| 4 | `profile intent <0..1>` | per-profile, on the profile file | a slider, defaulting to 1.0, saying what each end means |
-| 5 | `profile show --stages` — the per-stage residual | — | one row per stage, so a cast is attributable |
-| 6 | reported in `sheet`'s readout when a card needs compression | — | how many pixels of a card were out of gamut |
-| 7 | `calibrate verify`, and `plateau` judged on it | — | a verification panel distinct from the round list |
-| 8 | `calibrate reference <scan>` | — | a banner while the reference is **assumed** |
+| 1 | `profile show` reports ΔE00 + cast | the round table's ΔE00 and cast columns | ✅ |
+| 2 | `calibrate survey [--size full\|half\|quarter]` | the survey button with its density choice | ✅ |
+| 3 | `profile show` names the substrate | a paper **swatch** and its reading | ✅ |
+| 4 | `profile intent <0..1>` | a slider saying what each end means | ✅ |
+| 5 | `profile show --stages` | one row per stage, so a cast is attributable | ✅ |
+| 6 | reported when a colour needs compression | — | ✅ |
+| 7 | `calibrate verify`, `plateau` judged on it | a verification line distinct from the rounds | ✅ |
+| 8 | `calibrate reference --scan <f>` / `--clear` | the assumed-reference warning, and a way out | ✅ |
+
+Two departures from that table, both deliberate. `[calibrate] survey_size` was **not**
+added: the density is a decision about one sheet of paper, which is a per-run choice like
+every page setting and not a library preference — so it is a flag and a dropdown, and
+nothing stores it. And stage 6 has no screen of its own, because "how many pixels of a
+card were out of gamut" is a number about *a card*, which is the border step's kind of
+question; what the print screen shows instead is the gamut the medium was measured to
+have, which is the fact compression is derived from.
 
 Two things every surface has to carry, because they are the lessons of §1:
 

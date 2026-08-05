@@ -426,6 +426,10 @@ class ProfileBody(Body):
     #: how many charts one calibration sheet holds
     cols: Annotated[int, Field(ge=1, le=6)] | None = None
     rows: Annotated[int, Field(ge=1, le=6)] | None = None
+    #: how much of the paper's own colour to accept rather than fight, 0..1. Its own
+    #: verb on the CLI (`profile intent`) rather than a `profile set` flag, so it is
+    #: sent separately — see :meth:`intent_argv`.
+    adaptation: Annotated[float, Field(ge=0, le=1)] | None = None
 
     def argv(self) -> list[str]:
         args: list[str] = []
@@ -438,6 +442,12 @@ class ProfileBody(Body):
         if self.cols is not None and self.rows is not None:
             args += ["--grid", f"{self.cols}x{self.rows}"]
         return args
+
+    def intent_argv(self) -> list[str] | None:
+        """``profile intent <n>``, or None when this edit does not touch the aim."""
+        if self.adaptation is None:
+            return None
+        return ["intent", f"{self.adaptation:g}"]
 
 
 class RenameBody(Body):
@@ -1854,10 +1864,19 @@ def create_app(lib: Library) -> FastAPI:
 
     @app.patch("/api/profile/{name}")
     def api_profile_set(name: ProfileName, body: ProfileBody) -> dict[str, Any]:
-        args = body.argv()
-        if not args:
+        # the aim is its own verb, because it is not one of the four hand-set numbers a
+        # measurement supersedes — it decides what the measurement is aiming *at*
+        aim = body.intent_argv()
+        runs: list[list[str]] = []
+        if aim is not None:
+            runs.append(["profile", aim[0], name, *aim[1:]])
+        if args := body.argv():
+            runs.append(["profile", "set", name, *args])
+        if not runs:
             return {"ok": True, "log": "nothing to change"}
-        return run_cli(["profile", "set", name, *args])
+        done = [run_cli(call) for call in runs]
+        # the first failure, else the last success — a partial edit must not report ok
+        return next((r for r in done if not r.get("ok", True)), done[-1])
 
     @app.delete("/api/profile/{name}")
     def api_profile_rm(name: ProfileName) -> dict[str, Any]:
@@ -1920,15 +1939,16 @@ def create_app(lib: Library) -> FastAPI:
         )
 
     # ---- calibration rounds -------------------------------------------------
-    @app.get("/api/calibrate/chart/{name}")
-    def api_cal_chart(name: ProfileName, slot: str | None = None) -> Response:
-        """The next round's chart, as a print-ready PDF."""
+    def _chart_pdf(args: list[str], stem: str) -> Response:
+        """Run a chart-emitting verb and hand back the PDF it wrote.
+
+        One helper for all three (survey, refinement chart, verification chart) because
+        each is the same shape and the interesting part — *which* chart, printed through
+        what — belongs to the CLI verb rather than to the plumbing here.
+        """
         with tempfile.TemporaryDirectory() as tmp:
-            pdf = Path(tmp) / f"{name}-chart.pdf"
-            args = ["calibrate", "chart", name, "-o", str(pdf)]
-            if slot:
-                args += ["--slot", slot]
-            res = run_cli(args)
+            pdf = Path(tmp) / f"{stem}.pdf"
+            res = run_cli([*args, "-o", str(pdf)])
             if not res["ok"] or not pdf.is_file():
                 return JSONResponse({"ok": False, "log": res["log"]}, status_code=400)
             # read it before the temp dir goes: FileResponse streams later
@@ -1937,10 +1957,57 @@ def create_app(lib: Library) -> FastAPI:
             body,
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'inline; filename="{name}-chart.pdf"',
+                "Content-Disposition": f'inline; filename="{stem}.pdf"',
                 "Cache-Control": "no-store",
             },
         )
+
+    @app.get("/api/calibrate/chart/{name}")
+    def api_cal_chart(name: ProfileName, slot: str | None = None) -> Response:
+        """The next refinement round's chart, as a print-ready PDF."""
+        args = ["calibrate", "chart", name]
+        if slot:
+            args += ["--slot", slot]
+        return _chart_pdf(args, f"{name}-chart")
+
+    @app.get("/api/calibrate/survey/{name}")
+    def api_cal_survey(
+        name: ProfileName, size: calibrate.SurveySize = calibrate.SurveySize.FULL
+    ) -> Response:
+        """The characterization target — the one chart everything else rests on."""
+        return _chart_pdf(
+            ["calibrate", "survey", name, "--size", size.value], f"{name}-survey"
+        )
+
+    @app.get("/api/calibrate/verify/{name}")
+    def api_cal_verify(name: ProfileName, slot: str | None = None) -> Response:
+        """What the model *predicts*, printed to be scored — the check that can fail."""
+        args = ["calibrate", "verify", name]
+        if slot:
+            args += ["--slot", slot]
+        return _chart_pdf(args, f"{name}-verify")
+
+    @app.post("/api/calibrate/reference/{name}")
+    def api_cal_reference(
+        name: ProfileName,
+        file: Annotated[UploadFile, File()],
+        target: Annotated[
+            calibrate.ReferenceTarget, Form()
+        ] = calibrate.ReferenceTarget.COLORCHECKER,
+    ) -> dict[str, Any]:
+        """Characterize the scanner off a target whose colours are published."""
+        tmp = _spool(file)
+        try:
+            return run_cli(
+                ["calibrate", "reference", name, "--scan", str(tmp), "--target", target]
+            )
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    @app.delete("/api/calibrate/reference/{name}")
+    def api_cal_reference_clear(name: ProfileName) -> dict[str, Any]:
+        """Back to assuming the scanner reads sRGB — reachable, and never silent."""
+        return run_cli(["calibrate", "reference", name, "--clear"])
 
     @app.get("/api/calibrate/proof/{name}/{round_n}")
     def api_cal_proof(name: ProfileName, round_n: int) -> Response:
@@ -1953,7 +2020,7 @@ def create_app(lib: Library) -> FastAPI:
         if rnd is None:
             return Response(status_code=404)
         buf = io.BytesIO()
-        calibrate.proof_sheet(rnd.scanned).save(buf, "PNG")
+        calibrate.proof_sheet(rnd.scanned, rnd.spec).save(buf, "PNG")
         return Response(
             buf.getvalue(),
             media_type="image/png",

@@ -38,17 +38,19 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from numpy.typing import NDArray
 from PIL import Image
 
 from proxdex import calibrate, colour, media
 from proxdex.calibrate import (
     GRID,
-    Coef,
+    Chart,
+    ChartId,
     Correction,
     Error,
+    Gamut,
     Intent,
     Patches,
+    Reference,
     Slot,
     Substrate,
 )
@@ -56,6 +58,7 @@ from proxdex.colour import Cast
 from proxdex.config import Config
 from proxdex.errors import ProxdexError
 from proxdex.media import RECIPE_KEYS, Recipe
+from proxdex.press import PressModel, Sample
 
 #: where profiles live inside a library
 DIR = "profiles"
@@ -134,10 +137,15 @@ class Plateau:
 
     first: int
     last: int
-    #: mean RGB the best round in the run won over everything before it — below
-    #: what :data:`_FLAT_GAIN` asks of that many rounds, and negative if the run
-    #: came back worse than what it followed
+    #: ΔE00 the best round in the run won over everything before it — below what
+    #: :data:`_FLAT_GAIN` asks of that many rounds, and negative if the run came back
+    #: worse than what it followed
     gain: float
+    #: whether this was judged on **verification** rounds (the model's own predictions,
+    #: which can fail) or on the fit's residual over its own training data. The word
+    #: converged means something much weaker in the second case, so it is carried rather
+    #: than left for a reader to assume.
+    on_checks: bool = False
 
     @property
     def rounds(self) -> int:
@@ -153,6 +161,8 @@ class Plateau:
             "last": self.last,
             "gain": self.gain,
             "per_round": self.per_round,
+            "on_checks": self.on_checks,
+            "text": self.text,
         }
 
     @property
@@ -162,8 +172,9 @@ class Plateau:
             if self.first == self.last
             else f"rounds {self.first} to {self.last}"
         )
+        what = "the model's own predictions" if self.on_checks else "the fit"
         return (
-            f"{span} improved the fit by {max(self.gain, 0.0):.2f} ΔE00 in total, "
+            f"{span} improved {what} by {max(self.gain, 0.0):.2f} ΔE00 in total, "
             f"{self.per_round:.1f} a round"
         )
 
@@ -182,6 +193,100 @@ def slug(name: str) -> str:
     return clean
 
 
+class Purpose(StrEnum):
+    """What a round is for — and it decides whether it feeds the fit or judges it.
+
+    This is the distinction the rebuilt loop turns on, and it is deliberately *not* the
+    chart id: a refinement round and a verification round print the same small chart.
+    What differs is what is done with the answer. A refinement round is more evidence,
+    so it re-fits the model and can only ever agree with itself; a verification round
+    prints what the model **predicts** and asks how far off it landed, which is the
+    first number in this system that can fail — and the absence of such a number is why
+    a profile could drive itself 32 levels toward yellow while every surface called it
+    progress.
+    """
+
+    #: characterize or refine — this round's pairs are evidence and enter the fit
+    MEASURE = "measure"
+    #: check — printed through the finished model, scored, and kept **out** of the fit,
+    #: because a model marking its own homework is not a test
+    VERIFY = "verify"
+
+    @property
+    def fits(self) -> bool:
+        return self is Purpose.MEASURE
+
+    @property
+    def label(self) -> str:
+        return "measured" if self.fits else "verified"
+
+    @classmethod
+    def read(cls, data: object) -> Purpose:
+        if isinstance(data, str):
+            try:
+                return cls(data)
+            except ValueError:
+                return cls.MEASURE
+        return cls.MEASURE
+
+
+@dataclass(frozen=True, slots=True)
+class Pending:
+    """A chart that has been emitted and not yet read back.
+
+    Two facts, because reading a scan needs both: **where** on the sheet it was printed
+    and **which chart** it is. It used to be the slot alone, which is what made a survey
+    round impossible to record — `calibrate add` had no way to know it was looking at
+    468 patches rather than 81, so it read the verification grid over a survey and got
+    the gutters: bare paper at every position, which on a blue sticker would have
+    reported the stock as pure white.
+    """
+
+    slot: Slot
+    chart: ChartId = ChartId.VERIFY
+    #: the patches that really went on the paper. Recorded rather than recomputed when
+    #: the scan comes back, because "what was printed" is a fact about a sheet and
+    #: recomputing it is a guess that can be wrong three ways: a survey prints
+    #: **uncorrected** while a verification chart prints through the model, the model
+    #: moves the moment another round is added, and the aim moves with the intent. Any
+    #: of those silently pairs every scanned patch with a target it was never sent.
+    sent: Patches | None = None
+    #: the colours it asked for, when adaptive placement moved them off the chart's own
+    wanted: Patches | None = None
+    #: whether the scan coming back is evidence or a test of the model
+    purpose: Purpose = Purpose.MEASURE
+
+    def json(self) -> dict[str, Any]:
+        return {
+            "slot": self.slot.json(),
+            "chart": self.chart.value,
+            "purpose": self.purpose.value,
+            "sent": None if self.sent is None else _rows(self.sent),
+            "wanted": None if self.wanted is None else _rows(self.wanted),
+        }
+
+    @classmethod
+    def read(cls, data: object) -> Pending | None:
+        """A pending chart out of untrusted JSON, in either spelling.
+
+        A bare ``[col, row]`` is how this was written before a chart had an id, and it
+        means the verification chart at that slot — which is what it was.
+        """
+        if isinstance(data, list):
+            return cls(slot=Slot.read(data))
+        if isinstance(data, dict):
+            raw: dict[str, object] = data
+            card = ChartId.read(raw.get("chart"))
+            return cls(
+                slot=Slot.read(raw.get("slot")),
+                chart=card,
+                sent=_read_patches(raw.get("sent"), card),
+                wanted=_read_patches(raw.get("wanted"), card),
+                purpose=Purpose.read(raw.get("purpose")),
+            )
+        return None
+
+
 @dataclass(frozen=True, slots=True)
 class Round:
     """One print-and-scan iteration: what was sent, and what came back.
@@ -195,6 +300,20 @@ class Round:
     slot: Slot
     sent: Patches
     scanned: Patches
+    #: the colours this round **asked for**, when they are not the chart's own target.
+    #: Adaptive placement moves the lattice patches to where the model is least sure, so
+    #: a round scored against the nominal target would be compared with colours it never
+    #: asked for — and the comparison would look perfectly healthy. None means the
+    #: chart's own target, which is the ordinary case and what every fixed-lattice round
+    #: is.
+    wanted: Patches | None = None
+    #: which patch set this round measured. Recorded because it is the only thing that
+    #: makes the arrays mean anything: a survey and a verification round are both
+    #: ``(n, 3)`` blocks of numbers, and reading one as the other pairs every patch with
+    #: the wrong target while looking perfectly healthy.
+    chart: ChartId = ChartId.VERIFY
+    #: whether this round is evidence or a test of the model built from the evidence
+    purpose: Purpose = Purpose.MEASURE
     date: str = ""
     scan: str = ""
     note: str = ""
@@ -209,27 +328,47 @@ class Round:
     def switched(self, *, on: bool) -> Round:
         return replace(self, enabled=on)
 
+    @property
+    def spec(self) -> Chart:
+        """The patch set this round's arrays are rows of."""
+        return self.chart.spec
+
+    @property
+    def goal(self) -> Patches:
+        """The colours this round asked for — its own, else its chart's."""
+        return self.spec.target if self.wanted is None else self.wanted
+
     def json(self) -> dict[str, Any]:
         return {
             "n": self.n,
             "slot": self.slot.json(),
+            "chart": self.chart.value,
+            "purpose": self.purpose.value,
             "date": self.date,
             "scan": self.scan,
             "note": self.note,
             "enabled": self.enabled,
             "substrate": self.substrate.json(),
+            "wanted": None if self.wanted is None else _rows(self.wanted),
             "sent": _rows(self.sent),
             "scanned": _rows(self.scanned),
         }
 
     @classmethod
     def read(cls, data: object, n: int) -> Round | None:
-        """One stored round, or None if its measurements cannot be trusted."""
+        """One stored round, or None if its measurements cannot be trusted.
+
+        The patch arrays are checked against **the chart this round names**, not against
+        whatever chart is current. Checking against one global length is what made a
+        survey round unstorable: it was written with 468 rows and read back as
+        unreadable, so the verb wrote a round the loader then discarded.
+        """
         if not isinstance(data, dict):
             return None
         raw: dict[str, Any] = data
-        sent = _read_patches(raw.get("sent"))
-        scanned = _read_patches(raw.get("scanned"))
+        card = ChartId.read(raw.get("chart"))
+        sent = _read_patches(raw.get("sent"), card)
+        scanned = _read_patches(raw.get("scanned"), card)
         if sent is None or scanned is None:
             return None
         return cls(
@@ -237,6 +376,9 @@ class Round:
             slot=Slot.read(raw.get("slot")),
             sent=sent,
             scanned=scanned,
+            wanted=_read_patches(raw.get("wanted"), card),
+            chart=card,
+            purpose=Purpose.read(raw.get("purpose")),
             date=_text(raw.get("date")),
             scan=_text(raw.get("scan")),
             note=_text(raw.get("note")),
@@ -256,11 +398,15 @@ class Profile:
     #: by default: on tinted stock, aiming at an absolute neutral is what asks for ink
     #: that does not exist.
     intent: Intent = field(default_factory=Intent)
+    #: scanner reading → reference space. The identity until a reference target is read,
+    #: and said out loud everywhere until then: it is the assumption behind every number
+    #: here, and it went unstated for as long as there was nothing to state it on.
+    reference: Reference = field(default_factory=Reference)
     grid: tuple[int, int] = GRID
     rounds: list[Round] = field(default_factory=list)
-    #: the slot the last emitted chart was rendered into, so reading its scan
-    #: back needs no arguments
-    pending: Slot | None = None
+    #: the chart last emitted and not yet read back — where it was printed *and* which
+    #: chart it is, so reading its scan needs no arguments
+    pending: Pending | None = None
     #: False for the built-in identity, which is not a file
     stored: bool = False
     #: rounds in the file that could not be read back — a damaged entry, or one
@@ -287,16 +433,57 @@ class Profile:
 
     @property
     def live(self) -> list[Round]:
-        """The rounds that feed the fit. A switched-off round stays in the file."""
-        return [r for r in self.rounds if r.enabled]
+        """The rounds that feed the fit. A switched-off round stays in the file.
+
+        A **verification** round is excluded too, and for a different reason: it was
+        printed through the finished model in order to test it, so folding it back in
+        would let the model mark its own homework — the residual would fall and the
+        thing that could have failed would stop being able to.
+        """
+        return [r for r in self.rounds if r.enabled and r.purpose.fits]
+
+    @property
+    def checks(self) -> list[Round]:
+        """The verification rounds, newest last — how the model did on predictions."""
+        return [r for r in self.rounds if r.enabled and not r.purpose.fits]
+
+    @property
+    def model(self) -> PressModel | None:
+        """How this medium is corrected, fitted over every live round at once.
+
+        None means nothing usable has been measured, and the recipe is all there is.
+
+        A **staged** model — ink limit, then linearization, then grey balance, then the
+        colour transform — because a stage downstream cannot repair a stage upstream,
+        and one polynomial doing all four at once is a cast nobody can attribute. The
+        polynomial survives inside it as the last stage, fitted on what the three before
+        it could not remove; a profile with no *uncorrected* round has nothing to
+        linearize from and gets exactly the old behaviour, which
+        :attr:`~proxdex.press.PressModel.staged` reports rather than hiding.
+        """
+        return self._fit(self.live)
 
     @property
     def correction(self) -> Correction | None:
-        """The measured correction, fitted over every live round at once.
+        """Just the polynomial stage — the baseline the staged model is measured on."""
+        model = self.model
+        return None if model is None else model.poly
 
-        None means nothing usable has been measured, and the recipe is all there is.
+    def observed(self, patches: Patches) -> Patches:
+        """A scanner reading in this profile's **reference space**.
+
+        The one place the reference is applied, and it is applied on *read* rather than
+        being baked into a stored round — so characterizing the scanner months later
+        re-reads every round already on disk instead of asking for them to be printed
+        again. That is the whole value of keeping both halves of a round's evidence.
+
+        Everything that consumes a scan goes through here: the fit, the score, the gamut
+        and the paper. It was briefly nowhere at all — the reference was stored and
+        reported while `calibrate reference` claimed "every round of this profile is
+        now read through it", which was false — and a label describing work nobody does
+        is worse than no label.
         """
-        return self._fit(self.live)
+        return self.reference.apply(patches)
 
     @property
     def substrate(self) -> Substrate:
@@ -309,8 +496,8 @@ class Profile:
         seen = [r.substrate for r in self.live if r.substrate.measured]
         if not seen:
             return Substrate()
-        whites = np.array([s.white for s in seen], np.float32)
-        blacks = np.array([s.black for s in seen], np.float32)
+        whites = self.observed(np.array([s.white for s in seen], np.float32))
+        blacks = self.observed(np.array([s.black for s in seen], np.float32))
         return Substrate(
             white=tuple(float(v) for v in np.median(whites, axis=0)),  # type: ignore[arg-type]
             black=tuple(float(v) for v in np.median(blacks, axis=0)),  # type: ignore[arg-type]
@@ -334,20 +521,35 @@ class Profile:
         -34.23 to -33.61, so it did not cause the cast — but it is unmeasured error
         pooled as signal, which is its own problem.
         """
+        seen = self.observed(rnd.scanned)
         mine, ours = rnd.substrate, self.substrate
         if not (mine.measured and ours.measured):
-            return rnd.scanned
+            return seen
+        # this round's own white in the same space as the profile's, or the ratio is
+        # between two different readings of the same paper
         ratio = colour.linearize(np.array(ours.white, np.float32)) / np.maximum(
-            colour.linearize(np.array(mine.white, np.float32)), 1e-6
+            colour.linearize(self.observed(np.array([mine.white], np.float32))[0]),
+            1e-6,
         )
-        return colour.encode(colour.linearize(rnd.scanned) * ratio)
+        return colour.encode(colour.linearize(seen) * ratio)
 
-    def _fit(self, rounds: Sequence[Round]) -> Correction | None:
+    def _fit(self, rounds: Sequence[Round]) -> PressModel | None:
+        """Build the staged model over these rounds, each normalised to one white.
+
+        A round contributes its **own** chart alongside its numbers, because that is
+        what says which patches are the ramps and which are the greys — the whole reason
+        :class:`calibrate.Role` exists. A survey and a verification round can therefore
+        be fitted together, which is the new loop's ordinary case.
+        """
         if not rounds:
             return None
-        scanned = np.concatenate([self.normalised(r) for r in rounds])
-        sent = np.concatenate([r.sent for r in rounds])
-        return calibrate.fit(scanned, sent)
+        return PressModel.fit(
+            [
+                Sample(spec=r.spec, sent=r.sent, scanned=self.normalised(r))
+                for r in rounds
+            ],
+            self.substrate,
+        )
 
     def render(self, im: Image.Image) -> Image.Image:
         """What this profile does to a picture on the way to paper.
@@ -357,12 +559,12 @@ class Profile:
         correction supersedes the hand-set recipe, because one was printed and scanned
         and the other was a judgement.
         """
-        corr = self.correction
-        if corr is None:
+        model = self.model
+        if model is None:
             return media.compensate(im, self.recipe)
         arr = np.asarray(im.convert("RGB"), np.float32)
         goal = self.aim(arr.reshape(-1, 3)).reshape(arr.shape)
-        return Image.fromarray(corr.send(goal).round().astype(np.uint8))
+        return Image.fromarray(model.send(goal).round().astype(np.uint8))
 
     def influence(self, n: int) -> float | None:
         """How much round ``n`` moves the correction — its weight in the answer.
@@ -375,33 +577,74 @@ class Profile:
         rnd = self.round(n)
         if rnd is None or not rnd.enabled:
             return None
-        with_it = self.correction
+        with_it = self.model
         without = self._fit([r for r in self.live if r.n != n])
         if with_it is None:
             return None
+        # measured on the *verification* patches whatever chart the round used, so the
+        # numbers of two rounds are comparable — which is the whole point of a pull
         goal = calibrate.target()
         base = with_it.apply(goal)
         other = goal if without is None else without.apply(goal)
         return float(np.sqrt(((base - other) ** 2).sum(axis=1)).mean())
 
     @property
-    def gamut(self) -> NDArray[np.bool_]:
-        """Which target patches this medium can print — one answer for the profile.
+    def gamut(self) -> Gamut:
+        """What this medium can print — one answer for the profile, from its scans.
 
-        A gamut belongs to the paper and the inks, not to one sheet, so it is read
-        from every live round pooled (the same fit the correction uses). Scoring
-        each round against its own scan instead made the trend compare means over
-        different patch sets — 63 to 68 of 80 on a real matte — so the number moved
-        when the set moved rather than when the print got better.
+        A gamut belongs to the paper and the inks, not to one sheet, so it is read from
+        **every** round that put ink on paper, verification rounds included: those are
+        measurements of the same stock, and what a medium can reach is not a question
+        about which rounds feed a fit. Scoring each round against its own scan instead
+        made the trend compare means over different patch sets — 63 to 68 of 80 on a
+        real matte — so the number moved when the set moved rather than when the print
+        got better.
+
+        A :class:`Gamut` rather than a boolean mask, because rounds no longer share a
+        patch set: a survey asks about 468 colours and its verification chart about 81,
+        so an array of one length cannot answer for the other.
         """
-        live = self.live
-        if not live:
-            return calibrate.reachable(np.zeros((0, 3), np.float32))
-        return calibrate.reachable(np.concatenate([r.scanned for r in live]))
+        inked = [r for r in self.rounds if r.enabled]
+        if not inked:
+            return Gamut()
+        return Gamut.of(self.observed(np.concatenate([r.scanned for r in inked])))
+
+    @property
+    def seen(self) -> Patches:
+        """Every colour this medium has been measured producing, pooled.
+
+        What adaptive placement needs: the next chart's patches go where there is
+        *nothing near* an existing measurement, so the question is about every round
+        that put ink on paper rather than about the ones feeding a fit.
+        """
+        inked = [r.scanned for r in self.rounds if r.enabled]
+        if not inked:
+            return np.zeros((0, 3), np.float32)
+        return self.observed(np.concatenate(inked))
 
     def score(self, rnd: Round) -> Error:
-        """How far that round's print landed from the target, over this gamut."""
-        return calibrate.score(rnd.scanned, self.gamut)
+        """How far that round's print landed from the target, over this gamut.
+
+        Judged **relative to the paper** when the intent says so, which is what makes
+        the answer a statement about the print rather than about the stock: a blue
+        holographic sticker measured against an absolute neutral reports a large cast
+        that no ink can remove, and reports it identically however good the calibration
+        gets.
+        """
+        sub = self.substrate
+        white = (
+            np.array(sub.white, np.float32)
+            if sub.measured and self.intent.relative
+            else None
+        )
+        card, goal = rnd.spec, rnd.goal
+        return calibrate.score(
+            self.observed(rnd.scanned),
+            self.gamut.holds(goal),
+            wanted=goal,
+            white=white,
+            spec=card,
+        )
 
     @property
     def casts(self) -> list[Cast]:
@@ -421,10 +664,7 @@ class Profile:
         went 0, -28.33, -30.75, -32.42, monotonically more yellow ink. So a detector
         built on the scan would have passed the exact profile it exists to catch.
         """
-        return [
-            Cast.of(colour.to_lab(r.sent[calibrate.chart().neutrals]))
-            for r in self.live
-        ]
+        return [Cast.of(colour.to_lab(r.sent[r.spec.neutrals])) for r in self.live]
 
     @property
     def drift(self) -> Drift | None:
@@ -461,6 +701,19 @@ class Profile:
         return self.score(live[-1]) if live else None
 
     @property
+    def verified(self) -> Error | None:
+        """How the model did on colours it **predicted** — the number that can fail.
+
+        Every other figure here is a fit judged against the data it was fitted on, so it
+        can only ever agree with itself; this one is printed through the finished model
+        and scored against what was asked for. The whole rebuild exists because there
+        was no such number: a profile drove its neutral axis 32 levels toward yellow
+        over four rounds while the one figure on screen fell every round.
+        """
+        checks = self.checks
+        return self.score(checks[-1]) if checks else None
+
+    @property
     def plateau(self) -> Plateau | None:
         """The tail of rounds that stopped buying anything, if there is one.
 
@@ -469,14 +722,23 @@ class Profile:
         buys a fraction of a level: what is left is the medium's own gamut, and no
         amount of measuring puts ink in the printer that is not there.
 
+        **Judged on the verification rounds when there are any**, which is the one
+        change that would have stopped this certifying ``holo-plain``. A refinement
+        round's residual is the fit measured against its own training data, so a run of
+        flat ones says "more of the same evidence stopped moving the fit" — not "the
+        print is right". Verification rounds are printed through the finished model and
+        scored on how far the *prediction* landed, so a flat run of those is the thing
+        the word converged should mean. Without any, this falls back to the fit's own
+        residual and stays what it was: an invitation to stop, not a certificate.
+
         Judged on the *best* round either side rather than the last one, because a
         single round coming back worse is ordinary and should not read as progress
         having stopped, nor a single good one as progress continuing.
         """
-        live = self.live
-        if len(live) <= _FLAT_ROUNDS:
+        judged = self.checks or self.live
+        if len(judged) <= _FLAT_ROUNDS:
             return None
-        head, tail = live[:-_FLAT_ROUNDS], live[-_FLAT_ROUNDS:]
+        head, tail = judged[:-_FLAT_ROUNDS], judged[-_FLAT_ROUNDS:]
         if self.drift is not None:
             # flat *and* drifting is not converged, it is stuck pulling the wrong way.
             # Certifying it is what would have told you `holo-plain` was finished.
@@ -486,13 +748,27 @@ class Profile:
         gain = best_before - best_after
         if gain >= _FLAT_GAIN * len(tail):
             return None
-        return Plateau(first=tail[0].n, last=tail[-1].n, gain=gain)
+        return Plateau(
+            first=tail[0].n,
+            last=tail[-1].n,
+            gain=gain,
+            on_checks=bool(self.checks),
+        )
 
     @property
     def used_slots(self) -> tuple[Slot, ...]:
         """Every slot with ink on it — including a round that is switched off,
-        because the paper does not care whether the fit uses it."""
-        return tuple(r.slot for r in self.rounds)
+        because the paper does not care whether the fit uses it.
+
+        A **survey** is not printed in a slot but it is printed on the paper the slots
+        are cut out of, so it spends the ones its own region covers. That is what makes
+        a quarter survey leave four slots for verification on the same sheet.
+        """
+        out: list[Slot] = []
+        for rnd in self.rounds:
+            size = rnd.chart.size
+            out += list(size.slots(self.grid)) if size is not None else [rnd.slot]
+        return tuple(out)
 
     @property
     def free_slots(self) -> tuple[Slot, ...]:
@@ -518,9 +794,14 @@ class Profile:
         return next((r for r in self.rounds if r.n == n), None)
 
     # ------------------------------------------------------------- the loop --
-    def chart_label(self, slot: Slot | None = None) -> str:
+    def chart_label(
+        self, slot: Slot | None = None, chart: ChartId = ChartId.VERIFY
+    ) -> str:
         where = self.next_slot if slot is None else slot
-        return f"{self.name}  ·  round {len(self.rounds) + 1}  ·  slot {where.text}"
+        return (
+            f"{self.name}  ·  round {len(self.rounds) + 1}  ·  {chart.label}"
+            f"  ·  slot {where.text}"
+        )
 
     def add_round(
         self,
@@ -528,20 +809,28 @@ class Profile:
         sent: Patches,
         slot: Slot,
         *,
+        chart: ChartId = ChartId.VERIFY,
+        purpose: Purpose = Purpose.MEASURE,
+        wanted: Patches | None = None,
         scan: str = "",
         note: str = "",
         substrate: Substrate | None = None,
     ) -> Round:
-        """Record a measured round. The correction refits from all of them."""
+        """Record a round. A measuring one refits the correction; a check does not."""
         rnd = Round(
             n=len(self.rounds) + 1,
             slot=slot,
             sent=sent,
             scanned=scanned,
+            wanted=wanted,
+            chart=chart,
+            purpose=purpose,
             date=date.today().isoformat(),
             scan=scan,
             note=note,
-            substrate=substrate if substrate is not None else Substrate.of(scanned),
+            substrate=substrate
+            if substrate is not None
+            else Substrate.of(scanned, chart.spec),
         )
         self.rounds.append(rnd)
         self.pending = None
@@ -562,26 +851,28 @@ class Profile:
         self.rounds = [r.switched(on=on) if r.n == n else r for r in self.rounds]
         return self.rounds[[r.n for r in self.rounds].index(n)]
 
-    # ------------------------------------------------------------ transform --
-    def coef(self) -> Coef | None:
-        c = self.correction
-        return None if c is None else c.coef
-
     def json(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "notes": self.notes,
             "recipe": self.recipe.json(),
             "intent": self.intent.json(),
+            "reference": self.reference.json(),
             "grid": list(self.grid),
             "pending": None if self.pending is None else self.pending.json(),
             "rounds": [r.json() for r in self.rounds],
         }
 
     def summary(self) -> dict[str, Any]:
-        """What a list or a settings screen shows — no patch arrays."""
+        """What a list or a settings screen shows — no patch arrays.
+
+        **Three numbers, never one**: the residual, the cast (inside it) and the
+        verification error. One number is what let a diverging profile look converged.
+        """
         residual = self.residual
         plateau = self.plateau
+        model = self.model
+        verified = self.verified
         return {
             "name": self.name,
             "notes": self.notes,
@@ -589,10 +880,14 @@ class Profile:
             "recipe": self.recipe.json(),
             "intent": self.intent.json(),
             "substrate": self.substrate.json(),
+            "reference": self.reference.json(),
             "rounds": len(self.rounds),
             "live": len(self.live),
+            "checks": len(self.checks),
             "calibrated": self.calibrated,
             "residual": None if residual is None else residual.json(),
+            "verified": None if verified is None else verified.json(),
+            "model": None if model is None else model.json(),
             "plateau": None if plateau is None else plateau.json(),
             "drift": None if (drift := self.drift) is None else drift.json(),
             "next_slot": self.next_slot.json(),
@@ -612,15 +907,21 @@ class Profile:
                 "n": r.n,
                 "slot": r.slot.json(),
                 "slot_text": r.slot.text,
+                "chart": r.chart.value,
+                "chart_label": r.chart.label,
+                "purpose": r.purpose.value,
                 "date": r.date,
                 "scan": r.scan,
                 "note": r.note,
                 "error": self.score(r).json(),
                 "enabled": r.enabled,
                 "influence": self.influence(r.n),
-                "target": _rows(calibrate.target()),
+                # this round's own patch set — a screen drawing the verification chart's
+                # 81 targets beside a survey's 468 scans pairs every swatch wrongly
+                "target": _rows(r.goal),
                 "sent": _rows(r.sent),
                 "scanned": _rows(r.scanned),
+                "substrate": r.substrate.json(),
             }
             for r in self.rounds
         ]
@@ -692,15 +993,15 @@ def read(root: Path, name: str) -> Profile | None:
             unreadable += 1
         else:
             rounds.append(rnd)
-    pending = raw.get("pending")
     return Profile(
         name=slug(_text(raw.get("name")) or path.stem),
         notes=_text(raw.get("notes")),
         recipe=Recipe.read(raw.get("recipe")),
         intent=Intent.read(raw.get("intent")),
+        reference=Reference.read(raw.get("reference")),
         grid=_grid(raw.get("grid")),
         rounds=rounds,
-        pending=None if pending is None else Slot.read(pending),
+        pending=Pending.read(raw.get("pending")),
         stored=True,
         unreadable=unreadable,
     )
@@ -873,12 +1174,15 @@ def _rows(arr: Patches) -> list[list[float]]:
     return [[round(float(v), 3) for v in row] for row in arr]
 
 
-def _read_patches(data: object) -> Patches | None:
+def _read_patches(data: object, chart: ChartId) -> Patches | None:
+    """One stored patch block, checked against the chart the round says it printed."""
     if not isinstance(data, list) or not data:
         return None
-    arr = np.asarray(data, dtype=np.float32)
-    want = (len(calibrate.chart()), 3)
-    if arr.shape != want or not np.isfinite(arr).all():
+    try:
+        arr = np.asarray(data, dtype=np.float32)
+    except ValueError:  # ragged rows — not a patch block at all
+        return None
+    if arr.shape != (len(chart.spec), 3) or not np.isfinite(arr).all():
         return None
     return arr
 

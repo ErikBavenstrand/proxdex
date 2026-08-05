@@ -4560,11 +4560,30 @@ def _profile_note(prof: profiles.Profile) -> None:
             f"{residual.de00_mean:.2f} ΔE00 over {residual.measured} reachable "
             f"patch(es), neutrals {residual.cast.text}"
         )
+        # the verification error beside the residual, because they are different claims:
+        # one is the fit against its own training data, the other is a prediction that
+        # landed or did not. Printing only the first is what let a diverging profile
+        # look converged for four rounds.
+        checked = prof.verified
+        if checked is not None:
+            console.print(
+                f"[dim]  verified at mean {checked.de00_mean:.2f} ΔE00 over "
+                f"{checked.measured} patch(es) it had to predict, "
+                f"neutrals {checked.cast.text}[/]"
+            )
+        else:
+            err.print(
+                f"[yellow]⚠[/] '{prof.name}' has never been verified, so its error is "
+                "the fit judged on its own measurements. [dim]`proxdex calibrate "
+                f"verify {prof.name}` prints what it predicts and scores where it "
+                "landed.[/]"
+            )
         _cast_drift(prof)
+        _reference_note(prof)
     elif not prof.recipe.neutral:
         console.print(
             f"[cyan]◐[/] profile [bold]{prof.name}[/] — set by hand: "
-            f"{prof.recipe.text()}. [dim]`proxdex calibrate chart` measures it "
+            f"{prof.recipe.text()}. [dim]`proxdex calibrate survey` measures it "
             "instead, if you have a scanner.[/]"
         )
     elif prof.name != profiles.NONE:
@@ -4976,9 +4995,14 @@ def profile_list(ctx: click.Context) -> None:
 
 @profile_cmd.command("show")
 @_PROFILE_ARG
+@click.option(
+    "--stages",
+    is_flag=True,
+    help="Also print what each stage of the model bought, in ΔE00.",
+)
 @click.pass_context
-def profile_show(ctx: click.Context, name: str | None) -> None:
-    """A profile in full: notes, its numbers, and every calibration round."""
+def profile_show(ctx: click.Context, name: str | None, stages: bool) -> None:
+    """A profile in full: notes, the paper, its aim, and every calibration round."""
     lib = _lib(ctx)
     prof = _profile(lib, name)
     console.print(f"[bold]{prof.name}[/]  [dim]corrects: {prof.how}[/]")
@@ -4993,26 +5017,45 @@ def profile_show(ctx: click.Context, name: str | None) -> None:
         f"[bold]By hand[/] {prof.recipe.text()}"
         + ("  [dim](superseded by the measurement below)[/]" if prof.live else "")
     )
+    _medium_note(prof)
     _unreadable_note(prof)
     if not prof.rounds:
         console.print(
-            "\n[dim]no calibration rounds yet — `proxdex calibrate chart"
+            "\n[dim]no calibration rounds yet — `proxdex calibrate survey"
             f"{'' if name is None else ' ' + prof.name}` prints the first one[/]"
         )
+        _reference_note(prof)
         return
     table = Table(box=None, pad_edge=False, header_style="bold")
-    cols = ("", "Round", "Slot", "Date", "Off by (mean/max)", "Pull", "Note")
-    for col in cols:
+    for col in (
+        "",
+        "Round",
+        "Chart",
+        "Slot",
+        "Date",
+        "ΔE00",
+        "Cast a*/b*",
+        "Pull",
+        "Note",
+    ):
         table.add_column(col)
     for rnd in prof.rounds:
         e = prof.score(rnd)
         pull = prof.influence(rnd.n)
+        # three marks, not two: a verification round is enabled *and* out of the
+        # fit, so showing it as ✓ under a legend reading "in the fit" would say the
+        # one thing this whole distinction exists to prevent
+        mark = "✓" if rnd.enabled and rnd.purpose.fits else "[dim]·[/]"
+        if rnd.enabled and not rnd.purpose.fits:
+            mark = "[cyan]?[/]"
         table.add_row(
-            "✓" if rnd.enabled else "[dim]·[/]",
+            mark,
             str(rnd.n) if rnd.enabled else f"[dim]{rnd.n}[/]",
+            rnd.chart.label,
             rnd.slot.text,
             rnd.date,
             f"{e.de00_mean:.1f} / {e.de00_max:.1f}",
+            f"{e.cast.a:+.1f} / {e.cast.b:+.1f}",
             f"{pull:.1f}" if pull is not None else "[dim]—[/]",
             _one_line(rnd.note),
         )
@@ -5021,21 +5064,38 @@ def profile_show(ctx: click.Context, name: str | None) -> None:
     live = prof.live
     if not live:
         console.print(
-            "[yellow]every round is switched off[/] — nothing is correcting this "
-            "medium. [dim]`proxdex calibrate enable --round N` puts one back.[/]"
+            "[yellow]nothing feeds the fit[/] — every measuring round is switched "
+            "off, so this medium is corrected by its recipe alone. "
+            "[dim]`proxdex calibrate enable --round N` puts one back.[/]"
         )
         return
     trend = " → ".join(f"{prof.score(r).de00_mean:.1f}" for r in live)
-    console.print(f"[dim]mean error by live round: {trend} (lower is truer)[/]")
+    console.print(f"[dim]the fit's own error, by live round: {trend}[/]")
+    checks = prof.checks
+    if checks:
+        seen = " → ".join(f"{prof.score(r).de00_mean:.1f}" for r in checks)
+        console.print(
+            f"[bold]verified[/] {prof.verified.text if prof.verified else ''} "
+            f"[dim](by round: {seen}) — this is the number that can fail: it is "
+            f"scored on colours the model predicted, and those rounds are kept out "
+            f"of the fit[/]"
+        )
+    else:
+        console.print(
+            "[yellow]never verified[/] — every figure above is the fit measured "
+            "against the data it was fitted on, which can only ever agree with "
+            f"itself. [dim]`proxdex calibrate verify {prof.name}`[/]"
+        )
     console.print(
-        "[dim]✓ = in the fit, · = switched off. Pull is how far the correction "
-        "moves if that round is left out — a round pulling much harder than its "
-        "neighbours is either your most informative measurement or an outlier.[/]"
+        "[dim]✓ = in the fit, ? = a check (scored, deliberately not fitted), "
+        "· = switched off. Pull is how far the correction moves if that round is "
+        "left out — a round pulling much harder than its neighbours is either your "
+        "most informative measurement or an outlier.[/]"
     )
     last = prof.score(live[-1])
     console.print(
-        f"[dim]every round is scored over the same {last.measured} of {last.total} "
-        "patches — one medium, one gamut.[/]"
+        f"[dim]scored over {last.measured} of {last.total} patches — one medium, "
+        "one gamut, measured from the scans.[/]"
     )
     if last.clipped:
         console.print(
@@ -5044,14 +5104,50 @@ def profile_show(ctx: click.Context, name: str | None) -> None:
             "need more of one ink than exists. That floor is the paper's, not the "
             "calibration's.[/]"
         )
+    if stages:
+        console.print("\n[bold]The model[/]")
+        model = prof.model
+        if model is None or not model.staged:
+            console.print(
+                "[dim]one polynomial — nothing has linearized this medium, because no "
+                "round printed the chart uncorrected. `calibrate survey` is what does "
+                "it.[/]"
+            )
+        else:
+            console.print(f"[dim]{model.text}[/]")
+            for row in model.residuals:
+                console.print(f"  {row.text}")
     _converged(prof)
+    console.print(f"[dim]{_next_step(prof)}[/]")
     free = len(prof.free_slots)
     console.print(
-        f"[dim]next chart goes in slot {prof.next_slot.text} of "
-        f"{prof.grid[0]}×{prof.grid[1]}; {free} slot(s) left on the sheet[/]"
+        f"[dim]{free} slot(s) left on this sheet[/]"
         if free
         else "[dim]the sheet is full — the next chart starts a new one at slot 1,1[/]"
     )
+    _cast_drift(prof)
+    _reference_note(prof)
+
+
+def _medium_note(prof: profiles.Profile) -> None:
+    """The paper, the aim and the scanner — the three facts a residual depends on.
+
+    Printed together and above the rounds, because a number without them is not
+    interpretable: the same print scores differently against an absolute neutral and
+    against the stock it is on, and the scanner decides what "measured" even means.
+    """
+    sub = prof.substrate
+    if sub.measured:
+        console.print(f"[bold]Paper[/] {sub.text}")
+        if sub.warning:
+            err.print(f"[yellow]⚠[/] {sub.warning}")
+    elif prof.stored:
+        console.print(
+            "[dim]this paper has not been measured — `calibrate survey` reads it off "
+            "the chart's own bare patches, and the aim stays absolute until it does[/]"
+        )
+    console.print(f"[bold]Aim[/] {prof.intent.text}")
+    console.print(f"[bold]Scanner[/] {prof.reference.text}")
 
 
 @profile_cmd.command("new")
@@ -5472,7 +5568,14 @@ def calibrate() -> None:
     show_default=True,
     help="how much paper one characterization costs",
 )
-@click.option("--out", type=click.Path(path_type=Path), default=None)
+@click.option(
+    "-o",
+    "--out",
+    "out",
+    type=UserPath(path_type=Path),
+    default=None,
+    help="Output path (default: [cyan]<lib>/profiles/<name>_survey_<size>.pdf[/]).",
+)
 @click.option("--png", "as_png", is_flag=True, help="a PNG rather than a PDF")
 @click.pass_context
 def calibrate_survey(
@@ -5498,9 +5601,10 @@ def calibrate_survey(
     """
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
-    prof = _profile(lib, name)
+    prof = _stored(lib, name)
     chosen = calibrate_mod.SurveySize(size)
-    card = calibrate_mod.survey(chosen)
+    which = calibrate_mod.ChartId.of_survey(chosen)
+    card = which.spec
     page = calibrate_mod.survey_page(
         cfg,
         chosen,
@@ -5515,13 +5619,28 @@ def calibrate_survey(
         page.save(dst)
     else:
         sheet_mod.write_page_pdf(page, dst, cfg)
+    # recorded, so `calibrate add` knows which patch set the scan holds. Reading a
+    # 468-patch survey as the 81-patch verification chart samples the gutters and
+    # reports bare paper at every position — self-consistent and wrong about everything
+    prof.pending = profiles.Pending(
+        slot=calibrate_mod.FIRST_SLOT, chart=which, sent=card.target
+    )
+    profiles.save(lib.root, prof)
     console.print(
         f"[green]wrote[/] {dst} [dim]— {len(card)} patches "
         f"({card.cols}x{card.rows}), {len(card.substrate)} of them bare paper[/]"
     )
+    spent = len(chosen.slots(prof.grid))
+    console.print(
+        f"[dim]it prints the target [bold]uncorrected[/] — a survey has to span the "
+        f"space rather than cluster where a model already is, which is why it is what "
+        f"the model is built from. It spends {spent} of "
+        f"{prof.grid[0] * prof.grid[1]} slots of the sheet.[/]"
+    )
     console.print(
         "[dim]print it with colour management OFF, scan the middle of the platen with "
-        "auto-correction OFF, then `proxdex calibrate add --scan <file> --whole`[/]"
+        f"auto-correction OFF, then "
+        f"`proxdex calibrate add {prof.name} --scan <file>`[/]"
     )
 
 
@@ -5571,26 +5690,26 @@ def cal_chart(
     cfg = Config.load(lib.root)
     prof = _stored(lib, name)
     where = profiles.Slot.parse(slot, prof.grid) if slot else prof.next_slot
-    if where in prof.used_slots:
-        err.print(
-            f"[yellow]⚠[/] slot {where.text} already holds round "
-            f"{next(r.n for r in prof.rounds if r.slot == where)} — printing there "
-            "again lands ink on ink. Feed a blank sheet, or pick another slot."
-        )
+    _slot_taken(prof, where)
     if prof.sheet_full and slot is None:
         console.print(
             "[cyan]▤[/] the sheet is full — this chart starts a new one at "
             f"slot {where.text}"
         )
-    correction = None if raw else prof.correction
+    correction = None if raw else prof.model
     label = prof.chart_label(where)
+    # a refinement round's patches go where the model is least sure, inside the gamut
+    # this medium has actually been seen to reach — a fixed lattice spends them on
+    # colours the paper cannot make (measured: 43 of 80 on foil)
+    asked = calibrate_mod.adaptive(calibrate_mod.chart(), prof.gamut, prof.seen)
+    goal = prof.aim(asked)
     page = calibrate_mod.chart_page(
         cfg,
         correction,
         slot=where,
         grid=prof.grid,
         label=label,
-        goal=prof.aim(calibrate_mod.target()),
+        goal=goal,
     )
     dst = out or profiles.profiles_dir(lib.root) / (
         f"{prof.name}_round{len(prof.rounds) + 1}.{'png' if as_png else 'pdf'}"
@@ -5600,7 +5719,12 @@ def cal_chart(
         page.save(dst)
     else:
         sheet_mod.write_page_pdf(page, dst, cfg)
-    prof.pending = where
+    prof.pending = profiles.Pending(
+        slot=where,
+        chart=calibrate_mod.ChartId.VERIFY,
+        sent=calibrate_mod.sent_patches(correction, goal),
+        wanted=asked,
+    )
     profiles.save(lib.root, prof)
     console.print(
         f"[green]wrote[/] {dst} [dim]— round {len(prof.rounds) + 1}, "
@@ -5611,6 +5735,253 @@ def cal_chart(
         "[dim]print it on this medium with colour management OFF, scan the whole "
         f"page with auto-correction OFF, then `proxdex calibrate add {prof.name} "
         "--scan <file>`[/]"
+    )
+
+
+@calibrate.command("verify")
+@_PROFILE_ARG
+@click.option(
+    "--slot",
+    default=None,
+    metavar="COL,ROW",
+    help="Which slot of the sheet to print in (default: the next free one).",
+)
+@click.option(
+    "--png", "as_png", is_flag=True, help="Write a PNG of the page instead of a PDF."
+)
+@click.option(
+    "-o",
+    "--out",
+    "out",
+    type=UserPath(path_type=Path),
+    default=None,
+    help="Output path.",
+)
+@click.pass_context
+def cal_verify(
+    ctx: click.Context,
+    name: str | None,
+    slot: str | None,
+    as_png: bool,
+    out: Path | None,
+) -> None:
+    r"""Print what the model predicts, and score where it landed.
+
+    [bold]This is the only number in the system that can fail[/], and its absence is
+    why a real profile drove its neutral axis 32 levels toward yellow over four rounds
+    while every figure on screen fell.
+
+    A refinement round re-fits the model with more data, so it can only ever agree with
+    itself. A verification round prints the model's own predictions and asks how far off
+    they are — so it is recorded and scored but deliberately kept [bold]out[/] of the
+    fit. `plateau` is judged on these once there are any.
+
+    Its patches go where the model is least certain and inside the measured gamut, which
+    is what a fixed lattice cannot do: on foil, 43 of 80 fixed patches asked for colours
+    the paper cannot make.
+    """
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    prof = _stored(lib, name)
+    model = prof.model
+    if model is None:
+        raise click.UsageError(
+            f"'{prof.name}' has nothing measured yet, so there is no model to check. "
+            f"`proxdex calibrate survey {prof.name}` first."
+        )
+    which = calibrate_mod.ChartId.VERIFY
+    spec = which.spec
+    where = profiles.Slot.parse(slot, prof.grid) if slot else prof.next_slot
+    _slot_taken(prof, where)
+    # the patches move to where the model is least sure, but only the lattice ones — the
+    # greys, the ramps and the substrate stay put, so two verification rounds stay
+    # comparable on everything a trend is read from
+    asked = calibrate_mod.adaptive(spec, prof.gamut, prof.seen)
+    goal = prof.aim(asked)
+    page = calibrate_mod.chart_page(
+        cfg,
+        model,
+        slot=where,
+        grid=prof.grid,
+        label=prof.chart_label(where, which) + "  ·  check",
+        goal=goal,
+    )
+    dst = out or profiles.profiles_dir(lib.root) / (
+        f"{prof.name}_verify{len(prof.checks) + 1}.{'png' if as_png else 'pdf'}"
+    )
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if as_png:
+        page.save(dst)
+    else:
+        sheet_mod.write_page_pdf(page, dst, cfg)
+    prof.pending = profiles.Pending(
+        slot=where,
+        chart=which,
+        sent=calibrate_mod.sent_patches(model, goal),
+        wanted=asked,
+        purpose=profiles.Purpose.VERIFY,
+    )
+    profiles.save(lib.root, prof)
+    console.print(
+        f"[green]wrote[/] {dst} [dim]— a check of the model over {len(spec)} patches, "
+        f"slot {where.text} of {prof.grid[0]}×{prof.grid[1]}[/]"
+    )
+    console.print(
+        "[dim]print it on this medium with colour management OFF, scan the whole page "
+        f"with auto-correction OFF, then `proxdex calibrate add {prof.name} "
+        "--scan <file>`. It will be scored and kept out of the fit.[/]"
+    )
+
+
+@calibrate.command("reference")
+@_PROFILE_ARG
+@click.option(
+    "--scan",
+    "scan_path",
+    default=None,
+    type=UserPath(exists=True, dir_okay=False, path_type=Path),
+    help="A scan of a reference target, cropped to the chart.",
+)
+@click.option(
+    "--target",
+    type=click.Choice([t.value for t in calibrate_mod.ReferenceTarget]),
+    default=calibrate_mod.ReferenceTarget.COLORCHECKER.value,
+    show_default=True,
+    help="Which reference target the scan is of.",
+)
+@click.option(
+    "--clear", is_flag=True, help="Go back to assuming the scanner reads sRGB."
+)
+@click.pass_context
+def cal_reference(
+    ctx: click.Context,
+    name: str | None,
+    scan_path: Path | None,
+    target: str,
+    clear: bool,
+) -> None:
+    r"""Characterize the scanner, from a target whose colours are published.
+
+    [bold]The one assumption behind every other number here[/]: the correction is fitted
+    from what the scanner *read*, and then applied to sRGB card pixels. Nothing
+    establishes that those are the same space, and they are not — which is why the loop
+    converges on "the print [italic]scans as[/] the target's numbers" rather than "the
+    print [italic]looks like[/] the card". On matte a decent scanner is near enough that
+    the two nearly coincide; on foil they diverge, and the divergence is the cast.
+
+    Until this is run, every profile says so out loud. Measured in the literature, an
+    uncharacterized flatbed is worth about ΔE00 10 of error no calibration can remove,
+    and a matrix off an IT8 takes it to about 4.9.
+    """
+    lib = _lib(ctx)
+    prof = _stored(lib, name)
+    if clear:
+        prof.reference = calibrate_mod.Reference()
+        profiles.save(lib.root, prof)
+        console.print(
+            f"[green]✓[/] {prof.name}: back to assuming the scanner reads sRGB"
+        )
+        err.print(f"[yellow]⚠[/] {prof.reference.warning}")
+        return
+    if scan_path is None:
+        raise click.UsageError("--scan <file>, or --clear to go back to assuming sRGB")
+    kind = calibrate_mod.ReferenceTarget(target)
+    readings = calibrate_mod.read_reference(scan_path, kind)
+    prof.reference = calibrate_mod.Reference.from_target(
+        readings, kind.lab, target=kind.value
+    )
+    if prof.reference.assumed:
+        raise click.UsageError(
+            f"could not read {kind.patches} patches of a {kind.value} out of "
+            f"{scan_path.name} — crop the scan to the chart itself, "
+            f"{kind.cols}x{kind.rows} patches, with auto-correction off"
+        )
+    profiles.save(lib.root, prof)
+    console.print(f"[green]✓[/] {prof.name}: scanner reference {prof.reference.text}")
+    console.print(
+        "[dim]every round of this profile is now read through it, so the numbers mean "
+        "'the print looks like the card' rather than 'the print scans as "
+        "the target'.[/]"
+    )
+
+
+def _slot_taken(prof: profiles.Profile, where: profiles.Slot) -> None:
+    """Warn before putting ink on a slot that already has some."""
+    if where in prof.used_slots:
+        held = next((r.n for r in prof.rounds if r.slot == where), None)
+        which = f"round {held}" if held is not None else "a survey"
+        err.print(
+            f"[yellow]⚠[/] slot {where.text} already holds {which} — printing there "
+            "again lands ink on ink. Feed a blank sheet, or pick another slot."
+        )
+
+
+_CHART_OPT = click.option(
+    "--chart",
+    type=click.Choice([c.value for c in calibrate_mod.ChartId]),
+    default=None,
+    help="Which chart this scan holds (default: the last one this profile emitted).",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _Emitted:
+    """What a scan being added is a scan *of*."""
+
+    chart: calibrate_mod.ChartId
+    slot: profiles.Slot
+    sent: calibrate_mod.Patches
+    purpose: profiles.Purpose
+    #: the colours it asked for, when adaptive placement moved them off the chart's own
+    wanted: calibrate_mod.Patches | None = None
+
+
+def _emitted(prof: profiles.Profile, chart: str | None, slot: str | None) -> _Emitted:
+    """Which chart was printed, where, and **what went on the paper**.
+
+    The third one is read back from the record the emitting verb left rather than
+    recomputed, and that is deliberate: a survey prints the target *uncorrected* while a
+    verification chart prints it through the model, the model moves the moment another
+    round is added, and the aim moves with the intent. Recomputing it would pair every
+    scanned patch with a target it was never sent — and look perfectly healthy doing it.
+
+    Recomputing is still the fallback for a scan whose record is gone (a profile edited
+    by hand, a chart printed on another machine), and it says so out loud.
+    """
+    pending = prof.pending
+    which = (
+        calibrate_mod.ChartId(chart)
+        if chart
+        else (pending.chart if pending else calibrate_mod.ChartId.VERIFY)
+    )
+    same = pending is not None and pending.chart is which
+    where = (
+        profiles.Slot.parse(slot, prof.grid)
+        if slot
+        else (pending.slot if same and pending is not None else prof.next_slot)
+    )
+    if same and pending is not None and pending.sent is not None:
+        return _Emitted(
+            chart=which,
+            slot=where,
+            sent=pending.sent,
+            purpose=pending.purpose,
+            wanted=pending.wanted,
+        )
+    spec = which.spec
+    err.print(
+        f"[yellow]⚠[/] no record of what the {which.label} chart printed, so this "
+        "assumes the target through the correction fitted so far. [dim]If that chart "
+        "came off another machine or another version, its numbers may not be what "
+        "this profile would have sent.[/]"
+    )
+    return _Emitted(
+        chart=which,
+        slot=where,
+        sent=calibrate_mod.sent_patches(prof.model, prof.aim(spec.target)),
+        # evidence, because that is what a scan nobody recorded a purpose for is: a
+        # verification round is one this profile *asked* for and it leaves a record
+        purpose=profiles.Purpose.MEASURE,
     )
 
 
@@ -5632,8 +6003,9 @@ def cal_chart(
 @click.option(
     "--whole",
     is_flag=True,
-    help="The image is one chart already, cropped — don't look for a slot.",
+    help="The image is one chart already, cropped — don't look for it on a page.",
 )
+@_CHART_OPT
 @click.option("--note", default="", help="What was different about this round.")
 @click.pass_context
 def cal_add(
@@ -5642,34 +6014,33 @@ def cal_add(
     scan_path: Path,
     slot: str | None,
     whole: bool,
+    chart: str | None,
     note: str,
 ) -> None:
     """Read a scanned chart and record it as the next calibration round."""
     lib = _lib(ctx)
     cfg = Config.load(lib.root)
     prof = _stored(lib, name)
-    where = (
-        profiles.Slot.parse(slot, prof.grid)
-        if slot
-        else (prof.pending or prof.next_slot)
-    )
-    # what this print was asked to be: the chart was rendered through whatever was
-    # known then, which is exactly the correction fitted over the rounds recorded
-    # so far — the round being added is not in that fit yet
-    sent = calibrate_mod.sent_patches(  # the current chart
-        prof.correction, prof.aim(calibrate_mod.target())
-    )
+    got = _emitted(prof, chart, slot)
+    where = got.slot
     scanned = calibrate_mod.read_scan(
-        scan_path, cfg, slot=None if whole else where, grid=prof.grid
+        scan_path,
+        cfg,
+        slot=where,
+        grid=prof.grid,
+        spec=got.chart.spec,
+        whole=whole,
     )
-    before = prof.residual
+    before = prof.residual if got.purpose.fits else prof.verified
     rnd = prof.add_round(
         scanned,
-        sent,
+        got.sent,
         where,
+        chart=got.chart,
+        purpose=got.purpose,
+        wanted=got.wanted,
         scan=scan_path.name,
         note=note.strip(),
-        substrate=calibrate_mod.Substrate.of(scanned),
     )
     profiles.save(lib.root, prof)
     e = prof.score(rnd)
@@ -5677,28 +6048,93 @@ def cal_add(
     if before is not None:
         delta = before.de00_mean - e.de00_mean
         arrow = "[green]↓[/]" if delta > 0 else "[yellow]↑[/]"
-        trend = f"  {arrow} {abs(delta):.1f} from round {rnd.n - 1}"
+        trend = f"  {arrow} {abs(delta):.1f} from the one before"
+    checked = not got.purpose.fits
     console.print(
-        f"[green]✓[/] round {rnd.n} recorded (slot {where.text}): this print was "
-        f"off by mean {e.de00_mean:.1f} / max {e.de00_max:.2f} ΔE00 over {e.measured} "
-        f"reachable patch(es){trend}"
+        f"[green]✓[/] round {rnd.n} recorded ({got.chart.label}, "
+        f"{got.purpose.label}, slot {where.text}): this print was off by mean "
+        f"{e.de00_mean:.1f} / max {e.de00_max:.2f} ΔE00 over {e.measured} reachable "
+        f"patch(es){trend}"
     )
+    console.print(f"[dim]its neutrals read {e.cast.text}[/]")
+    sub = rnd.substrate
+    if sub.measured:
+        console.print(f"[dim]this sheet's bare paper reads {sub.text}[/]")
+        if sub.warning:
+            err.print(f"[yellow]⚠[/] {sub.warning}")
     if e.clipped:
         console.print(
             f"[dim]{e.clipped} of {e.total} patch(es) are outside this medium's "
             "gamut — too dark, too light, or more saturated than its inks reach — "
             "so they are not counted. No calibration can hit them.[/]"
         )
-    console.print(
-        f"[dim]correction refitted over {len(prof.rounds)} round(s) — `sheet "
-        f"--profile {prof.name}` uses it.[/]"
-    )
-    if not _converged(prof):
+    if checked:
+        # a verification round is deliberately not folded into the fit: it was printed
+        # through the finished model to test it, and a model that trains on its own exam
+        # cannot fail it
         console.print(
-            f"[dim]another round: `proxdex calibrate chart {prof.name}` "
-            f"(slot {prof.next_slot.text})[/]"
+            f"[dim]this round tested the model and is kept **out** of the fit — "
+            f"{len(prof.live)} round(s) still feed it.[/]"
         )
+    else:
+        console.print(
+            f"[dim]model refitted over {len(prof.live)} round(s) — `sheet "
+            f"--profile {prof.name}` uses it.[/]"
+        )
+    _stage_note(prof)
+    if not _converged(prof):
+        console.print(f"[dim]{_next_step(prof)}[/]")
     _suspect_round(prof, rnd)
+    _cast_drift(prof)
+    _reference_note(prof)
+
+
+def _next_step(prof: profiles.Profile) -> str:
+    """What to print next, which depends on what the profile is still missing.
+
+    The order is the loop's: characterize once, then **check**, then refine only while
+    checking still says it is worth it. Inviting another refinement round from a profile
+    that has never been verified is what the old loop did, and it is how six rounds of
+    watching one number fall came to be mistaken for convergence.
+    """
+    if not prof.live:
+        return f"start with a survey: `proxdex calibrate survey {prof.name}`"
+    model = prof.model
+    if model is not None and not model.staged:
+        return (
+            f"nothing has linearized this medium yet — a survey is what does it: "
+            f"`proxdex calibrate survey {prof.name}`"
+        )
+    if not prof.checks:
+        return (
+            f"now check it: `proxdex calibrate verify {prof.name}` prints what the "
+            f"model predicts and scores where it landed (slot {prof.next_slot.text})"
+        )
+    return (
+        f"another refinement round: `proxdex calibrate chart {prof.name}` "
+        f"(slot {prof.next_slot.text})"
+    )
+
+
+def _stage_note(prof: profiles.Profile) -> None:
+    """One line per stage, so a cast belongs to a stage rather than to "the fit"."""
+    model = prof.model
+    if model is None or not model.staged:
+        return
+    for row in model.residuals:
+        console.print(f"[dim]  · {row.text}[/]")
+
+
+def _reference_note(prof: profiles.Profile) -> None:
+    """Say that the scanner is uncharacterized, wherever this profile is named.
+
+    Never silent, and that is the lesson rather than a nicety: §1.1 is an assumption —
+    that a scanner reading and an sRGB card pixel are the same space — and it did its
+    damage precisely by going unstated. A profile whose reference is the identity gets
+    the same treatment a dangling `[print] profile` does.
+    """
+    if prof.reference.assumed and prof.calibrated:
+        err.print(f"[yellow]⚠[/] {prof.reference.warning}")
 
 
 def _converged(prof: profiles.Profile) -> bool:
@@ -5832,7 +6268,7 @@ def cal_proof(ctx: click.Context, name: str | None, out: Path | None) -> None:
     default = profiles.profiles_dir(lib.root) / f"{prof.name}_round{last.n}_proof.png"
     dst = out or default
     dst.parent.mkdir(parents=True, exist_ok=True)
-    calibrate_mod.proof_sheet(last.scanned).save(dst)
+    calibrate_mod.proof_sheet(last.scanned, last.spec).save(dst)
     e = prof.score(last)
     console.print(
         f"[green]wrote[/] {dst} [dim]— round {last.n}, off by mean {e.de00_mean:.1f} / "

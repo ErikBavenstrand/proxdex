@@ -5208,6 +5208,46 @@ def profile_use(ctx: click.Context, name: str) -> None:
     _profile_note(prof)
 
 
+@profile_cmd.command("intent")
+@_PROFILE_ARG
+@click.argument("adaptation", type=click.FloatRange(0.0, 1.0))
+@click.pass_context
+def profile_intent(ctx: click.Context, name: str | None, adaptation: float) -> None:
+    """How much of the paper's own colour to accept rather than fight (0..1).
+
+    [bold]1[/] — the default — aims [bold]relative to the paper[/]: a card's white
+    prints as the paper's white. On a tinted stock that is the only honest answer,
+    because a white on a blue holographic sticker [italic]is[/] blue-white and no ink
+    makes it whiter.
+
+    [bold]0[/] aims at an absolute neutral. That is what a real foil profile was doing,
+    and it drove the fit to demand a\\* +4.27 b\\* +10.62 for a grey — pinning two
+    channels at the ceiling so every highlight came off yellow. Reachable on purpose,
+    never by default.
+
+    Anything between is a partial adaptation.
+    """
+    lib = _lib(ctx)
+    prof = _profile(lib, name)
+    if not prof.stored:
+        raise click.UsageError(
+            f"'{prof.name}' is the identity — there is nothing to aim. "
+            f"`proxdex profile new <name>` first."
+        )
+    prof.intent = calibrate_mod.Intent(adaptation=adaptation)
+    profiles.save(lib.root, prof)
+    console.print(f"[green]✓[/] {prof.name}: aiming {prof.intent.text}")
+    sub = prof.substrate
+    if sub.measured:
+        console.print(f"[dim]this medium's paper reads {sub.text}[/]")
+    elif adaptation > 0.0:
+        console.print(
+            "[dim]no round has measured this paper yet, so the aim stays absolute "
+            "until one does — `proxdex calibrate survey` prints the chart that "
+            "reads it.[/]"
+        )
+
+
 def _unreadable_note(prof: profiles.Profile) -> None:
     """Say when a profile's file holds rounds that cannot be read back.
 
@@ -5421,6 +5461,68 @@ def calibrate() -> None:
       proxdex profile show                   → watch the error fall
       (feed the same sheet back in and repeat — six rounds fit an A4)[/]
     """
+
+
+@calibrate.command("survey")
+@_PROFILE_ARG
+@click.option(
+    "--size",
+    type=click.Choice([s.value for s in calibrate_mod.SurveySize]),
+    default=calibrate_mod.SurveySize.FULL.value,
+    show_default=True,
+    help="how much paper one characterization costs",
+)
+@click.option("--out", type=click.Path(path_type=Path), default=None)
+@click.option("--png", "as_png", is_flag=True, help="a PNG rather than a PDF")
+@click.pass_context
+def calibrate_survey(
+    ctx: click.Context,
+    name: str | None,
+    size: str,
+    out: Path | None,
+    as_png: bool,
+) -> None:
+    r"""Print the characterization target — once per medium.
+
+    This is the measurement everything else rests on, so it gets the sheet: bare
+    paper (which is what tells proxdex your stock is tinted), a ramp per ink so each
+    can be linearized, an L\*-spaced grey axis, the heaviest ink each way, repeats to
+    measure read noise, and the colour lattice.
+
+    [bold]--size[/] is the cost, and only the lattice shrinks — the ramps, the greys,
+    the substrate and the max-ink patches are the same at every size, because they are
+    what the later stages are built from.
+
+    Scan it with auto-correction [bold]off[/], scanning the middle of the platen (a
+    flatbed drifts up to ΔE 5 from centre to edge), then `proxdex calibrate add`.
+    """
+    lib = _lib(ctx)
+    cfg = Config.load(lib.root)
+    prof = _profile(lib, name)
+    chosen = calibrate_mod.SurveySize(size)
+    card = calibrate_mod.survey(chosen)
+    page = calibrate_mod.survey_page(
+        cfg,
+        chosen,
+        None,
+        label=f"{prof.name}  ·  survey  ·  {chosen.value}",
+    )
+    dst = out or profiles.profiles_dir(lib.root) / (
+        f"{prof.name}_survey_{chosen.value}.{'png' if as_png else 'pdf'}"
+    )
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if as_png:
+        page.save(dst)
+    else:
+        sheet_mod.write_page_pdf(page, dst, cfg)
+    console.print(
+        f"[green]wrote[/] {dst} [dim]— {len(card)} patches "
+        f"({card.cols}x{card.rows}), {len(card.substrate)} of them bare paper[/]"
+    )
+    console.print(
+        "[dim]print it with colour management OFF, scan the middle of the platen with "
+        "auto-correction OFF, then `proxdex calibrate add --scan <file> --whole`[/]"
+    )
 
 
 @calibrate.command("chart")

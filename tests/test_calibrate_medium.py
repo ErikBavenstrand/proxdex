@@ -315,3 +315,40 @@ class TestOneFunnelToPaper:
     def test_an_uncalibrated_profile_falls_back_to_its_recipe(self) -> None:
         im = Image.new("RGB", (2, 2), (128, 128, 128))
         assert profiles.Profile(name="p").render(im).getpixel((0, 0)) == (128, 128, 128)
+
+
+class TestTheReaderKnowsWhichChartItIsReading:
+    """A reader that assumes one patch set is the plausible-wrong-answer failure again.
+
+    `sample_patches` defaulted to the module-level verification chart, so reading a
+    468-patch survey sampled a 9x9 grid over an 18x26 one and returned the **gutters** —
+    which are bare paper at every position. A clean, self-consistent, entirely wrong
+    reading, and the substrate would have come back as pure white on a blue sticker.
+    """
+
+    def test_a_survey_scan_read_as_a_survey_recovers_the_paper(self) -> None:
+        card = calibrate.survey(SurveySize.HALF)
+        art = calibrate.render_chart(None, "", (2400, 2700), None, card)
+        # print it on the blue sticker, then read it back
+        lin = colour.linearize(np.asarray(art.convert("RGB"), np.float32))
+        black, white = (
+            colour.linearize(np.array(HOLO_BLACK, np.float32)),
+            colour.linearize(np.array(HOLO, np.float32)),
+        )
+        printed = colour.encode(black + (white - black) * lin)
+        arr = printed.astype(np.float32)
+        read = calibrate.sample_patches(arr, calibrate.locate(arr), card)
+        assert read.shape == (len(card), 3)
+        sub = Substrate.of(read, card)
+        assert sub.measured
+        assert sub.white == pytest.approx(HOLO, abs=2.0)
+        assert sub.cast.visible, "the paper is blue and the reading has to say so"
+
+    def test_reading_it_as_the_wrong_chart_does_not_pass_for_a_measurement(
+        self,
+    ) -> None:
+        """The guard that saved this: a scan with fewer rows than the chart claims is
+        no measurement, rather than a confident white."""
+        card = calibrate.survey(SurveySize.HALF)
+        too_few = np.full((len(calibrate.verification()), 3), 255.0, np.float32)
+        assert not Substrate.of(too_few, card).measured

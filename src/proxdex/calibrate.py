@@ -265,11 +265,7 @@ class SurveySize(StrEnum):
 def survey(size: SurveySize = SurveySize.FULL) -> Chart:
     """The characterization target: every role, at this density.
 
-    Substrate patches are **interleaved** rather than grouped, so they sample the paper
-    at points spread across the sheet — which is the only handle there is on a flatbed's
-    centre-to-edge non-uniformity, measured in the literature at up to ΔE 5. Any cell
-    left over after the content is filled with one more substrate patch, so no cell is
-    wasted and the white reference gets denser rather than the grid getting ragged.
+    Laid out by :func:`_lay_out`, which weaves the substrate patches through it.
     """
     cols, rows = size.grid
     content: list[Patch] = []
@@ -297,6 +293,18 @@ def survey(size: SurveySize = SurveySize.FULL) -> Chart:
     ]
     content += repeats
 
+    return _lay_out(content, cols=cols, rows=rows, pad=0.16)
+
+
+def _lay_out(content: list[Patch], *, cols: int, rows: int, pad: float) -> Chart:
+    """Weave substrate patches through a patch list and fill the grid with them.
+
+    Interleaved rather than grouped so the bare-paper readings sample the sheet at
+    points spread across it — the only handle there is on a flatbed's centre-to-edge
+    non-uniformity, measured in the literature at up to ΔE 5. Every leftover cell
+    becomes one more substrate patch, so no cell is wasted and the white reference gets
+    denser rather than the grid ragged.
+    """
     cells = cols * rows
     spare = max(0, cells - len(content))
     # interleave: one substrate patch every `gap` content patches
@@ -321,13 +329,45 @@ def survey(size: SurveySize = SurveySize.FULL) -> Chart:
         else patch
         for patch in laid
     ]
-    return Chart(cols=cols, rows=rows, patches=tuple(fixed), pad=0.16)
+    return Chart(cols=cols, rows=rows, patches=tuple(fixed), pad=pad)
 
 
-#: the verification chart: small, one slot of the sheet grid, six to a sheet. Its job is
-#: to *confirm* a model rather than to build one, so it is a coarse lattice plus enough
-#: neutrals to see a cast and enough substrate to have its own white.
-CHART = survey(SurveySize.QUARTER)
+def verification() -> Chart:
+    """The small chart that goes in **one slot** of the sheet grid, six to a sheet.
+
+    Deliberately its own patch set rather than the smallest survey. A survey has to
+    characterize, so it wants hundreds of patches; this one only has to *confirm* — is
+    the model right, and is the grey still grey — and it lives in a sixth of a page,
+    where patch **area** is the binding constraint. The trade's own advice for a
+    scanner-read target is fewer, wider patches measured twice, and proxdex's earlier
+    measurement agreed (228 patches scored worse than 80). Dropping the quarter survey
+    in here would have put 156 patches where 80 used to sit — half the area each, for a
+    job that does not need the density.
+
+    9x9 = 81 cells: a coarse 3³ lattice, the neutral ramp (a cast is the thing being
+    confirmed), one ramp step per channel, max ink, and substrate for its own white.
+    """
+    content: list[Patch] = []
+    content += [Patch(rgb=v, role=Role.NEUTRAL) for v in _lstar_ramp(15)]
+    for channel, role in enumerate((Role.RAMP_R, Role.RAMP_G, Role.RAMP_B)):
+        content += [Patch(rgb=v, role=role) for v in _channel_ramp(channel, 5)]
+    content += [Patch(rgb=v, role=Role.MAX_INK) for v in _MAX_INK]
+    steps = [round(float(v)) for v in np.linspace(_LATTICE_LO, _LATTICE_HI, 3)]
+    content += [
+        Patch(rgb=(r, g, b), role=Role.LATTICE)
+        for r in steps
+        for g in steps
+        for b in steps
+    ]
+    content += [
+        Patch(rgb=content[i * 7].rgb, role=Role.REPEAT, of=i * 7) for i in range(4)
+    ]
+    return _lay_out(content, cols=9, rows=9, pad=0.16)
+
+
+#: the chart a round prints by default — the verification one, since the survey is
+#: printed once and asked for by name
+CHART = verification()
 
 
 def chart() -> Chart:
@@ -975,6 +1015,7 @@ def render_chart(
     label: str = "",
     size: tuple[int, int] = (CANVAS_W, CANVAS_H),
     goal: Patches | None = None,
+    spec: Chart | None = None,
 ) -> Image.Image:
     """The chart itself. ``label`` is printed above the patches.
 
@@ -982,7 +1023,7 @@ def render_chart(
     at, never drawn small and scaled up, so every patch stays exactly the colour
     it is meant to be and no resampler invents one in between.
     """
-    spec = CHART
+    spec = spec or CHART
     width, height = size
     im = Image.new("RGB", (width, height), (255, 255, 255))
     draw = ImageDraw.Draw(im)
@@ -1004,7 +1045,8 @@ def render_chart(
     cw = (x1 - x0) / spec.cols * width
     ch = (y1 - y0) / spec.rows * height
     pad = min(cw, ch) * spec.pad
-    for i, color in enumerate(sent_patches(correction, goal).round().astype(int)):
+    want = spec.target if goal is None else goal
+    for i, color in enumerate(sent_patches(correction, want).round().astype(int)):
         col, row = i % spec.cols, i // spec.cols
         px = (x0 + col / spec.cols * (x1 - x0)) * width
         py = (y0 + row / spec.rows * (y1 - y0)) * height
@@ -1089,6 +1131,16 @@ def detect_fiducials(arr: RGB) -> list[tuple[float, float]]:
     return points
 
 
+def locate(arr: RGB) -> NDArray[np.float32]:
+    """Find the chart in a scan: the map from chart coordinates to scan pixels.
+
+    Public because reading a scan is two steps — locate the chart, then sample it with
+    the patch set you actually printed — and a caller that has to reach for a private
+    helper to do the second step is a caller who will skip it.
+    """
+    return _affine(detect_fiducials(arr))
+
+
 def _affine(dst: list[tuple[float, float]]) -> NDArray[np.float32]:
     """Map chart-normalized (fx, fy) -> scan (x, y) from the four fiducials."""
     src = np.array([[fx, fy, 1.0] for fx, fy in FIDUCIALS], np.float32)
@@ -1097,8 +1149,17 @@ def _affine(dst: list[tuple[float, float]]) -> NDArray[np.float32]:
     return params.astype(np.float32)
 
 
-def sample_patches(arr: RGB, params: NDArray[np.float32]) -> Patches:
-    spec = CHART
+def sample_patches(
+    arr: RGB, params: NDArray[np.float32], spec: Chart | None = None
+) -> Patches:
+    """Read every patch centre out of a located chart.
+
+    ``spec`` is required in spirit and defaulted only for the verification chart: a
+    reader that assumes one patch set will happily sample a 9x9 grid over an 18x26
+    survey and return the gutters, which is white paper at every position — a perfectly
+    plausible answer that is wrong about everything.
+    """
+    spec = spec or CHART
     h, w, _ = arr.shape
     measured = np.zeros((len(spec), 3), np.float32)
     # the sampled window scales with the patch, so a denser chart reads its own
@@ -1175,6 +1236,7 @@ def read_scan(
     *,
     slot: Slot | None = None,
     grid: tuple[int, int] = GRID,
+    spec: Chart | None = None,
 ) -> Patches:
     """Read every patch of one chart out of a scan.
 
@@ -1185,4 +1247,51 @@ def read_scan(
     arr = np.asarray(Image.open(path).convert("RGB"), np.float32)
     if slot is not None and cfg is not None:
         arr = crop_slot(arr, cfg, slot, grid)
-    return sample_patches(arr, _affine(detect_fiducials(arr)))
+    return sample_patches(arr, _affine(detect_fiducials(arr)), spec)
+
+
+def survey_page(
+    cfg: Config,
+    size: SurveySize = SurveySize.FULL,
+    correction: Correction | None = None,
+    *,
+    label: str = "",
+    goal: Patches | None = None,
+) -> Image.Image:
+    """The characterization target on its own page — printed once, per medium.
+
+    It gets the sheet (or the fraction of it ``size`` asks for) because this is the
+    measurement everything else rests on. The verification chart in
+    :func:`chart_page` is the small one that goes six to a sheet afterwards.
+    """
+    from proxdex.sheet import blank_page
+
+    page = blank_page(cfg)
+    pw, ph = page.size
+    frac_w, frac_h = size.page_fraction
+    margin_x = cfg.sheet_margin_mm / page_mm_width(cfg)
+    margin_y = cfg.sheet_margin_mm / page_mm_height(cfg)
+    box_w = round((1.0 - 2 * margin_x) * frac_w * pw)
+    box_h = round((1.0 - 2 * margin_y) * frac_h * ph)
+    spec = survey(size)
+    art = render_chart(correction, label, fit_size((box_w, box_h)), goal, spec)
+    page.paste(
+        art,
+        (
+            round(margin_x * pw + (box_w - art.width) / 2),
+            round(margin_y * ph + (box_h - art.height) / 2),
+        ),
+    )
+    return page
+
+
+def page_mm_width(cfg: Config) -> float:
+    from proxdex.sheet import page_mm
+
+    return page_mm(cfg)[0]
+
+
+def page_mm_height(cfg: Config) -> float:
+    from proxdex.sheet import page_mm
+
+    return page_mm(cfg)[1]
